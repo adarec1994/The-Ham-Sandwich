@@ -26,7 +26,6 @@ int main()
     glfwSwapInterval(1);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-    // Register Scroll Callback
     glfwSetScrollCallback(window, scroll_callback);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
@@ -47,7 +46,6 @@ int main()
     InitUI(appState);
     InitGrid(appState);
 
-    // Set User Pointer so callbacks can access state
     glfwSetWindowUserPointer(window, &appState);
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);

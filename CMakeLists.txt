@@ -3,7 +3,6 @@ project(Wildstar_Studio_2 VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 include(FetchContent)
 
@@ -97,3 +96,9 @@ else()
     find_package(OpenGL REQUIRED)
     target_link_libraries(Wildstar_Studio_2 PRIVATE OpenGL::GL)
 endif()
+
+add_custom_command(TARGET Wildstar_Studio_2 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        ${CMAKE_CURRENT_BINARY_DIR}/assets
+)
