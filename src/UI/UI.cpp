@@ -1,7 +1,10 @@
 #include "UI.h"
+#include "../About/about.h"
+#include "../Settings/settings.h"
 #include <string>
 #include <vector>
 #include <iostream>
+#include <cmath>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -17,15 +20,28 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
     if (image_data == NULL) return false;
 
+    for (int i = 0; i < image_width * image_height * 4; i += 4) {
+        unsigned char alpha = image_data[i+3];
+        if (alpha > 0) {
+            image_data[i]   = 255 - image_data[i];
+            image_data[i+1] = 255 - image_data[i+1];
+            image_data[i+2] = 255 - image_data[i+2];
+        }
+    }
+
     GLuint image_texture;
     glGenTextures(1, &image_texture);
     glBindTexture(GL_TEXTURE_2D, image_texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
     stbi_image_free(image_data);
     *out_texture = image_texture;
     *out_width = image_width;
@@ -215,13 +231,33 @@ void InitUI(AppState& state) {
     if (font == nullptr) io.Fonts->AddFontDefault();
 
     state.iconLoaded = LoadTextureFromFile("./assets/icons/FileTree.png", &state.iconTexture, &state.iconWidth, &state.iconHeight);
-    if (!state.iconLoaded) printf("Failed to load icon.\n");
+    if (!state.iconLoaded) printf("Failed to load FileTree icon.\n");
+
+    state.settingsIconLoaded = LoadTextureFromFile("./assets/icons/Settings.png", &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
+    if (!state.settingsIconLoaded) printf("Failed to load Settings icon.\n");
+
+    state.aboutIconLoaded = LoadTextureFromFile("./assets/icons/about.png", &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
+    if (!state.aboutIconLoaded) printf("Failed to load About icon.\n");
 }
 
 void RenderUI(AppState& state) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGuiIO& io = ImGui::GetIO();
 
-    // --- Speed Indicator Overlay ---
+    float target_panel_width = state.sidebar_visible ? 280.0f : 0.0f;
+    float slide_speed = 1800.0f;
+    float step = slide_speed * io.DeltaTime;
+
+    if (state.sidebar_current_width < target_panel_width) {
+        state.sidebar_current_width += step;
+        if (state.sidebar_current_width > target_panel_width)
+            state.sidebar_current_width = target_panel_width;
+    } else if (state.sidebar_current_width > target_panel_width) {
+        state.sidebar_current_width -= step;
+        if (state.sidebar_current_width < target_panel_width)
+            state.sidebar_current_width = target_panel_width;
+    }
+
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, 10.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
@@ -232,10 +268,8 @@ void RenderUI(AppState& state) {
     }
     ImGui::End();
 
-    // --- Left Sidebar ---
-    float strip_width = 60.0f;
+    float strip_width = 70.0f;
     float button_height = 50.0f;
-    float panel_width = 280.0f;
 
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(ImVec2(strip_width, viewport->Size.y));
@@ -259,7 +293,7 @@ void RenderUI(AppState& state) {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
 
         if (state.iconLoaded) {
-            float icon_size = 40.0f;
+            float icon_size = 48.0f;
             float pad_x = (strip_width - icon_size) * 0.5f;
             float pad_y = (button_height - icon_size) * 0.5f;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
@@ -280,14 +314,56 @@ void RenderUI(AppState& state) {
         if (ImGui::Button("S", ImVec2(strip_width, button_height))) {
              state.active_tab_index = 1; state.sidebar_visible = true;
         }
+
+        float bottom_margin = 10.0f;
+        float settings_y = ImGui::GetWindowHeight() - button_height - bottom_margin;
+        float about_y = settings_y - button_height;
+
+        ImGui::SetCursorPosY(about_y);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+        if (state.aboutIconLoaded) {
+            float icon_size = 48.0f;
+            float pad_x = (strip_width - icon_size) * 0.5f;
+            float pad_y = (button_height - icon_size) * 0.5f;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
+
+            if (ImGui::ImageButton("##AboutTab", (void*)(intptr_t)state.aboutIconTexture, ImVec2(icon_size, icon_size), ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f))) {
+                state.show_about_window = !state.show_about_window;
+            }
+            ImGui::PopStyleVar();
+        } else {
+            if (ImGui::Button("About", ImVec2(strip_width, button_height))) {
+                state.show_about_window = !state.show_about_window;
+            }
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::SetCursorPosY(settings_y);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+        if (state.settingsIconLoaded) {
+            float icon_size = 48.0f;
+            float pad_x = (strip_width - icon_size) * 0.5f;
+            float pad_y = (button_height - icon_size) * 0.5f;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
+
+            if (ImGui::ImageButton("##SettingsTab", (void*)(intptr_t)state.settingsIconTexture, ImVec2(icon_size, icon_size), ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f))) {
+                state.show_settings_window = !state.show_settings_window;
+            }
+            ImGui::PopStyleVar();
+        } else {
+            if (ImGui::Button("Set", ImVec2(strip_width, button_height))) {
+                state.show_settings_window = !state.show_settings_window;
+            }
+        }
+        ImGui::PopStyleColor();
     }
     ImGui::End();
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    if (state.sidebar_visible) {
+    if (state.sidebar_current_width > 1.0f) {
         ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + strip_width, viewport->Pos.y));
-        ImGui::SetNextWindowSize(ImVec2(panel_width, viewport->Size.y));
+        ImGui::SetNextWindowSize(ImVec2(state.sidebar_current_width, viewport->Size.y));
         ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
 
         if (ImGui::Begin("##Panel", nullptr, panel_flags)) {
@@ -322,4 +398,7 @@ void RenderUI(AppState& state) {
         }
         ImGui::End();
     }
+
+    RenderSettingsWindow(&state.show_settings_window);
+    RenderAboutWindow(&state.show_about_window);
 }

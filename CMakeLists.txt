@@ -81,9 +81,13 @@ add_executable(Wildstar_Studio_2
         src/main.cpp
         src/UI/UI.cpp
         src/UI/UI.h
+        src/About/about.cpp
+        src/About/about.h
+        src/Settings/settings.cpp
+        src/Settings/settings.h
 )
 
-target_include_directories(Wildstar_Studio_2 PRIVATE src/UI)
+target_include_directories(Wildstar_Studio_2 PRIVATE src/UI src/Settings src/About)
 
 target_link_libraries(Wildstar_Studio_2 PRIVATE imgui glad glm zlibstatic stb_lib)
 

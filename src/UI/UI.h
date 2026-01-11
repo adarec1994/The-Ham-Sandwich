@@ -30,12 +30,26 @@ struct Grid {
 
 struct AppState {
     int active_tab_index = 0;
-    bool sidebar_visible = true;
+    bool sidebar_visible = false;
+    float sidebar_current_width = 0.0f;
 
     GLuint iconTexture = 0;
     int iconWidth = 0;
     int iconHeight = 0;
     bool iconLoaded = false;
+
+    GLuint settingsIconTexture = 0;
+    int settingsIconWidth = 0;
+    int settingsIconHeight = 0;
+    bool settingsIconLoaded = false;
+
+    GLuint aboutIconTexture = 0;
+    int aboutIconWidth = 0;
+    int aboutIconHeight = 0;
+    bool aboutIconLoaded = false;
+
+    bool show_settings_window = false;
+    bool show_about_window = false;
 
     Camera camera;
     Grid grid;
