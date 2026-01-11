@@ -31,7 +31,7 @@ struct Grid {
 struct AppState {
     int active_tab_index = 0;
     bool sidebar_visible = true;
-    
+
     GLuint iconTexture = 0;
     int iconWidth = 0;
     int iconHeight = 0;
@@ -43,6 +43,7 @@ struct AppState {
 
 void InitUI(AppState& state);
 void InitGrid(AppState& state);
-void UpdateCamera(AppState& state);
+void UpdateCamera(GLFWwindow* window, AppState& state);
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void RenderGrid(AppState& state, int display_w, int display_h);
 void RenderUI(AppState& state);

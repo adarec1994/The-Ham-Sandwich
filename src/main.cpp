@@ -26,6 +26,9 @@ int main()
     glfwSwapInterval(1);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
+    // Register Scroll Callback
+    glfwSetScrollCallback(window, scroll_callback);
+
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
@@ -44,13 +47,16 @@ int main()
     InitUI(appState);
     InitGrid(appState);
 
+    // Set User Pointer so callbacks can access state
+    glfwSetWindowUserPointer(window, &appState);
+
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
 
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
 
-        UpdateCamera(appState);
+        UpdateCamera(window, appState);
 
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);

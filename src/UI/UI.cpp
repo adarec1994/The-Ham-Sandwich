@@ -100,13 +100,29 @@ void InitGrid(AppState& state) {
     glBindVertexArray(0);
 }
 
-void UpdateCamera(AppState& state) {
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+{
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
+    {
+        AppState* state = (AppState*)glfwGetWindowUserPointer(window);
+        if (state)
+        {
+            state->camera.MovementSpeed += (float)yoffset;
+            if (state->camera.MovementSpeed < 1.0f) state->camera.MovementSpeed = 1.0f;
+            if (state->camera.MovementSpeed > 10.0f) state->camera.MovementSpeed = 10.0f;
+        }
+    }
+}
+
+void UpdateCamera(GLFWwindow* window, AppState& state) {
     ImGuiIO& io = ImGui::GetIO();
     float dt = io.DeltaTime;
 
     if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
         ImVec2 mouse_delta = io.MouseDelta;
-        
+
         state.camera.Yaw   += mouse_delta.x * state.camera.MouseSensitivity;
         state.camera.Pitch -= mouse_delta.y * state.camera.MouseSensitivity;
 
@@ -118,20 +134,23 @@ void UpdateCamera(AppState& state) {
         front.y = sin(glm::radians(state.camera.Pitch));
         front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
         state.camera.Front = glm::normalize(front);
-        
+
         state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
         state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
-    }
 
-    float velocity = state.camera.MovementSpeed * dt;
-    if (ImGui::IsKeyDown(ImGuiKey_W))
-        state.camera.Position += state.camera.Front * velocity;
-    if (ImGui::IsKeyDown(ImGuiKey_S))
-        state.camera.Position -= state.camera.Front * velocity;
-    if (ImGui::IsKeyDown(ImGuiKey_A))
-        state.camera.Position -= state.camera.Right * velocity;
-    if (ImGui::IsKeyDown(ImGuiKey_D))
-        state.camera.Position += state.camera.Right * velocity;
+        float velocity = state.camera.MovementSpeed * dt;
+        if (ImGui::IsKeyDown(ImGuiKey_W))
+            state.camera.Position += state.camera.Front * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_S))
+            state.camera.Position -= state.camera.Front * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_A))
+            state.camera.Position -= state.camera.Right * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_D))
+            state.camera.Position += state.camera.Right * velocity;
+
+    } else {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
 }
 
 void RenderGrid(AppState& state, int display_w, int display_h) {
@@ -140,7 +159,6 @@ void RenderGrid(AppState& state, int display_w, int display_h) {
     glUseProgram(state.grid.ShaderProgram);
 
     glm::mat4 view = glm::lookAt(state.camera.Position, state.camera.Position + state.camera.Front, state.camera.Up);
-    
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 100.0f);
 
     unsigned int viewLoc = glGetUniformLocation(state.grid.ShaderProgram, "view");
@@ -167,7 +185,7 @@ void ApplyBrainwaveStyle() {
     style.GrabRounding      = 3.0f;
     style.WindowRounding    = 0.0f;
     style.FrameRounding     = 4.0f;
-    
+
     ImVec4* colors = style.Colors;
     colors[ImGuiCol_Text]          = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
     colors[ImGuiCol_WindowBg]      = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
@@ -202,6 +220,19 @@ void InitUI(AppState& state) {
 
 void RenderUI(AppState& state) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    // --- Speed Indicator Overlay ---
+    ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, 10.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
+    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+
+    if (ImGui::Begin("SpeedOverlay", nullptr, overlay_flags))
+    {
+        ImGui::Text("Camera Speed: %.1f", state.camera.MovementSpeed);
+    }
+    ImGui::End();
+
+    // --- Left Sidebar ---
     float strip_width = 60.0f;
     float button_height = 50.0f;
     float panel_width = 280.0f;
