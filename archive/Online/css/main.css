@@ -1,0 +1,681 @@
+@font-face {
+    font-family: 'Quicksand';
+    src: url(../utils/Quicksand-Regular.otf);
+}
+
+@font-face {
+    font-family: 'Quicksand';
+    src: url(../utils/Quicksand-Bold.otf);
+    font-weight: bold;
+}
+
+@font-face {
+    font-family: 'FiraMonoOT';
+    src: url(../utils/Roboto-Regular.ttf);
+}
+
+@font-face {
+    font-family: 'FiraMonoOT';
+    src: url(../utils/Roboto-Bold.ttf);
+    font-weight: bold;
+}
+
+body {
+    font-family: 'FiraMonoOT';
+    font-weight: bold;
+    overflow: hidden;
+}
+
+input[type="checkbox"] {
+    display: none;
+}
+
+input[type="checkbox"] + label span {
+    display: inline-block;
+    width: 19px;
+    height: 19px;
+    vertical-align: middle;
+    background: url(../images/checkbox_empty.png) top left no-repeat;
+    background-size: 100%;
+    margin: -1px 4px 0 0;
+}
+
+input[type="checkbox"] + label {
+    vertical-align: baseline;
+}
+
+input[type="checkbox"]:checked + label span {
+    background: url(../images/checkbox_full.png) top left no-repeat;
+}
+
+.hiddenFileInput {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    width: 100%;
+}
+
+.fontOverride {
+    font-family: 'FiraMonoOT' !important;
+}
+
+.contentText {
+    font-size: 13px !important;
+}
+
+.opaque {
+    opacity: 1.0 !important;
+}
+
+.alignRight {
+    float: right;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.no-close .ui-dialog-titlebar-close {
+  display: none;
+}
+
+.ui-tooltip, .arrow:after {
+    background: black;
+    border: 2px solid white !important;
+}
+
+.ui-tooltip {
+    padding: 10px 20px !important;
+    color: white !important;
+    border-radius: 20px !important;
+    font: bold 14px "Helvetica Neue", Sans-Serif !important;
+    box-shadow: 0 0 7px black !important;
+}
+
+.arrow {
+    width: 70px;
+    height: 16px;
+    overflow: hidden;
+    position: absolute;
+    left: 50%;
+    margin-left: -35px;
+    bottom: -16px;
+}
+
+.arrow.top {
+    top: -16px;
+    bottom: auto;
+}
+
+.arrow.left {
+    left: 20%;
+}
+
+.arrow:after {
+    content: "";
+    position: absolute;
+    left: 20px;
+    top: -20px;
+    width: 25px;
+    height: 25px;
+    box-shadow: 6px 5px 9px -9px black;
+    -webkit-transform: rotate(45deg);
+    -moz-transform: rotate(45deg);
+    -ms-transform: rotate(45deg);
+    -o-transform: rotate(45deg);
+    transform: rotate(45deg);
+}
+
+.arrow.top:after {
+    bottom: -20px;
+    top: auto;
+}
+
+#dataErrorLabel {
+    visibility: hidden;
+    color: red;
+}
+
+#setDataFolderEntry {
+    position: relative;
+}
+
+#settingsDialog p {
+    word-wrap: break-word;
+}
+
+#errorDialog .errorDesc {
+    color: rgba(204, 0, 0, 1);
+    font-size: 17px !important;
+}
+
+#fileSaveFolderInput {
+    width: 450px;
+}
+
+#settingsDialog .descLabel {
+    color: rgba(51, 102, 153, 1);
+    font-size: 15px;
+}
+
+#aboutDialog .descLabel {
+    color: rgba(51, 102, 153, 1);
+    font-size: 15px;
+}
+
+#headerBar {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+    width: 100%;
+    height: 150px;
+    background-color: #444444;
+    border-bottom: 1px solid #66AFCC;
+}
+
+#toolBar {
+    position: absolute;
+    width: 300px;
+    top: 150px;
+    left: 0px;
+    bottom: 0px;
+    background-color: #444444;
+    border-right: 1px solid #66AFCC;
+    border-top: 1px solid #66AFCC;
+    display: inline-block;
+    overflow-y: hidden;
+}
+
+#glContent {
+    position: absolute;
+    right: 0px;
+    left: 300px;
+    top: 150px;
+    bottom: 0px;
+    display: inline-block;
+}
+
+#glContent > p {
+    margin-left: 15px;
+    color: #BBBBBB;
+    font-size: small;
+}
+
+#headerBar .headerBarEntry {
+    background-color: #666666;
+    margin-top: 15px;
+    width: 80px;
+    height: 110px;
+    display: inline-block;
+    margin-left: 15px;
+    text-align: center;
+    border: 2px solid #888888;
+    border-radius: 3px;
+    -webkit-transition: background-color 300ms;
+}
+
+#headerBar .headerBarEntry:hover {
+    background-color: #AAAAAA;
+}
+
+#headerBar .headerBarEntry:active {
+    background-color: #EEEEEE;
+    -webkit-transition: background-color 200ms;
+}
+
+#debugBarEntry {
+    margin-right: 15px;
+}
+
+#headerBar .headerBarEntry img {
+    width: 64px;
+    height: 64px;
+    display: inline-block;
+    margin-top: 5px;
+}
+
+#headerBar .headerBarEntry p {
+    line-height: 46px;
+    margin-top: -3px;
+    color: #CCCCCC;
+    font-size: 15px;
+    -webkit-transition: background-color 300ms;
+}
+
+#headerBar .headerBarEntry:hover p {
+    color: #222222;
+}
+
+#nonPathSelectedView {
+    width: 100%;
+    height: 100%;
+    text-align: center;
+}
+
+#dataFolderPath {
+    display: none;
+}
+
+#selectDataFolderToolEntry {
+    display: inline-block;
+    margin-top: 15px;
+}
+
+#fileToolbarView {
+    width: 100%;
+    height: 100%;
+    display: none;
+    text-align: center;
+}
+
+#fileToolbarView p {
+    color: #CCCCCC;
+}
+
+#fileToolbarView #pathLoadRotate {
+    width: 96px;
+    height: 96px;
+    margin-left: 102px;
+    display: block;
+}
+
+#fileLoadProgress {
+    width: 124px;
+    height: 20px;
+    margin-left: 88px;
+}
+
+#fileToolbarView_load {
+    width: 100%;
+    height: 100%;
+    text-align: center;
+}
+
+#fileToolbarView_tree {
+    display: none;
+    width: 100%;
+    position: absolute;
+    top: 0px;
+    bottom: 0px;
+    text-align: center;
+}
+
+#tree {
+    text-align: initial;
+}
+
+#textureGlView {
+    width: 300px;
+    height: 250px;
+    border: 1px solid white;
+    border-radius: 5px;
+    box-shadow: 0 0 4px 5px #808080;
+    background-color: #CCCCCC;
+    margin-left: 20px;
+    margin-top: 10px;
+    opacity: 0.8;
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+#textureGlView .textureOverlayContent {
+    width: 100%;
+    height: 100%;
+}
+
+#imageContainer {
+    padding: 8px 0px;
+    border-bottom-color: #E1A60A;
+    border-top-color: #E1A60A;
+    border-left-color: #E1A60A;
+    border-right-color: #E1A60A;
+
+    border-bottom-style: double;
+    border-top-style: double;
+    border-left-style: double;
+    border-right-style: double;
+    border-bottom-width: 4px;
+    border-top-width: 4px;
+    border-left-width: 4px;
+    border-right-width: 4px;
+
+    margin-left: 20px;
+    margin-top: 10px;
+    margin-left: 20px;
+    margin-top: 10px;
+}
+
+.textureOverlayContent .textureDescEntry {
+    width: 100%;
+    height: auto;
+    margin-bottom: 10px;
+}
+
+.textureDescEntry .textureDesc_caption {
+    margin-top: 5px;
+    margin-left: 5px;
+    margin-bottom: 1px;
+    font-size: 13px !important;
+    color: #333333;
+}
+
+.textureDescEntry .textureDesc_value {
+    margin-top: 0px;
+    margin-left: 8px;
+    font-size: 11px !important;
+    color: #333333;
+    word-wrap: break-word;
+}
+
+.textureDesc {
+    color: #333333;
+    font-size: 11px !important;
+    margin-left: 5px;
+}
+
+#skyGlView {
+    width: 100%;
+    height: 100%;
+    display: none;
+    overflow: auto;
+    background-color: #1d1f21;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+#codeGlView {
+    width: 100%;
+    height: 100%;
+    display: none;
+    overflow: auto;
+    background-color: #1d1f21;
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+#codeGlView pre {
+    margin: 0;
+    white-space:pre-wrap;
+    word-wrap:break-word;
+    overflow-y: auto;
+}
+
+#tableGlView {
+    width: 100%;
+    height: 100%;
+    display: none;
+    background-color: #CCCCCC;
+}
+
+#tableEditorPager {
+    position: absolute;
+    left: 0px;
+    right: 0px;
+    bottom: 0px;
+}
+
+#binGlView {
+    width: 100%;
+    height: 100%;
+    display: none;
+    background-color: #CCCCCC;
+}
+
+#binEditorPager {
+    position: absolute;
+    left: 0px;
+    right: 0px;
+    bottom: 0px;
+}
+
+#modelGlView {
+    display: none;
+    position: absolute;
+    left: 0px;
+    top: 0px;
+    bottom: 0px;
+    right: 0px;
+}
+
+#modelViewToolbar {
+    width: 100%;
+    height: 72px;
+    background-color: rgba(207, 207, 207, 0.8);
+}
+
+#modelViewToolbar .toolBarEntry {
+    display: inline-block;
+    margin-top: 5px;
+    margin-left: 5px;
+    width: 62px;
+    height: 62px;
+    text-align: center;
+    border: 1px solid black;
+    border-radius: 5px;
+    background-color: transparent;
+    -webkit-transition: background-color 200ms;
+}
+
+#modelViewToolbar .toolBarEntry:hover {
+    background-color: #CCCCCC;
+}
+
+#modelViewToolbar .toolBarEntry:active {
+   background-color: #EEEEEE;
+   -webkit-transition: background-color 200ms;
+}
+
+#modelViewToolbar .toolBarEntry img {
+    width: 48px;
+    height: 48px;
+    margin-top: 7px;
+}
+
+#areaGlView {
+    display: none;
+    position: absolute;
+    left: 0px;
+    top: 0px;
+    bottom: 0px;
+    right: 0px;
+}
+
+#areaViewToolbar {
+    width: 100%;
+    height: 72px;
+    background-color: rgba(207, 207, 207, 0.8);
+}
+
+#areaViewToolbar .toolBarEntry {
+    display: inline-block;
+    margin-top: 5px;
+    margin-left: 5px;
+    width: 62px;
+    height: 62px;
+    text-align: center;
+    border: 1px solid black;
+    border-radius: 5px;
+    background-color: transparent;
+    -webkit-transition: background-color 200ms;
+}
+
+#areaViewToolbar .toolBarEntry:hover {
+    background-color: #CCCCCC;
+}
+
+#areaViewToolbar,#areaGlView .toolBarEntry:active {
+   background-color: #EEEEEE;
+   -webkit-transition: background-color 200ms;
+}
+
+#areaViewToolbar .toolBarEntry img {
+    width: 48px;
+    height: 48px;
+    margin-top: 7px;
+}
+
+#areaViewStatusBar {
+    width: 100%;
+    height: 25px;
+    position: absolute;
+    bottom: 0px;
+    left: 0px;
+    background-color: rgb(180, 180, 180);
+}
+
+#areaViewStatusBar .statusTooltip {
+    font-family: 'FiraMonoOT';
+    line-height: 25px;
+    margin-left: 15px;
+}
+
+#areaViewStatusBar .statusTooltip:first-child {
+    margin-left: 5px;
+}
+
+#areaViewStatusBar .statusTitle {
+   color: darkred;
+}
+
+#underConstruction {
+    display: none;
+    margin-left: 15px;
+    margin-top: 15px;
+}
+
+#underConstruction img {
+    width: 96px;
+    height: 96px;
+}
+
+#underConstruction p {
+    color: #CCCCCC;
+    font-size: 25px;
+    margin-top: 2px;
+}
+
+#i3ModelView {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    display: none;
+}
+
+#i3SectorView {
+    width: 300px;
+    height: 250px;
+    border: 1px solid white;
+    border-radius: 5px;
+    box-shadow: 0 0 4px 5px #808080;
+    background-color: #CCCCCC;
+    margin-left: 20px;
+    margin-top: 10px;
+    opacity: 0.8;
+}
+
+#sectorRadioButtons {
+    font-size: 13px !important;
+}
+
+#scriptEditor {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #CCCCCC;
+    margin: 0;
+    padding: 0;
+}
+
+#scriptContentBar {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#scriptFileBar {
+    margin: 0;
+    padding: 0;
+    margin-top: 0px;
+    margin-bottom: 0px;
+    width: 100%;
+    background-color: #999999;
+    height: 100px;
+}
+
+#codeBar {
+    position: absolute;
+    top: 100px;
+    bottom: 200px;
+    left: 0px;
+    right: 0px;
+    margin: 0;
+    padding: 0;
+}
+
+#console {
+    position: absolute;
+    bottom: 0px;
+    left: 0px;
+    right: 0px;
+    height: 200px;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+}
+
+#console pre {
+    margin: 0;
+    margin-left: 5px;
+}
+
+#scriptCodeEditor {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#scriptFileBar .toolBarEntry {
+    display: inline-block;
+    margin-top: 8px;
+    margin-left: 15px;
+    width: 78px;
+    height: 78px;
+    text-align: center;
+    border: 1px solid black;
+    border-radius: 5px;
+    background-color: transparent;
+    -webkit-transition: background-color 200ms;
+}
+
+#scriptFileBar .toolBarEntry:hover {
+    background-color: #CCCCCC;
+}
+
+#scriptFileBar .toolBarEntry:active {
+   background-color: #EEEEEE;
+   -webkit-transition: background-color 200ms;
+}
+
+#scriptFileBar .toolBarEntry img {
+    width: 64px;
+    height: 64px;
+    margin-top: 7px;
+}
+
+#glDrawArea {
+    width: 100%;
+    height: 100%;
+}

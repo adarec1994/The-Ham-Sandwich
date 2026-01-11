@@ -1,0 +1,460 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClInclude Include="stdafx.h" />
+    <ClInclude Include="Window.h">
+      <Filter>Win32</Filter>
+    </ClInclude>
+    <ClInclude Include="GxContext.h">
+      <Filter>Win32</Filter>
+    </ClInclude>
+    <ClInclude Include="UIManager.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="Archive.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="IOManager.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="String.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Texture.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\inffast.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\inffixed.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\inflate.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\inftrees.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\trees.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\zconf.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\zlib.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\zutil.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\crc32.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="zlib\deflate.h">
+      <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="BinStream.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="GlExt.h">
+      <Filter>Win32</Filter>
+    </ClInclude>
+    <ClInclude Include="DataTable.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="M3Model.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ModelRender.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="FileLoaderThread.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="I3Model.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="I3Sector.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="InputGeometry.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="VertexElement.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Program.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Vector3.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="Matrix.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="VertexBuffer.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Buffer.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="IndexBuffer.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Pipeline.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureInput.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="V8Instance.h">
+      <Filter>V8</Filter>
+    </ClInclude>
+    <ClInclude Include="ScriptManager.h">
+      <Filter>V8</Filter>
+    </ClInclude>
+    <ClInclude Include="ObjectWrap.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Class.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Function.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Scope.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="ScopeObject.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="ScopeObjectCollection.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="FunctionInstance.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="ArgumentMatch.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="ClassInstance.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Namespace.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Bases.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Files.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="Object.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Array.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="Common.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="HexEditor.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="TextureManager.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="BinaryStream.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="Value.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+    <ClInclude Include="TypedArray.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="Compression.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="BinLocale.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="File.h">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="AreaFile.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AreaRender.h">
+      <Filter>UI</Filter>
+    </ClInclude>
+    <ClInclude Include="Camera.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="PerspectivicCamera.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Shader.h">
+      <Filter>Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AreaJS.h">
+      <Filter>V8\Library</Filter>
+    </ClInclude>
+    <ClInclude Include="Enum.h">
+      <Filter>V8\Binding</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="stdafx.cpp" />
+    <ClCompile Include="Main.cpp" />
+    <ClCompile Include="Window.cpp">
+      <Filter>Win32</Filter>
+    </ClCompile>
+    <ClCompile Include="GxContext.cpp">
+      <Filter>Win32</Filter>
+    </ClCompile>
+    <ClCompile Include="UIManager.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="Archive.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="IOManager.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="String.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="Texture.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inffast.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inflate.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inftrees.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\trees.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\zutil.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\adler32.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\crc32.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\deflate.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="GlExt.cpp">
+      <Filter>Win32</Filter>
+    </ClCompile>
+    <ClCompile Include="DataTable.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="M3Model.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ModelRender.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="FileLoaderThread.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="I3Model.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="I3Sector.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="InputGeometry.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="VertexElement.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Program.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Vector3.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="Matrix.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="Buffer.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="VertexBuffer.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="IndexBuffer.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Pipeline.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="TextureInput.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="V8Instance.cpp">
+      <Filter>V8</Filter>
+    </ClCompile>
+    <ClCompile Include="ScriptManager.cpp">
+      <Filter>V8</Filter>
+    </ClCompile>
+    <ClCompile Include="Class.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Function.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Scope.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="ScopeObjectCollection.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="ScopeObject.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="FunctionInstance.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="ClassInstance.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Files.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="Object.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Array.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Common.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="HexEditor.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="TextureManager.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="BinaryStream.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="Value.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+    <ClCompile Include="Compression.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="BinLocale.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="File.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\compress.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="AreaFile.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AreaRender.cpp">
+      <Filter>UI</Filter>
+    </ClCompile>
+    <ClCompile Include="Camera.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="PerspectivicCamera.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Shader.cpp">
+      <Filter>Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AreaJS.cpp">
+      <Filter>V8\Library</Filter>
+    </ClCompile>
+    <ClCompile Include="Enum.cpp">
+      <Filter>V8\Binding</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Win32">
+      <UniqueIdentifier>{b521fd89-35fa-4bd7-97e7-25183f66abc8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI">
+      <UniqueIdentifier>{f7160908-e6d8-4473-82e3-98a7a7dfa517}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Files">
+      <UniqueIdentifier>{e257bd95-4666-45bb-8f9f-bfe7ac09cd7a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Utils">
+      <UniqueIdentifier>{84f38665-45ea-4b3f-b569-23245b077083}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="zlib">
+      <UniqueIdentifier>{f776ec38-8435-468b-8b64-d3aa1a744784}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Graphics">
+      <UniqueIdentifier>{88a47606-33e7-4b00-8dec-71ab94588d53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{c50bb414-cc52-4d01-8019-5865952a505d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources\Shaders">
+      <UniqueIdentifier>{a4ce8fd1-2c68-4b25-a2de-5847d98198bd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="V8">
+      <UniqueIdentifier>{b7fd43ed-477e-432f-a1f3-5baefd989760}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="V8\Binding">
+      <UniqueIdentifier>{cff2dbe4-6255-41b3-b6d4-4427edc25915}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="V8\Library">
+      <UniqueIdentifier>{de77a015-9def-4d04-8b63-f3d7c150d94c}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\dep\res\I3Vertex.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="..\dep\res\I3Fragment.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="ObjectWrap.inl">
+      <Filter>V8\Binding</Filter>
+    </None>
+    <None Include="..\dep\res\M3Vertex.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="..\dep\res\M3Fragment.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="..\dep\res\AreaFragment.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="..\dep\res\AreaVertex.glsl">
+      <Filter>Resources\Shaders</Filter>
+    </None>
+    <None Include="ClassDiagram.cd" />
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="App.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\dep\res\main_app.ico" />
+  </ItemGroup>
+</Project>

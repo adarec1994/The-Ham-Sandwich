@@ -1,0 +1,319 @@
+﻿<!DOCTYPE HTML>
+
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>Wildstar Studio v0.1</title>
+  <link rel="stylesheet" href="css/main.css" />
+  <link rel="stylesheet" href="css/ui-darkness/jquery-ui-1.10.3.custom.css" />
+  <link rel="stylesheet" href="css/skin/ui.dynatree.css" />
+  <link rel="stylesheet" href="utils/backgrid/lib/backgrid.css" />
+  <link rel="stylesheet" href="utils/backgrid/lib/extensions/paginator/backgrid-paginator.css" />
+  <link rel="stylesheet" href="utils/highlight/styles/tomorrow-night.css" />
+  <script src="js/jquery-1.9.1.js" type="text/javascript"></script>
+  <script src="js/jquery-ui-1.10.3.custom.js" type="text/javascript"></script>
+  <script src="js/jquery.cookie.js" type="text/javascript"></script>
+  <script src="js/jquery.hotkeys.js" type="text/javascript"></script>
+  <script src="utils/zlib.js" type="text/javascript"></script>
+  <script src="utils/backgrid/assets/js/underscore.js" type="text/javascript"></script>
+  <script src="utils/backgrid/assets/js/backbone.js" type="text/javascript"></script>
+  <script src="utils/backgrid/assets/js/backbone-pageable.js" type="text/javascript"></script>
+  <script src="utils/backgrid/lib/backgrid.js" type="text/javascript"></script>
+  <script src="utils/backgrid/lib/extensions/paginator/backgrid-paginator.js" type="text/javascript"></script>
+  <script src="utils/highlight/highlight.pack.js" type="text/javascript"></script>
+  <script src="utils/jquery.dynatree.js" type="text/javascript"></script>
+  <script src="js/webgl-utils.js" type="text/javascript"></script>
+  <script src="js/Matrix.js" type="text/javascript"></script>
+  <script src="js/Vector.js" type="text/javascript"></script>
+  <script src="js/gxContext.js" type="text/javascript"></script>
+  <script src="js/main.js" type="text/javascript"></script>
+  <script src="js/dialogs.js" type="text/javascript"></script>
+  <script src="js/data.js" type="text/javascript"></script>
+  <script src="js/textureView.js" type="text/javascript"></script>
+  <script src="js/codeView.js" type="text/javascript"></script>
+  <script src="js/tableView.js" type="text/javascript"></script>
+  <script src="js/binView.js" type="text/javascript"></script> 
+  <script src="js/modelView.js" type="text/javascript"></script>
+  <script src="js/i3View.js" type="text/javascript"></script>
+  <script src="js/areaView.js" type="text/javascript"></script>
+  <script src="js/shaderView.js" type="text/javascript"></script>
+  <script src="js/imageView.js" type="text/javascript"></script>
+  <script src="utils/edit_area/edit_area_full.js" type="text/javascript"></script>
+  <script src="js/scripting.js" type="text/javascript"></script>
+  <script src="js/texture.js" type="text/javascript"></script>
+  <script src="js/m3model.js" type="text/javascript"></script>
+  <script src="js/skyView.js"></script>
+  <script src="js/skyFile.js"></script>
+  <script>hljs.initHighlightingOnLoad();</script>
+
+  <script type="x-code/x-vertex" id="quadVertex">
+      attribute vec3 position0;
+      attribute vec2 texCoord0;
+
+      varying vec2 texcoord;
+
+      uniform mat4 matProj;
+
+      void main() {
+        texcoord = texCoord0;
+        gl_Position = matProj * vec4(position0, 1.0);
+      }
+  </script>
+  <script type="x-code/x-fragment" id="quadFragment">
+      precision mediump float;
+
+      varying vec2 texcoord;
+
+      uniform sampler2D texture0;
+
+      void main() {
+        gl_FragColor = vec4(texture2D(texture0, texcoord).rgb, 1.0);
+      }
+  </script>
+  <script type="x-code/x-vertex" id="m3vertex">
+      attribute vec3 position0;
+      attribute vec3 normal0;
+      attribute vec2 texcoord0;
+
+      uniform mat4 matView;
+      uniform mat4 matProj;
+      uniform mat4 matWorld;
+
+      varying vec2 tex0;
+      varying vec3 vertexNormal;
+
+      void main() {
+        tex0 = texcoord0;
+        vertexNormal = normalize((matWorld * vec4(normal0, 1)).xyz);
+        gl_Position = matProj * matView * matWorld * vec4(position0, 1);
+      }
+  </script>
+  <script type="x-code/x-fragment" id="m3fragment">
+      precision mediump float;
+
+      varying vec3 vertexNormal;
+      varying vec2 tex0;
+
+      const vec3 sunDirection = vec3(1, -1, -1);
+      const vec3 diffuseLight = vec3(0.7, 0.7, 0.7);
+
+      uniform sampler2D _texture0;
+
+      vec3 getDiffuseLight() {
+         float light = dot(vertexNormal, -normalize(sunDirection));
+         if(light < 0.0) light = 0.0;
+         if(light > 0.5) light = 0.5 + (light - 0.5) * 0.65;
+
+         vec3 diffuse = diffuseLight * light;
+         diffuse += vec3(0.4, 0.4, 0.4);
+         diffuse = clamp(diffuse, 0.0, 1.0);
+         return diffuse;
+      }
+
+      void main() { 
+        gl_FragColor = texture(_texture0, tex0);
+        gl_FragColor.rgb *= getDiffuseLight();
+      }
+  </script>
+</head>
+<body>
+    <div id="settingsDialog" title="Settings">
+        <p class="contentText fontOverride" id="dataFilePath"><span class="descLabel">Current file path:</span><br />none set, please select using the respective buttons</p>
+        <p class="contentText fontOverride">
+            <span class="descLabel">Current file extraction path:</span><br />
+            <input id="fileSaveFolderInput" type="text" readonly /><button id="fileSaveFolderSelect">...</button>
+        </p>
+        <p class="contentText fontOverride">
+            <span class="descLabel">Texture export settings:</span>
+            <br />
+            <input type="checkbox" id="exportBmpCb" />
+            <label for="exportBmpCb"><span></span>Export textures as bitmaps</label>
+        </p>
+        <p class="contentText fontOverride">
+            <span class="descLabel">Table export settings:</span>
+            <br />
+            <input type="checkbox" id="exportCsvCb" />
+            <label for="exportCsvCb"><span></span>Export tables as CSV</label>
+        </p>
+        <p class="contentText fontOverride">
+            <span class="descLabel">Mouse sensitivity:</span>
+            <br />
+            <input type="number" id="mouseSensitivity" value="1.0" />
+        </p>
+    </div>
+    <div id="errorDialog" title="Error!">
+        <p class="contentText fontOverride errorDesc">There was an error executing an operation:</p>
+        <p class="contentText fontOverride" id="errorText"></p>
+    </div>
+    <div id="asyncDialog" title="Processing...">
+        <p class="contentText fontOverride">Processing request...</p>
+        <div id="asyncLoadProgress"></div>
+    </div>
+    <div id="aboutDialog" title="About Wildstar Studio">
+      <p class="contentText fontOverride"><span class="descLabel">Libraries used:</span></p>
+      <p class="contentText fontOverride">Windows 8 Icons - <a href="http://www.visualpharm.com/" target="blank">www.visualpharm.com</a></p>
+      <p class="contentText fontOverride">ZLib - <a href="http://www.zlib.net/" target="blank">www.zlib.net</a></p>
+      <p class="contentText fontOverride">jQuery - <a href="http://jquery.com/" target="blank">jquery.com</a></p>
+      <p class="contentText fontOverride">dynatree - <a href="https://code.google.com/p/dynatree/" target="blank">code.google.com/p/dynatree</a></p>
+      <p class="contentText fontOverride">Backgrid.js - <a href="http://backgridjs.com/" target="blank">backgridjs.com</a></p>
+      <p class="contentText fontOverride">Highlight.js - <a href="http://highlightjs.org/" target="blank">highlightjs.org</a></p>
+    </div>
+    <div id="headerBar">
+        <div id="setDataFolderEntry" class="headerBarEntry">
+            <img src="images/add_database-512.png" alt="" />
+            <p>Load</p>
+            <input type="file" class="hiddenFileInput" multiple/>
+        </div>
+        <span id="dataErrorLabel">Please select ClientData.index AND ClientData.archive in the same dialog</span>
+        <div id="underConstruction">
+            <img src="images/construction_worker-128.png" alt="" />
+            <p>Under construction...</p>
+        </div>
+        <div id="debugBarEntry" class="headerBarEntry alignRight">
+            <img src="images/bug-512.png" alt="" />
+            <p>Debug</p>
+        </div>
+        <div id="scriptBarEntry" class="headerBarEntry alignRight">
+            <img src="images/administrative_tools-512.png" alt="" />
+            <p>Scripting</p>
+        </div>
+        <div id="aboutButton" class="headerBarEntry alignRight">
+            <img src="images/about-512.png" alt="" />
+            <p>About</p>
+        </div>
+        <div id="toolBarSettingsButton" class="headerBarEntry alignRight">
+            <img src="images/settings2-512.png" alt="" />
+            <p>Settings</p>
+        </div>
+        <div id="toolBarExtractButton" class="headerBarEntry alignRight hidden" title="Warning! Extracting large folders (like Art) may take a lot of time!">
+            <img src="images/exit-512.png" alt="" />
+            <p>Extract</p>
+        </div>
+    </div>
+    <div id="toolBar">
+        <div id="nonPathSelectedView">
+            <a id="selectDataFolderToolEntry" href="#" class="fontOverride contentText">Select a data folder</a>
+        </div>
+        <div id="fileToolbarView">
+            <div id="fileToolbarView_load">
+                <p class="fontOverride contentText">Loading files...</p>
+                <img id="pathLoadRotate" src="images/cd-512.png" alt=""></img>
+                <br />
+                <div id="fileLoadProgress"></div>
+                <p id="fileLoadIndicator" class="fontOverride contentText"></p>
+            </div>
+            <div id="fileToolbarView_tree">
+                <div id="tree"></div>
+            </div>
+            <div id="fileToolbarView_filter">
+                <input id="fileToolbarView_filterInput" type="text" /><button id="fileToolbarView_filterButton">Filter</button>
+            </div>
+        </div>
+    </div>
+    <div id="glContent">
+        <canvas id="glDrawArea"></canvas>
+        <p id="dataFolderPath">Current Path: </p>
+        <div id="textureGlView">
+            <div class="textureOverlayContent">
+                <div class="textureDescEntry">
+                    <p class="textureDesc_caption">Texture Name:</p>
+                    <p id="textureNameDesc" class="textureDesc_value"></p>
+                </div>
+                <div class="textureDescEntry">
+                    <p class="textureDesc_caption">Dimensions:</p>
+                    <p id="textureSizeDesc" class="textureDesc_value"></p>
+                </div>
+                <a href="#" style="margin-left: 5px" id="exportTextureButton">Export as Bitmap</a>
+            </div>
+        </div>
+        <div id="skyGlView">
+
+        </div>
+        <div id="codeGlView">
+            <pre>
+                <code id="codeGlView_content" class="lua">
+                </code>
+            </pre>
+        </div>
+        <div id="tableGlView">
+            <div id="tableEditorContainer" class="backgrid-container"></div>
+            <div id="tableEditorPager" class="backgrid-paginator"></div>
+        </div>
+        <div id="binGlView">
+            <div id="binEditorContainer" class="backgrid-container"></div>
+            <div id="binEditorPager" class="backgrid-paginator"></div>
+        </div>
+        <div id="modelGlView">
+            <div id="modelViewToolbar">
+                <div id="objExportButton" class="toolBarEntry" title="Export the model as .obj file (to the extraction folder).">
+                    <img src="images/exit-48.png" alt="" />
+                </div>
+                <div id="resetRotationButton" class="toolBarEntry" title="Reset Rotation">
+                    <img src="images/rotate-512.png" alt="" />
+                </div>
+                <div id="toggleRotationButton" class="toolBarEntry" title="Toggle Rotation">
+                    <img src="images/pause-512.png" alt="" />
+                </div>
+                <div id="toggleNormalsButton" class="toolBarEntry" title="Toggle Normals">
+                    <img src="images/up_circular-512.png" alt="" />
+                </div>
+                <div id="toggleViewButton" class="toolBarEntry" title="Toggle view mode (points/solid)">
+                    <img src="images/grid-512.png" alt="" />
+                </div>
+            </div>
+        </div>
+        <div id="areaGlView">
+            <div id="areaViewToolbar">
+                <div id="areaObjExportButton" class="toolBarEntry" title="Export the area as one .obj file (to the extraction folder).">
+                    <img src="images/exit-48.png" alt="" />
+                </div>
+            </div>
+            <div id="areaViewStatusBar">
+                <span class="statusTooltip">Controls: </span>
+                <span class="statusTooltip"><span class="statusTitle">W</span> - Forward</span>
+                <span class="statusTooltip"><span class="statusTitle">S</span> - Backward</span>
+                <span class="statusTooltip"><span class="statusTitle">A</span> - Left</span>
+                <span class="statusTooltip"><span class="statusTitle">D</span> - Right</span>
+                <span class="statusTooltip"><span class="statusTitle">Q</span> - Up</span>
+                <span class="statusTooltip"><span class="statusTitle">E</span> - Down</span>
+                <span class="statusTooltip"><span class="statusTitle">Right Mouse Button</span> - Rotate</span>
+            </div>
+        </div>
+		<div id="imageView" style="display: none">
+			<img src="images/remove_image-512_.png" id="imageContainer"/>
+		</div>
+        <div id="i3ModelView">
+            <form>
+                <div id="i3SectorView">
+                    <div id="sectorRadioButtons">
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div id="scriptEditor">
+        <div id="scriptContentBar">
+            <div id="scriptFileBar">
+                <div id="runScriptButton" class="toolBarEntry">
+                    <img src="images/settings-512.png" alt="" />
+                </div>
+                <div id="scriptBackButton" class="toolBarEntry">
+                    <img src="images/left_circular-512.png" alt="" />
+                </div>
+                <div id="scriptSaveButton" class="toolBarEntry">
+                    <img src="images/save-512.png" alt="" />
+                </div>
+                <div id="scriptLoadButton" class="toolBarEntry">
+                    <img src="images/open_in_browser-512.png" alt="" />
+                </div>
+            </div>
+            <div id="codeBar">
+                <textarea id="scriptCodeEditor"></textarea>
+            </div>
+            <div id="console">
+            </div>
+        </div>
+    </div>
+</body>
+</html>
