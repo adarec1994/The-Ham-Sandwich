@@ -1,10 +1,13 @@
 #include "UI.h"
 #include "../About/about.h"
 #include "../Settings/settings.h"
+#include "../Archive.h"
+#include "SplashScreen.h"
 #include <string>
 #include <vector>
 #include <iostream>
 #include <cmath>
+#include <filesystem>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -240,7 +243,37 @@ void InitUI(AppState& state) {
     if (!state.aboutIconLoaded) printf("Failed to load About icon.\n");
 }
 
+std::string wstring_to_utf8(const std::wstring& str) {
+    if (str.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0, NULL, NULL);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), &strTo[0], size_needed, NULL, NULL);
+    return strTo;
+}
+
+void RenderEntry(IFileSystemEntryPtr entry) {
+    std::string name = wstring_to_utf8(entry->getEntryName());
+    if (name.empty()) name = "/";
+
+    if (entry->isDirectory()) {
+        bool open = ImGui::TreeNode(name.c_str());
+        if (open) {
+            for (auto child : entry->getChildren()) {
+                RenderEntry(child);
+            }
+            ImGui::TreePop();
+        }
+    } else {
+        ImGui::Text("  %s", name.c_str());
+    }
+}
+
 void RenderUI(AppState& state) {
+    if (!state.archivesLoaded) {
+        RenderSplashScreen(state);
+        return;
+    }
+
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGuiIO& io = ImGui::GetIO();
 
@@ -373,24 +406,24 @@ void RenderUI(AppState& state) {
                 ImGui::Separator();
                 ImGui::Dummy(ImVec2(0, 10));
 
-                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-                char buf[64] = "";
-                ImGui::SetNextItemWidth(-1);
-                ImGui::InputTextWithHint("##Search", "Search files...", buf, 64);
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor();
+                if (ImGui::BeginChild("FileTree", ImVec2(0, 0), false)) {
+                    for (auto& archive : state.archives) {
+                        std::filesystem::path p(archive->getPath());
+                        std::string archiveName = p.filename().string();
 
-                ImGui::Dummy(ImVec2(0, 10));
-
-                const char* files[] = { "Main.cpp", "Engine.h", "Shader.glsl", "Texture.png", "Scene.json" };
-                for (int n = 0; n < 5; n++) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
-                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.0f, 0.5f));
-                    if (ImGui::Button(files[n], ImVec2(-1, 35))) { }
-                    ImGui::PopStyleVar();
-                    ImGui::PopStyleColor();
+                        if (ImGui::TreeNode(archiveName.c_str())) {
+                            auto root = archive->getRoot();
+                            if (root) {
+                                for(auto child : root->getChildren()) {
+                                    RenderEntry(child);
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
+                    ImGui::EndChild();
                 }
+
             } else if (state.active_tab_index == 1) {
                 ImGui::Text("SEARCH");
                 ImGui::Separator();

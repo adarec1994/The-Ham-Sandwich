@@ -7,6 +7,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <vector>
+#include <memory>
+#include <string>
+
+// Forward declaration to avoid circular includes
+class Archive;
+typedef std::shared_ptr<Archive> ArchivePtr;
 
 struct Camera {
     glm::vec3 Position = glm::vec3(0.0f, 5.0f, 10.0f);
@@ -32,6 +39,11 @@ struct AppState {
     int active_tab_index = 0;
     bool sidebar_visible = false;
     float sidebar_current_width = 0.0f;
+
+    // Loading State
+    bool archivesLoaded = false;
+    std::vector<ArchivePtr> archives;
+    char searchPath[512] = "C:\\Program Files (x86)\\NCSOFT\\WildStar";
 
     GLuint iconTexture = 0;
     int iconWidth = 0;

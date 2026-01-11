@@ -78,15 +78,25 @@ target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
 add_executable(Wildstar_Studio_2
         src/main.cpp
+        src/Archive.cpp
+        src/Archive.h
         src/UI/UI.cpp
         src/UI/UI.h
+        src/UI/splashscreen.cpp
+        src/UI/splashscreen.h
         src/About/about.cpp
         src/About/about.h
         src/Settings/settings.cpp
         src/Settings/settings.h
 )
 
-target_include_directories(Wildstar_Studio_2 PRIVATE src/UI src/Settings src/About)
+target_include_directories(Wildstar_Studio_2 PRIVATE
+        src/UI
+        src/Settings
+        src/About
+        ${zlib_SOURCE_DIR}
+        ${zlib_BINARY_DIR}
+)
 
 target_link_libraries(Wildstar_Studio_2 PRIVATE imgui glad glm zlibstatic stb_lib)
 
