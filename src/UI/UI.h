@@ -20,15 +20,15 @@ typedef std::shared_ptr<AreaFile> AreaFilePtr;
 typedef std::shared_ptr<AreaRender> AreaRenderPtr;
 
 struct Camera {
-    glm::vec3 Position = glm::vec3(0.0f, 50.0f, 0.0f); // Higher start for terrain
-    glm::vec3 Front    = glm::vec3(0.0f, -0.5f, -1.0f);
+    glm::vec3 Position = glm::vec3(0.0f, 10.0f, 20.0f);
+    glm::vec3 Front    = glm::vec3(0.0f, -0.3f, -1.0f);
     glm::vec3 Up       = glm::vec3(0.0f, 1.0f, 0.0f);
     glm::vec3 Right    = glm::vec3(1.0f, 0.0f, 0.0f);
     glm::vec3 WorldUp  = glm::vec3(0.0f, 1.0f, 0.0f);
 
     float Yaw   = -90.0f;
-    float Pitch = -45.0f; // Look down slightly
-    float MovementSpeed = 50.0f; // Faster for big terrains
+    float Pitch = -20.0f;
+    float MovementSpeed = 50.0f;
     float MouseSensitivity = 0.1f;
 };
 

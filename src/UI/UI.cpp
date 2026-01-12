@@ -1,10 +1,11 @@
+// UI.cpp
 #include "UI.h"
 #include "../About/about.h"
-#include "../Settings/settings.h"
+#include "../settings/Settings.h"
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
 #include "../Area/AreaRender.h"
-#include "SplashScreen.h"
+#include "splashscreen.h"
 
 #include <string>
 #include <vector>
@@ -13,7 +14,13 @@
 #include <filesystem>
 #include <algorithm>
 
-#include <Windows.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <Windows.h>
+#else
+  #include <codecvt>
+  #include <locale>
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -24,13 +31,23 @@
 
 static std::vector<AreaFilePtr> gLoadedAreas;
 
+static bool   gAreaIconLoaded = false;
+static GLuint gAreaIconTexture = 0;
+static int    gAreaIconWidth = 0;
+static int    gAreaIconHeight = 0;
+
 static std::string wstring_to_utf8(const std::wstring& str)
 {
     if (str.empty()) return std::string();
+#ifdef _WIN32
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0, NULL, NULL);
     std::string out(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), out.data(), size_needed, NULL, NULL);
     return out;
+#else
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+    return conv.to_bytes(str);
+#endif
 }
 
 static bool EndsWithNoCase(const std::string& s, const std::string& suffix)
@@ -44,6 +61,19 @@ static bool EndsWithNoCase(const std::string& s, const std::string& suffix)
         if (a != b) return false;
     }
     return true;
+}
+
+static bool ContainsNoCase(const std::string& haystack, const std::string& needle)
+{
+    if (needle.empty()) return true;
+    auto it = std::search(
+        haystack.begin(), haystack.end(),
+        needle.begin(), needle.end(),
+        [](char a, char b) {
+            return std::tolower((unsigned char)a) == std::tolower((unsigned char)b);
+        }
+    );
+    return it != haystack.end();
 }
 
 static void SnapCameraToLoaded(AppState& state)
@@ -317,24 +347,39 @@ void ApplyBrainwaveStyle()
     style.FrameRounding     = 4.0f;
 
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text]          = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
-    colors[ImGuiCol_WindowBg]      = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_ChildBg]       = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_PopupBg]       = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_Border]        = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
-    colors[ImGuiCol_FrameBg]       = ImVec4(0.20f, 0.21f, 0.22f, 0.54f);
-    colors[ImGuiCol_FrameBgHovered]= ImVec4(0.20f, 0.21f, 0.22f, 0.80f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
-    colors[ImGuiCol_TitleBg]       = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_MenuBarBg]     = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_Button]        = ImVec4(0.20f, 0.21f, 0.22f, 0.00f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.20f, 0.21f, 0.22f, 0.50f);
-    colors[ImGuiCol_ButtonActive]  = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
-    colors[ImGuiCol_Header]        = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
-    colors[ImGuiCol_HeaderActive]  = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
-    colors[ImGuiCol_Separator]     = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
+    colors[ImGuiCol_Text]           = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_WindowBg]       = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_ChildBg]        = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_PopupBg]        = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_Border]         = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
+    colors[ImGuiCol_FrameBg]        = ImVec4(0.20f, 0.21f, 0.22f, 0.54f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.21f, 0.22f, 0.80f);
+    colors[ImGuiCol_FrameBgActive]  = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+    colors[ImGuiCol_TitleBg]        = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]  = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_MenuBarBg]      = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_Button]         = ImVec4(0.20f, 0.21f, 0.22f, 0.00f);
+    colors[ImGuiCol_ButtonHovered]  = ImVec4(0.20f, 0.21f, 0.22f, 0.50f);
+    colors[ImGuiCol_ButtonActive]   = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+    colors[ImGuiCol_Header]         = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]  = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
+    colors[ImGuiCol_HeaderActive]   = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
+    colors[ImGuiCol_Separator]      = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
+}
+
+static void PushSplashButtonColors()
+{
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.22f, 0.24f, 0.28f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.30f, 0.36f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.32f, 0.34f, 0.42f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 10.0f));
+}
+
+static void PopSplashButtonColors()
+{
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
 }
 
 void InitUI(AppState& state)
@@ -348,10 +393,13 @@ void InitUI(AppState& state)
     state.iconLoaded = LoadTextureFromFile("./assets/icons/FileTree.png", &state.iconTexture, &state.iconWidth, &state.iconHeight);
     if (!state.iconLoaded) printf("Failed to load FileTree icon.\n");
 
+    gAreaIconLoaded = LoadTextureFromFile("./assets/icons/Area.png", &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
+    if (!gAreaIconLoaded) printf("Failed to load Area icon.\n");
+
     state.settingsIconLoaded = LoadTextureFromFile("./assets/icons/Settings.png", &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
     if (!state.settingsIconLoaded) printf("Failed to load Settings icon.\n");
 
-    state.aboutIconLoaded = LoadTextureFromFile("./assets/icons/about.png", &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
+    state.aboutIconLoaded = LoadTextureFromFile("./assets/icons/About.png", &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
     if (!state.aboutIconLoaded) printf("Failed to load About icon.\n");
 
     state.areaRender = std::make_shared<AreaRender>();
@@ -426,11 +474,85 @@ void RenderEntryRecursive(AppState& state, IFileSystemEntryPtr entry, ArchivePtr
     RenderEntryRecursive_Impl(state, entry, nullptr, currentArc, max_width, depth);
 }
 
+static bool HasAreaInSubtree(const IFileSystemEntryPtr& entry, const std::string& query)
+{
+    if (!entry) return false;
+
+    if (!entry->isDirectory())
+    {
+        std::string n = wstring_to_utf8(entry->getEntryName());
+        if (!EndsWithNoCase(n, ".area")) return false;
+        return ContainsNoCase(n, query);
+    }
+
+    for (auto& child : entry->getChildren())
+    {
+        if (HasAreaInSubtree(child, query))
+            return true;
+    }
+    return false;
+}
+
+static void RenderAreaTreeFiltered(AppState& state,
+                                  const IFileSystemEntryPtr& entry,
+                                  const IFileSystemEntryPtr& parentDir,
+                                  const ArchivePtr& arc,
+                                  const std::string& query,
+                                  float& max_width,
+                                  float depth)
+{
+    if (!entry) return;
+
+    if (!HasAreaInSubtree(entry, query))
+        return;
+
+    std::string name = wstring_to_utf8(entry->getEntryName());
+    if (name.empty()) name = "/";
+
+    float indent_px = depth * ImGui::GetStyle().IndentSpacing;
+    float text_w = ImGui::CalcTextSize(name.c_str()).x;
+    float current_w = indent_px + text_w + 50.0f;
+    if (current_w > max_width) max_width = current_w;
+
+    if (entry->isDirectory())
+    {
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+        bool open = ImGui::TreeNodeEx(name.c_str(), flags);
+
+        if (open)
+        {
+            for (auto& child : entry->getChildren())
+            {
+                if (!child || child->isDirectory()) continue;
+
+                std::string childName = wstring_to_utf8(child->getEntryName());
+                if (!EndsWithNoCase(childName, ".area")) continue;
+                if (!ContainsNoCase(childName, query)) continue;
+
+                if (ImGui::Selectable(childName.c_str()))
+                {
+                    LoadAreasInFolder(state, arc, entry);
+                }
+            }
+
+            for (auto& child : entry->getChildren())
+            {
+                if (child && child->isDirectory())
+                    RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth + 1.0f);
+            }
+
+            ImGui::TreePop();
+        }
+    }
+}
+
 void RenderUI(AppState& state)
 {
     if (!state.archivesLoaded)
     {
+        PushSplashButtonColors();
         RenderSplashScreen(state);
+        PopSplashButtonColors();
         return;
     }
 
@@ -518,11 +640,45 @@ void RenderUI(AppState& state)
 
         ImGui::PopStyleColor();
 
-        if (ImGui::Button("S", ImVec2(strip_width, button_height)))
+        bool is_area_active = (state.sidebar_visible && state.active_tab_index == 1);
+
+        if (is_area_active)
         {
-            state.active_tab_index = 1;
-            state.sidebar_visible = true;
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(viewport->Pos.x, ImGui::GetCursorScreenPos().y + (button_height * 0.1f)),
+                ImVec2(viewport->Pos.x + 3, ImGui::GetCursorScreenPos().y + (button_height * 0.9f)),
+                IM_COL32(100, 149, 237, 255)
+            );
         }
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+
+        if (gAreaIconLoaded)
+        {
+            float icon_size = 48.0f;
+            float pad_x = (strip_width - icon_size) * 0.5f;
+            float pad_y = (button_height - icon_size) * 0.5f;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
+
+            if (ImGui::ImageButton("##AreaTab", (void*)(intptr_t)gAreaIconTexture, ImVec2(icon_size, icon_size),
+                                   ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f)))
+            {
+                if (state.active_tab_index == 1) state.sidebar_visible = !state.sidebar_visible;
+                else { state.active_tab_index = 1; state.sidebar_visible = true; }
+            }
+
+            ImGui::PopStyleVar();
+        }
+        else
+        {
+            if (ImGui::Button("Area", ImVec2(strip_width, button_height)))
+            {
+                if (state.active_tab_index == 1) state.sidebar_visible = !state.sidebar_visible;
+                else { state.active_tab_index = 1; state.sidebar_visible = true; }
+            }
+        }
+
+        ImGui::PopStyleColor();
 
         float bottom_margin = 10.0f;
         float settings_y = ImGui::GetWindowHeight() - button_height - bottom_margin;
@@ -635,8 +791,57 @@ void RenderUI(AppState& state)
             }
             else if (state.active_tab_index == 1)
             {
-                ImGui::Text("SEARCH");
+                ImGui::Text("AREA");
                 ImGui::Separator();
+                ImGui::Dummy(ImVec2(0, 10));
+
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                static char areaBuf[128] = "";
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputTextWithHint("##AreaSearch", "Search areas...", areaBuf, 128);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+
+                ImGui::Dummy(ImVec2(0, 10));
+
+                std::string areaQuery(areaBuf);
+
+                if (ImGui::BeginChild("AreaTree", ImVec2(0, 0), false))
+                {
+                    float calculated_width = 280.0f;
+
+                    for (auto& archive : state.archives)
+                    {
+                        std::filesystem::path p(archive->getPath());
+                        std::string archiveName = p.filename().string();
+
+                        auto root = archive->getRoot();
+                        if (!root) continue;
+
+                        bool archiveHasArea = false;
+                        for (auto& child : root->getChildren())
+                        {
+                            if (HasAreaInSubtree(child, areaQuery)) { archiveHasArea = true; break; }
+                        }
+                        if (!archiveHasArea) continue;
+
+                        float header_w = ImGui::CalcTextSize(archiveName.c_str()).x + 30.0f;
+                        if (header_w > calculated_width) calculated_width = header_w;
+
+                        if (ImGui::TreeNode(archiveName.c_str()))
+                        {
+                            for (auto& child : root->getChildren())
+                            {
+                                RenderAreaTreeFiltered(state, child, root, archive, areaQuery, calculated_width, 1.0f);
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
+
+                    ImGui::EndChild();
+                    state.contentWidth = calculated_width;
+                }
             }
         }
         ImGui::End();

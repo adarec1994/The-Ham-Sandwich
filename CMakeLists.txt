@@ -6,9 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
+set(CMAKE_WARN_DEPRECATED OFF)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
+
 include(FetchContent)
 
-# --- GLM ---
 FetchContent_Declare(
         glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -16,12 +18,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
-# --- GLAD ---
 FetchContent_Declare(
         glad
         GIT_REPOSITORY https://github.com/libigl/libigl-glad.git
         GIT_TAG        09b4969
 )
+cmake_policy(SET CMP0169 OLD)
 FetchContent_GetProperties(glad)
 if(NOT glad_POPULATED)
     FetchContent_Populate(glad)
@@ -32,7 +34,6 @@ if(NOT TARGET glad)
     target_include_directories(glad PUBLIC "${glad_SOURCE_DIR}/include")
 endif()
 
-# --- ZLIB ---
 FetchContent_Declare(
         zlib
         GIT_REPOSITORY https://github.com/madler/zlib.git
@@ -40,7 +41,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zlib)
 
-# --- LIBLZMA (XZ) ---
 FetchContent_Declare(
         liblzma
         GIT_REPOSITORY https://github.com/xz-mirror/xz.git
@@ -48,7 +48,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(liblzma)
 
-# --- GLFW ---
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -60,7 +59,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
-# --- IMGUI ---
 FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -68,7 +66,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-# --- IMGUI FILE DIALOG ---
 FetchContent_Declare(
         ImGuiFileDialog
         GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
@@ -76,7 +73,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ImGuiFileDialog)
 
-# --- STB ---
 FetchContent_Declare(
         stb
         GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -100,7 +96,6 @@ target_link_libraries(imgui PUBLIC glfw glad)
 add_library(stb_lib INTERFACE)
 target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
-# Fix for LZMA API static definition
 add_definitions(-DLZMA_API_STATIC)
 
 add_executable(Wildstar_Studio_2
@@ -113,8 +108,8 @@ add_executable(Wildstar_Studio_2
         src/UI/splashscreen.h
         src/About/about.cpp
         src/About/about.h
-        src/Settings/settings.cpp
-        src/Settings/settings.h
+        src/settings/Settings.cpp
+        src/settings/Settings.h
         src/Area/AreaFile.cpp
         src/Area/AreaFile.h
         src/Area/AreaRender.cpp
@@ -146,6 +141,18 @@ endif()
 
 add_custom_command(TARGET Wildstar_Studio_2 POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/assets
+        ${CMAKE_SOURCE_DIR}/Assets
+        ${CMAKE_CURRENT_BINARY_DIR}/Assets
+        COMMAND ${CMAKE_COMMAND} -E make_directory
         ${CMAKE_CURRENT_BINARY_DIR}/assets
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/icons
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/Assets/Fonts
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/fonts
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/Assets/Icons
+        ${CMAKE_CURRENT_BINARY_DIR}/assets/icons
 )

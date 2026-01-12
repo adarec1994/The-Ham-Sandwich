@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <iostream>
 #include <zlib.h>
-#include <lzma.h> // Make sure to include this
+#include <lzma.h>
 #include <cstring>
 
 std::wstring toUnicode(const char* src) {
@@ -11,7 +11,7 @@ std::wstring toUnicode(const char* src) {
     return std::wstring(s.begin(), s.end());
 }
 
-Archive::Archive(const std::wstring& file) : mPath(file) {
+Archive::Archive(const std::filesystem::path& file) : mPath(file) {
     mIndexFile.open(file, std::ios::binary);
     if (mIndexFile.is_open() == false) {
        throw std::invalid_argument("Unable to open the index file");
@@ -20,7 +20,7 @@ Archive::Archive(const std::wstring& file) : mPath(file) {
     std::filesystem::path p(file);
     p.replace_extension(".archive");
 
-    mPackFile.open(p.wstring(), std::ios::binary);
+    mPackFile.open(p, std::ios::binary);
     if (mPackFile.is_open() == false) {
        throw std::invalid_argument("Unable to open archive file");
     }
@@ -97,7 +97,7 @@ void Archive::loadArchiveInfo() {
     }
 
     if (!hasAarc) {
-       throw std::exception("Missing CRAA table in file");
+       throw std::runtime_error("Missing CRAA table in file");
     }
 
     pkSeek(mPkDirectoryHeaders[aarcBlock].directoryOffset);
@@ -297,7 +297,6 @@ void Archive::getFileData(FileEntryPtr file, std::vector<uint8>& content)
 
         uint32 flags = file->getFlags();
 
-        // RAW / uncompressed
         if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D))
         {
             std::cout << "Using RAW copy\n";
@@ -305,7 +304,6 @@ void Archive::getFileData(FileEntryPtr file, std::vector<uint8>& content)
             return;
         }
 
-        // ZLIB
         if (flags == 3)
         {
             uint32 outSize = (uint32)file->getSizeUncompressed();
@@ -334,7 +332,6 @@ void Archive::getFileData(FileEntryPtr file, std::vector<uint8>& content)
             return;
         }
 
-        // RAW LZMA (WildStar) : [5-byte props][raw LZMA stream...]
         if (compressed.size() > 5 && compressed[0] == 0x5D)
         {
             uint32 outSize = (uint32)file->getSizeUncompressed();

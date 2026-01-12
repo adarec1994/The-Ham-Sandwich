@@ -6,8 +6,10 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <stdexcept>
 
-// Define integer types if not available
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 typedef uint8_t uint8;
@@ -44,7 +46,7 @@ typedef std::shared_ptr<IFileSystemEntry> IFileSystemEntryPtr;
 class IFileSystemEntry
 {
 protected:
-	std::weak_ptr<IFileSystemEntry> mParent; // Changed to weak_ptr to prevent circular ref
+	std::weak_ptr<IFileSystemEntry> mParent;
 	std::list<IFileSystemEntryPtr> mChildren;
 	std::wstring mEntryName;
 
@@ -115,10 +117,10 @@ public:
 	FileEntry(IFileSystemEntryPtr parent, const std::wstring& name, const std::vector<uint8>& junk) {
 		mParent = parent;
 		mEntryName = name;
-		flags = *(uint32*) (junk.data());
-		unkValue = *(uint64*) (junk.data() + 4);
-		uncompressedSize = *(uint64*) (junk.data() + 12);
-		compressedSize = *(uint64*) (junk.data() + 20);
+		flags = *(uint32*)(junk.data());
+		unkValue = *(uint64*)(junk.data() + 4);
+		uncompressedSize = *(uint64*)(junk.data() + 12);
+		compressedSize = *(uint64*)(junk.data() + 20);
 		memcpy(hash, junk.data() + 28, 20);
 	}
 
@@ -153,12 +155,12 @@ class Archive : public std::enable_shared_from_this<Archive>
 	std::vector<AARCEntry> mAarcTable;
 	uint32 mPkDirCount;
 	uint64 mPkDirStart;
-    std::wstring mPath;
+	std::filesystem::path mPath;
 
 	void loadIndexTree();
 
 public:
-	Archive(const std::wstring& indexPath);
+	Archive(const std::filesystem::path& indexPath);
 
 	void loadIndexInfo();
 	void loadArchiveInfo();
@@ -168,7 +170,7 @@ public:
 	void getFileData(FileEntryPtr file, std::vector<uint8>& content);
 
 	DirectoryEntryPtr getRoot() const { return mFileRoot; }
-    std::wstring getPath() const { return mPath; }
+	std::filesystem::path getPath() const { return mPath; }
 
 	IFileSystemEntryPtr getByPath(const std::wstring& path) const;
 
@@ -185,7 +187,7 @@ public:
 	}
 
 	void idxRead(void* data, uint32 numBytes) {
-		if (mIndexFile.read((char*) data, numBytes)) {
+		if (mIndexFile.read((char*)data, numBytes)) {
 			return;
 		}
 		throw std::runtime_error("Reached end of file!");
@@ -219,7 +221,7 @@ public:
 	}
 
 	void pkRead(void* data, uint32 numBytes) {
-		if (mPackFile.read((char*) data, numBytes)) {
+		if (mPackFile.read((char*)data, numBytes)) {
 			return;
 		}
 		throw std::runtime_error("Reached end of file!");

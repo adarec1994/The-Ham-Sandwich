@@ -1,4 +1,4 @@
-#include "settings.h"
+#include "Settings.h"
 #include "imgui.h"
 
 void RenderSettingsWindow(bool* p_open) {
