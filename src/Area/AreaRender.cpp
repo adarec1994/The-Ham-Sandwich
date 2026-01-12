@@ -3,29 +3,28 @@
 
 AreaRender::AreaRender() {}
 
-AreaRender::~AreaRender() {
+AreaRender::~AreaRender()
+{
     if (mShaderProgram) glDeleteProgram(mShaderProgram);
 }
 
-void AreaRender::init() {
+void AreaRender::init()
+{
     const char* vShaderCode = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aNormal;
         layout (location = 2) in vec2 aTexCoord;
 
-        out vec3 FragPos;
-        out vec3 Normal;
-        out float Height;
-
         uniform mat4 view;
         uniform mat4 projection;
 
-        void main() {
-            FragPos = aPos;
-            Normal = aNormal;
-            Height = aPos.y;
+        out vec2 TexCoord;
+
+        void main()
+        {
             gl_Position = projection * view * vec4(aPos, 1.0);
+            TexCoord = aTexCoord;
         }
     )";
 
@@ -33,18 +32,23 @@ void AreaRender::init() {
         #version 330 core
         out vec4 FragColor;
 
-        in vec3 FragPos;
-        in vec3 Normal;
-        in float Height;
+        in vec2 TexCoord;
 
-        void main() {
-            vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-            float diff = max(dot(Normal, lightDir), 0.2);
-            vec3 colorLow = vec3(0.2, 0.6, 0.2);
-            vec3 colorHigh = vec3(0.6, 0.5, 0.3);
-            float t = clamp((Height + 2000.0) / 1000.0, 0.0, 1.0);
-            vec3 color = mix(colorLow, colorHigh, t);
-            FragColor = vec4(color * diff, 1.0);
+        uniform sampler2D texSampler;
+        uniform int hasTexture;
+
+        void main()
+        {
+            if (hasTexture == 1)
+            {
+                vec4 texColor = texture(texSampler, TexCoord);
+                if(texColor.a < 0.1) discard;
+                FragColor = texColor;
+            }
+            else
+            {
+                FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+            }
         }
     )";
 
@@ -52,14 +56,34 @@ void AreaRender::init() {
     glShaderSource(vertex, 1, &vShaderCode, NULL);
     glCompileShader(vertex);
 
+    int success;
+    char infoLog[512];
+    glGetShaderiv(vertex, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(vertex, 512, NULL, infoLog);
+        std::cout << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
+    }
+
     GLuint fragment = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragment, 1, &fShaderCode, NULL);
     glCompileShader(fragment);
+
+    glGetShaderiv(fragment, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(fragment, 512, NULL, infoLog);
+        std::cout << "ERROR::SHADER::FRAGMENT::COMPILATION_FAILED\n" << infoLog << std::endl;
+    }
 
     mShaderProgram = glCreateProgram();
     glAttachShader(mShaderProgram, vertex);
     glAttachShader(mShaderProgram, fragment);
     glLinkProgram(mShaderProgram);
+
+    glGetProgramiv(mShaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        glGetProgramInfoLog(mShaderProgram, 512, NULL, infoLog);
+        std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
+    }
 
     glDeleteShader(vertex);
     glDeleteShader(fragment);

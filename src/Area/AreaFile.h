@@ -1,4 +1,3 @@
-// AreaFile.h
 #pragma once
 
 #include <vector>
@@ -95,15 +94,19 @@ class AreaFile
     int mTileX = 0;
     int mTileY = 0;
 
-    // region-normalization (first loaded tile becomes 0,0)
+    unsigned int mTextureID = 0;
+    bool mHasTexture = false;
+
     static bool sOriginSet;
     static int  sOriginTileX;
     static int  sOriginTileY;
 
-    void parseTileXYFromFilename(); // reads "....3f3f.area" => tileX=0x3f tileY=0x3f
+    void parseTileXYFromFilename();
+    bool loadTexture();
 
 public:
     AreaFile(ArchivePtr archive, FileEntryPtr file);
+    ~AreaFile();
     bool load();
 
     void setTileXY(int tx, int ty) { mTileX = tx; mTileY = ty; }

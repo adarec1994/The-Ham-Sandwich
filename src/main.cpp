@@ -4,6 +4,7 @@
 #include "UI/UI.h"
 #include "Area/AreaFile.h"   // Add this
 #include "Area/AreaRender.h"
+#include "tex/tex.h"
 
 #define GL_SILENCE_DEPRECATION
 #include <glad/glad.h>
@@ -21,7 +22,7 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Project Brainwave", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "Wildstar Studio 2", nullptr, nullptr);
     if (window == nullptr) return 1;
 
     glfwMakeContextCurrent(window);

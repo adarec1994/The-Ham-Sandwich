@@ -8,6 +8,15 @@ Contact: mattwake94@gmail.com
 Version: 1.0.0
 Built with: OpenGL, GLFW, Glad, ImGui
 
+About:
+----------------------
+This software was built in order to provide a more up-to-date, clean way of browsing the contents of the WildStar archive files.
+Little reverse engineering work has been done by me, and those who have done this work are listed in the Acknowledgements section.
+I have simply taken their work, converted/ modernized it in C++, and presented it as an all in one solution.
+
+Most, if not all, aspects of this program are subject to change as more is discovered about the formats and displaying them.
+Everything should be considered WIP.
+
 Acknowledgements:
 ----------------------
 LaMuerteDeLaPassion - Working on M3 formats and figuring out ohw to export them with animations.

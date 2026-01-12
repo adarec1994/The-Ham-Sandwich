@@ -109,7 +109,7 @@ void RenderSplashScreen(AppState& state) {
         ImGui::SetCursorPos(ImVec2(centerX - btnSize.x * 0.5f,
                                    centerY - btnSize.y * 0.5f));
 
-        if (ImGui::Button("Open Project Folder", btnSize)) {
+        if (ImGui::Button("Open Wildstar Folder", btnSize)) {
             IGFD::FileDialogConfig config;
             config.path = state.currentDialogPath;
             ImGuiFileDialog::Instance()->OpenDialog(

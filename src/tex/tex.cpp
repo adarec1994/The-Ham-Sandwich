@@ -1,0 +1,647 @@
+#include "tex.h"
+#include "texjpeg.h"
+#include <cstring>
+#include <cmath>
+#include <algorithm>
+#include <iostream>
+#include "../UI/UI.h"
+
+#include "../Archive.h"
+#include "imgui.h"
+
+static inline uint32_t rd_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
+static inline int32_t  rd_i32(const uint8_t* p) { int32_t v; std::memcpy(&v, p, 4); return v; }
+
+static bool read_bytes(const uint8_t* data, size_t size, size_t& off, void* dst, size_t n)
+{
+    if (off + n > size) return false;
+    std::memcpy(dst, data + off, n);
+    off += n;
+    return true;
+}
+
+namespace Tex
+{
+    void PreviewState::clearGL()
+    {
+        if (texture != 0)
+        {
+            if (glIsTexture(texture)) {
+                glDeleteTextures(1, &texture);
+            }
+            texture = 0;
+        }
+        texW = texH = 0;
+        hasTexture = false;
+        title.clear();
+        open = false;
+    }
+
+    bool Header::read(const uint8_t* data, size_t size, size_t& offset)
+    {
+        if (size < 4) return false;
+
+        int32_t magic = 0;
+        if (!read_bytes(data, size, offset, &magic, 4)) return false;
+        if (magic != 0x00474658) return false;
+
+        if (!read_bytes(data, size, offset, &version, 4)) return false;
+        if (!read_bytes(data, size, offset, &width, 4)) return false;
+        if (!read_bytes(data, size, offset, &height, 4)) return false;
+        if (!read_bytes(data, size, offset, &depth, 4)) return false;
+        if (!read_bytes(data, size, offset, &sides, 4)) return false;
+        if (!read_bytes(data, size, offset, &mipCount, 4)) return false;
+        if (!read_bytes(data, size, offset, &format, 4)) return false;
+
+        if (version > 0)
+        {
+            if (!read_bytes(data, size, offset, &isCompressed, 4)) return false;
+            if (!read_bytes(data, size, offset, &compressionFormat, 4)) return false;
+
+            for (int i = 0; i < 4; ++i)
+            {
+                if (!read_bytes(data, size, offset, &layerInfos[i].quality, 1)) return false;
+                if (!read_bytes(data, size, offset, &layerInfos[i].hasReplacement, 1)) return false;
+                if (!read_bytes(data, size, offset, &layerInfos[i].replacement, 1)) return false;
+            }
+
+            if (!read_bytes(data, size, offset, &imageSizesCount, 4)) return false;
+
+            uint32_t tmp[13]{};
+            for (int i = 0; i < 13; ++i)
+            {
+                if (!read_bytes(data, size, offset, &tmp[i], 4)) return false;
+                imageSizes[i] = tmp[i];
+            }
+
+            if (!read_bytes(data, size, offset, &unk, 4)) return false;
+        }
+        else
+        {
+            isCompressed = 0;
+            compressionFormat = 0;
+            imageSizesCount = 0;
+            imageSizes.fill(0);
+            unk = 0;
+        }
+
+        textureType = TextureType::Unknown;
+        switch (format)
+        {
+        case 0:
+            if (version > 0 && isCompressed == 1)
+            {
+                switch (compressionFormat)
+                {
+                case 0: textureType = TextureType::Jpeg1; break;
+                case 1: textureType = TextureType::Jpeg2; break;
+                case 2: textureType = TextureType::Jpeg3; break;
+                default: break;
+                }
+            }
+            else
+            {
+                textureType = TextureType::Argb1;
+            }
+            break;
+        case 1:  textureType = TextureType::Argb2; break;
+        case 5:  textureType = TextureType::Rgb; break;
+        case 6:  textureType = TextureType::Grayscale; break;
+        case 13: textureType = TextureType::DXT1; break;
+        case 14: textureType = TextureType::DXT3; break;
+        case 15: textureType = TextureType::DXT5; break;
+        default: break;
+        }
+
+        return true;
+    }
+
+    std::vector<int> File::calculateDXTSizes(int mipLevels, int width, int height, int blockSize)
+    {
+        std::vector<int> sizes;
+        sizes.resize(std::max(0, mipLevels));
+        int increment = 0;
+        for (int m = mipLevels - 1; m >= 0; --m)
+        {
+            int w = (int)(width / std::pow(2.0, (double)m));
+            int h = (int)(height / std::pow(2.0, (double)m));
+            sizes[increment] = (int)(((w + 3) / 4) * ((h + 3) / 4) * blockSize);
+            increment++;
+        }
+        return sizes;
+    }
+
+    static inline void rgb565_to_rgb8(uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b)
+    {
+        r = (uint8_t)(((c >> 11) & 31) * 255 / 31);
+        g = (uint8_t)(((c >> 5) & 63) * 255 / 63);
+        b = (uint8_t)((c & 31) * 255 / 31);
+    }
+
+    bool File::decodeDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+
+        int blocksX = (width + 3) / 4;
+        int blocksY = (height + 3) / 4;
+        const uint8_t* p = src;
+
+        for (int by = 0; by < blocksY; ++by)
+        {
+            for (int bx = 0; bx < blocksX; ++bx)
+            {
+                uint16_t c0 = (uint16_t)(p[0] | (p[1] << 8));
+                uint16_t c1 = (uint16_t)(p[2] | (p[3] << 8));
+                uint32_t codes = rd_u32(p + 4);
+                p += 8;
+
+                uint8_t r0, g0, b0, r1, g1, b1;
+                rgb565_to_rgb8(c0, r0, g0, b0);
+                rgb565_to_rgb8(c1, r1, g1, b1);
+
+                uint8_t pal[4][4]{};
+                pal[0][0] = r0; pal[0][1] = g0; pal[0][2] = b0; pal[0][3] = 255;
+                pal[1][0] = r1; pal[1][1] = g1; pal[1][2] = b1; pal[1][3] = 255;
+
+                if (c0 > c1)
+                {
+                    pal[2][0] = (uint8_t)((2 * r0 + r1) / 3);
+                    pal[2][1] = (uint8_t)((2 * g0 + g1) / 3);
+                    pal[2][2] = (uint8_t)((2 * b0 + b1) / 3);
+                    pal[2][3] = 255;
+                    pal[3][0] = (uint8_t)((r0 + 2 * r1) / 3);
+                    pal[3][1] = (uint8_t)((g0 + 2 * g1) / 3);
+                    pal[3][2] = (uint8_t)((b0 + 2 * b1) / 3);
+                    pal[3][3] = 255;
+                }
+                else
+                {
+                    pal[2][0] = (uint8_t)((r0 + r1) / 2);
+                    pal[2][1] = (uint8_t)((g0 + g1) / 2);
+                    pal[2][2] = (uint8_t)((b0 + b1) / 2);
+                    pal[2][3] = 255;
+                }
+
+                for (int py = 0; py < 4; ++py)
+                {
+                    for (int px = 0; px < 4; ++px)
+                    {
+                        int x = bx * 4 + px;
+                        int y = by * 4 + py;
+                        if (x >= width || y >= height) continue;
+                        uint32_t idx = (codes >> (2 * (py * 4 + px))) & 0x3;
+                        size_t o = ((size_t)y * (size_t)width + (size_t)x) * 4;
+                        outRGBA[o + 0] = pal[idx][0];
+                        outRGBA[o + 1] = pal[idx][1];
+                        outRGBA[o + 2] = pal[idx][2];
+                        outRGBA[o + 3] = pal[idx][3];
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool File::decodeDXT3(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+
+        int blocksX = (width + 3) / 4;
+        int blocksY = (height + 3) / 4;
+        const uint8_t* p = src;
+
+        for (int by = 0; by < blocksY; ++by)
+        {
+            for (int bx = 0; bx < blocksX; ++bx)
+            {
+                const uint8_t* alpha = p;
+                uint16_t c0 = (uint16_t)(p[8] | (p[9] << 8));
+                uint16_t c1 = (uint16_t)(p[10] | (p[11] << 8));
+                uint32_t codes = rd_u32(p + 12);
+                p += 16;
+
+                uint8_t r0, g0, b0, r1, g1, b1;
+                rgb565_to_rgb8(c0, r0, g0, b0);
+                rgb565_to_rgb8(c1, r1, g1, b1);
+
+                uint8_t pal[4][3]{};
+                pal[0][0] = r0; pal[0][1] = g0; pal[0][2] = b0;
+                pal[1][0] = r1; pal[1][1] = g1; pal[1][2] = b1;
+                pal[2][0] = (uint8_t)((2 * r0 + r1) / 3);
+                pal[2][1] = (uint8_t)((2 * g0 + g1) / 3);
+                pal[2][2] = (uint8_t)((2 * b0 + b1) / 3);
+                pal[3][0] = (uint8_t)((r0 + 2 * r1) / 3);
+                pal[3][1] = (uint8_t)((g0 + 2 * g1) / 3);
+                pal[3][2] = (uint8_t)((b0 + 2 * b1) / 3);
+
+                for (int py = 0; py < 4; ++py)
+                {
+                    for (int px = 0; px < 4; ++px)
+                    {
+                        int x = bx * 4 + px;
+                        int y = by * 4 + py;
+                        if (x >= width || y >= height) continue;
+
+                        int pIdx = py * 4 + px;
+                        int bIdx = pIdx / 2;
+                        int sVal = (pIdx % 2) * 4;
+                        uint8_t a = (alpha[bIdx] >> sVal) & 0x0F;
+                        a = (a << 4) | a;
+
+                        uint32_t cidx = (codes >> (2 * pIdx)) & 0x3;
+                        size_t o = ((size_t)y * (size_t)width + (size_t)x) * 4;
+                        outRGBA[o + 0] = pal[cidx][0];
+                        outRGBA[o + 1] = pal[cidx][1];
+                        outRGBA[o + 2] = pal[cidx][2];
+                        outRGBA[o + 3] = a;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool File::decodeDXT5(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+
+        int blocksX = (width + 3) / 4;
+        int blocksY = (height + 3) / 4;
+        const uint8_t* p = src;
+
+        for (int by = 0; by < blocksY; ++by)
+        {
+            for (int bx = 0; bx < blocksX; ++bx)
+            {
+                uint8_t a0 = p[0];
+                uint8_t a1 = p[1];
+                uint64_t alphaBits = 0;
+                alphaBits |= (uint64_t)p[2] << 0;
+                alphaBits |= (uint64_t)p[3] << 8;
+                alphaBits |= (uint64_t)p[4] << 16;
+                alphaBits |= (uint64_t)p[5] << 24;
+                alphaBits |= (uint64_t)p[6] << 32;
+                alphaBits |= (uint64_t)p[7] << 40;
+
+                uint16_t c0 = (uint16_t)(p[8] | (p[9] << 8));
+                uint16_t c1 = (uint16_t)(p[10] | (p[11] << 8));
+                uint32_t codes = rd_u32(p + 12);
+                p += 16;
+
+                uint8_t alut[8]{};
+                alut[0] = a0;
+                alut[1] = a1;
+                if (a0 > a1)
+                {
+                    alut[2] = (uint8_t)((6 * a0 + 1 * a1) / 7);
+                    alut[3] = (uint8_t)((5 * a0 + 2 * a1) / 7);
+                    alut[4] = (uint8_t)((4 * a0 + 3 * a1) / 7);
+                    alut[5] = (uint8_t)((3 * a0 + 4 * a1) / 7);
+                    alut[6] = (uint8_t)((2 * a0 + 5 * a1) / 7);
+                    alut[7] = (uint8_t)((1 * a0 + 6 * a1) / 7);
+                }
+                else
+                {
+                    alut[2] = (uint8_t)((4 * a0 + 1 * a1) / 5);
+                    alut[3] = (uint8_t)((3 * a0 + 2 * a1) / 5);
+                    alut[4] = (uint8_t)((2 * a0 + 3 * a1) / 5);
+                    alut[5] = (uint8_t)((1 * a0 + 4 * a1) / 5);
+                    alut[6] = 0;
+                    alut[7] = 255;
+                }
+
+                uint8_t r0, g0, b0, r1, g1, b1;
+                rgb565_to_rgb8(c0, r0, g0, b0);
+                rgb565_to_rgb8(c1, r1, g1, b1);
+
+                uint8_t pal[4][3]{};
+                pal[0][0] = r0; pal[0][1] = g0; pal[0][2] = b0;
+                pal[1][0] = r1; pal[1][1] = g1; pal[1][2] = b1;
+                pal[2][0] = (uint8_t)((2 * r0 + r1) / 3);
+                pal[2][1] = (uint8_t)((2 * g0 + g1) / 3);
+                pal[2][2] = (uint8_t)((2 * b0 + b1) / 3);
+                pal[3][0] = (uint8_t)((r0 + 2 * r1) / 3);
+                pal[3][1] = (uint8_t)((g0 + 2 * g1) / 3);
+                pal[3][2] = (uint8_t)((b0 + 2 * b1) / 3);
+
+                for (int py = 0; py < 4; ++py)
+                {
+                    for (int px = 0; px < 4; ++px)
+                    {
+                        int x = bx * 4 + px;
+                        int y = by * 4 + py;
+                        if (x >= width || y >= height) continue;
+
+                        uint32_t cidx = (codes >> (2 * (py * 4 + px))) & 0x3;
+                        uint32_t aidx = (uint32_t)((alphaBits >> (3 * (py * 4 + px))) & 0x7);
+
+                        size_t o = ((size_t)y * (size_t)width + (size_t)x) * 4;
+                        outRGBA[o + 0] = pal[cidx][0];
+                        outRGBA[o + 1] = pal[cidx][1];
+                        outRGBA[o + 2] = pal[cidx][2];
+                        outRGBA[o + 3] = alut[aidx];
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    bool File::readFromMemory(const uint8_t* data, size_t size)
+    {
+        failedReading = false;
+        mipData.clear();
+
+        if (!data || size == 0)
+        {
+            failedReading = true;
+            return false;
+        }
+
+        size_t off = 0;
+        if (!header.read(data, size, off))
+        {
+            failedReading = true;
+            return false;
+        }
+
+        if (header.version > 0)
+        {
+            off = 112;
+            if (off > size)
+            {
+                failedReading = true;
+                return false;
+            }
+        }
+
+        switch (header.textureType)
+        {
+        case TextureType::DXT1:
+            {
+                auto sizes = calculateDXTSizes(header.mipCount, header.width, header.height, 8);
+                mipData.reserve((size_t)header.mipCount);
+                for (int i = 0; i < header.mipCount; ++i)
+                {
+                    int sz = sizes[i];
+                    if (sz < 0 || off + (size_t)sz > size) { failedReading = true; return false; }
+                    std::vector<uint8_t> buf((size_t)sz);
+                    std::memcpy(buf.data(), data + off, (size_t)sz);
+                    off += (size_t)sz;
+                    mipData.push_back(std::move(buf));
+                }
+                return true;
+            }
+        case TextureType::DXT3:
+        case TextureType::DXT5:
+            {
+                auto sizes = calculateDXTSizes(header.mipCount, header.width, header.height, 16);
+                mipData.reserve((size_t)header.mipCount);
+                for (int i = 0; i < header.mipCount; ++i)
+                {
+                    int sz = sizes[i];
+                    if (sz < 0 || off + (size_t)sz > size) { failedReading = true; return false; }
+                    std::vector<uint8_t> buf((size_t)sz);
+                    std::memcpy(buf.data(), data + off, (size_t)sz);
+                    off += (size_t)sz;
+                    mipData.push_back(std::move(buf));
+                }
+                return true;
+            }
+        case TextureType::Argb1:
+        case TextureType::Argb2:
+            {
+                if (header.version == 0 || header.imageSizesCount == 0)
+                {
+                    size_t remaining = size - off;
+                    std::vector<uint8_t> buf(remaining);
+                    std::memcpy(buf.data(), data + off, remaining);
+                    mipData.push_back(std::move(buf));
+                    return true;
+                }
+
+                mipData.reserve((size_t)header.imageSizesCount);
+                size_t offs = off;
+                for (uint32_t i = 0; i < header.imageSizesCount; ++i)
+                {
+                    uint32_t sz = header.imageSizes[i];
+                    if (sz == 0) { mipData.emplace_back(); continue; }
+                    if (offs + (size_t)sz > size) { failedReading = true; return false; }
+                    std::vector<uint8_t> buf((size_t)sz);
+                    std::memcpy(buf.data(), data + offs, (size_t)sz);
+                    offs += (size_t)sz;
+                    mipData.push_back(std::move(buf));
+                }
+                return true;
+            }
+        case TextureType::Jpeg1:
+        case TextureType::Jpeg2:
+        case TextureType::Jpeg3:
+            {
+                mipData.reserve((size_t)header.imageSizesCount);
+                for (uint32_t i = 0; i < header.imageSizesCount; ++i)
+                {
+                    uint32_t sz = header.imageSizes[i];
+                    if (sz == 0) { mipData.emplace_back(); continue; }
+                    if (off + (size_t)sz > size) { failedReading = true; return false; }
+                    std::vector<uint8_t> buf((size_t)sz);
+                    std::memcpy(buf.data(), data + off, (size_t)sz);
+                    off += (size_t)sz;
+                    mipData.push_back(std::move(buf));
+                }
+                return true;
+            }
+
+        case TextureType::Rgb:
+        case TextureType::Grayscale:
+        case TextureType::Unknown:
+        default:
+            failedReading = true;
+            return false;
+        }
+    }
+
+    bool File::decodeLargestMipToRGBA(ImageRGBA& out) const
+    {
+        out = {};
+        if (failedReading) return false;
+        if (header.width <= 0 || header.height <= 0) return false;
+        if (mipData.empty()) return false;
+
+        auto largestMipIndex = (int)mipData.size() - 1;
+        int w = header.width;
+        int h = header.height;
+
+        if (header.textureType == TextureType::DXT1)
+        {
+            out.width = w; out.height = h;
+            return decodeDXT1(mipData[largestMipIndex].data(), w, h, out.rgba);
+        }
+        if (header.textureType == TextureType::DXT3)
+        {
+            out.width = w; out.height = h;
+            return decodeDXT3(mipData[largestMipIndex].data(), w, h, out.rgba);
+        }
+        if (header.textureType == TextureType::DXT5)
+        {
+            out.width = w; out.height = h;
+            return decodeDXT5(mipData[largestMipIndex].data(), w, h, out.rgba);
+        }
+        if (header.textureType == TextureType::Jpeg1 ||
+            header.textureType == TextureType::Jpeg2 ||
+            header.textureType == TextureType::Jpeg3)
+        {
+            int mipLevel = (int)(header.imageSizesCount - 1) - largestMipIndex;
+            return Jpeg::Decode(header, mipLevel, mipData[largestMipIndex], out.rgba, out.width, out.height);
+        }
+        if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
+        {
+            const auto& buf = mipData[largestMipIndex];
+            if (buf.empty()) return false;
+            size_t expected = (size_t)w * (size_t)h * 4;
+            if (buf.size() < expected) return false;
+            out.width = w; out.height = h;
+            out.rgba.resize(expected);
+            std::memcpy(out.rgba.data(), buf.data(), expected);
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool UploadRGBAtoGL(const ImageRGBA& img, GLuint& outTex, int& outW, int& outH)
+    {
+        if (img.width <= 0 || img.height <= 0) return false;
+        if (img.rgba.empty()) return false;
+
+        if (outTex != 0) glDeleteTextures(1, &outTex);
+        glGenTextures(1, &outTex);
+        glBindTexture(GL_TEXTURE_2D, outTex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+
+        outW = img.width;
+        outH = img.height;
+        return true;
+    }
+
+    bool OpenTexPreviewFromEntry(AppState& state, const ArchivePtr& arc, const FileEntryPtr& fileEntry)
+    {
+        std::cout << "[TexPreview] Request to open texture..." << std::endl;
+
+        if (!arc || !fileEntry) return false;
+
+        std::vector<uint8_t> bytes;
+        arc->getFileData(fileEntry, bytes);
+
+        if (bytes.empty()) {
+            std::cout << "[TexPreview] Error: File data is empty." << std::endl;
+            return false;
+        }
+
+        Tex::File tf;
+        if (!tf.readFromMemory(bytes.data(), bytes.size())) {
+            std::cout << "[TexPreview] Error: Header parse failed." << std::endl;
+            return false;
+        }
+
+        Tex::ImageRGBA img;
+        if (!tf.decodeLargestMipToRGBA(img)) {
+            std::cout << "[TexPreview] Error: Decode failed." << std::endl;
+            return false;
+        }
+
+        if (!state.texPreview) return false;
+
+        state.texPreview->open = true;
+        state.texPreview->title = "Texture Preview"; // Consider using fileEntry->getEntryName() if available
+
+        // This handles glDeleteTextures internally if texture != 0
+        bool uploaded = UploadRGBAtoGL(img, state.texPreview->texture, state.texPreview->texW, state.texPreview->texH);
+        state.texPreview->hasTexture = uploaded;
+
+        if (uploaded) {
+            std::cout << "[TexPreview] GL Texture " << state.texPreview->texture
+                      << " created (" << state.texPreview->texW << "x" << state.texPreview->texH << ")." << std::endl;
+        } else {
+            std::cout << "[TexPreview] Error: UploadRGBAtoGL failed." << std::endl;
+        }
+
+        return uploaded;
+    }
+
+    void RenderTexPreviewWindow(PreviewState& ps)
+    {
+        if (!ps.open) return;
+
+        // 1. Center the Window
+        // ImGuiCond_Appearing means it sets the position only when the window first opens
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 center = viewport->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+        // 2. Set Fixed Size (550x580)
+        ImGui::SetNextWindowSize(ImVec2(550, 580), ImGuiCond_Appearing);
+
+        // Optional: ImGuiWindowFlags_NoResize to lock size, or just NoCollapse
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+
+        if (ImGui::Begin(ps.title.c_str(), &ps.open, flags))
+        {
+            if (ps.hasTexture && ps.texture != 0)
+            {
+                // 3. Get available space inside the window
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+
+                // Reserve space for text at bottom
+                avail.y -= ImGui::GetTextLineHeightWithSpacing();
+
+                float w = (float)ps.texW;
+                float h = (float)ps.texH;
+
+                // 4. Calculate Scale to Fit (Aspect Fit)
+                float scale = 1.0f;
+                if (w > 0.0f && h > 0.0f)
+                {
+                    float scaleX = avail.x / w;
+                    float scaleY = avail.y / h;
+                    scale = (scaleX < scaleY) ? scaleX : scaleY;
+                }
+
+                ImVec2 drawSize(w * scale, h * scale);
+
+                // 5. Center the Image
+                float cursorX = ImGui::GetCursorPosX() + (avail.x - drawSize.x) * 0.5f;
+                float cursorY = ImGui::GetCursorPosY() + (avail.y - drawSize.y) * 0.5f;
+
+                ImGui::SetCursorPos(ImVec2(cursorX, cursorY));
+
+                // Draw Image
+                ImGui::Image((void*)(intptr_t)ps.texture, drawSize);
+
+                // 6. Draw Info Text at bottom
+                ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x, ImGui::GetWindowHeight() - ImGui::GetTextLineHeightWithSpacing() - ImGui::GetStyle().WindowPadding.y));
+                ImGui::Text("Original Size: %dx%d | Display: %.0fx%.0f", ps.texW, ps.texH, drawSize.x, drawSize.y);
+            }
+            else
+            {
+                ImGui::Text("No texture loaded or invalid texture ID.");
+            }
+        }
+        ImGui::End();
+
+        if (!ps.open)
+        {
+            ps.clearGL();
+        }
+    }
+}

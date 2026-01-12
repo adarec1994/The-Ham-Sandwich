@@ -1,4 +1,3 @@
-// AreaFile.cpp
 #include "AreaFile.h"
 #include <glad/glad.h>
 #include <cmath>
@@ -10,6 +9,7 @@
 #include <memory>
 #include <cstring>
 #include <cwctype>
+#include "../tex/tex.h"
 
 const float AreaFile::UnitSize = 2.0f;
 std::vector<uint32> AreaChunkRender::indices;
@@ -70,23 +70,15 @@ static inline bool parseHexByte(const std::wstring& s, size_t pos, int& outByte)
 
 void AreaFile::parseTileXYFromFilename()
 {
-    // Example: 1x1HousingGamblingInterior.3f3f.area
-    // We find the last ".????.area" pattern where ???? are 4 hex digits.
-    // tileX = first byte, tileY = second byte.
-    // NOTE: This sets mTileX/mTileY if it finds it; otherwise leaves them as-is.
-
     if (mPath.empty())
         return;
 
     std::wstring name = mPath;
 
-    // find ".area" extension
     size_t ext = name.rfind(L".area");
     if (ext == std::wstring::npos)
         return;
 
-    // find dot before the 4 hex chars
-    // ... ".3f3f.area" => dot is at ext-5
     if (ext < 5)
         return;
 
@@ -111,9 +103,6 @@ AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file) : mArchive(archive), m
         {
             mArchive->getFileData(mFile, mContent);
             mStream = std::make_shared<BinStream>(mContent);
-
-            // A) Filename gives tile coordinate (big grid)
-            // Example: 1x1HousingGamblingInterior.3f3f.area => tileX=0x3f tileY=0x3f
             parseTileXYFromFilename();
         }
         catch (const std::exception& e)
@@ -121,6 +110,69 @@ AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file) : mArchive(archive), m
             std::cerr << "Error reading file content: " << e.what() << std::endl;
         }
     }
+}
+
+AreaFile::~AreaFile()
+{
+    if (mTextureID != 0)
+    {
+        glDeleteTextures(1, &mTextureID);
+        mTextureID = 0;
+    }
+}
+
+static std::wstring ReplaceExtension(const std::wstring& path, const std::wstring& newExt)
+{
+    size_t lastDot = path.find_last_of(L'.');
+    if (lastDot == std::wstring::npos) return path + newExt;
+    return path.substr(0, lastDot) + newExt;
+}
+
+bool AreaFile::loadTexture()
+{
+    if (!mFile || !mArchive) return false;
+
+    auto parentDir = mFile->getParent();
+    if (!parentDir) return false;
+
+    std::wstring areaName = mFile->getEntryName();
+    std::wstring texName = ReplaceExtension(areaName, L".tex");
+
+    FileEntryPtr texEntry = nullptr;
+    for (auto& child : parentDir->getChildren())
+    {
+        if (child->getEntryName() == texName && !child->isDirectory())
+        {
+            texEntry = std::dynamic_pointer_cast<FileEntry>(child);
+            break;
+        }
+    }
+
+    if (!texEntry) return false;
+
+    std::vector<uint8_t> texBytes;
+    if (!mArchive->getFileData(texEntry, texBytes) || texBytes.empty())
+        return false;
+
+    Tex::File tf;
+    if (!tf.readFromMemory(texBytes.data(), texBytes.size())) return false;
+
+    Tex::ImageRGBA img;
+    if (!tf.decodeLargestMipToRGBA(img)) return false;
+
+    glGenTextures(1, &mTextureID);
+    glBindTexture(GL_TEXTURE_2D, mTextureID);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    mHasTexture = true;
+    return true;
 }
 
 bool AreaFile::load()
@@ -167,12 +219,9 @@ bool AreaFile::load()
         size_t pos(const uint8* base) const { return (size_t)(p - base); }
     };
 
-    // IMPORTANT FIX:
-    // FourCC appears reversed in-file: 'aera' and 'KNHC' (which is "CHNK" reversed).
-    // Numeric fields (version, sizes, cellInfo, flags, height u16) are LE and must NOT be swapped.
-    const uint32 MAGIC_aera = 0x61726561u; // "aera"
-    const uint32 MAGIC_AERA = 0x41524541u; // "AERA" (rare)
-    const uint32 MAGIC_KNHC = 0x43484e4Bu; // "KNHC"
+    const uint32 MAGIC_aera = 0x61726561u;
+    const uint32 MAGIC_AERA = 0x41524541u;
+    const uint32 MAGIC_KNHC = 0x43484e4Bu;
 
     const uint8* base = mContent.data();
     R r{ base, base + mContent.size() };
@@ -198,8 +247,8 @@ bool AreaFile::load()
     {
         size_t chunkPos = r.pos(base);
 
-        uint32 magic = r.u32le(); // compare to KNHC directly
-        uint32 size  = r.u32le(); // DO NOT swap
+        uint32 magic = r.u32le();
+        uint32 size  = r.u32le();
 
         std::cout << "Outer chunk @ " << chunkPos
                   << " magic=0x" << std::hex << magic
@@ -230,8 +279,6 @@ bool AreaFile::load()
         return false;
     }
 
-    // ensure that after building we move the entire region to 00:
-    // first tile loaded becomes origin (0,0); all subsequent tiles shift relative to it.
     if (!sOriginSet)
     {
         sOriginSet = true;
@@ -248,16 +295,15 @@ bool AreaFile::load()
     float totalHeight = 0.0f;
     uint32 lastIndex = 0;
 
-    const float chunkSpan = 16.0f * UnitSize;     // 32
-    const float fileSpan  = 16.0f * chunkSpan;    // 512
+    const float chunkSpan = 16.0f * UnitSize;
+    const float fileSpan  = 16.0f * chunkSpan;
 
-    // A) place tiles in world using filename tile coords, then normalize to region 00 via origin shift
     const float fileBaseX = (float)(mTileX - sOriginTileX) * fileSpan;
     const float fileBaseY = (float)(mTileY - sOriginTileY) * fileSpan;
 
     while (cr.can(4))
     {
-        uint32 cellInfo = cr.u32le(); // DO NOT swap
+        uint32 cellInfo = cr.u32le();
 
         uint32 idxDelta = (cellInfo >> 24) & 0xFF;
         uint32 size     = (cellInfo & 0x00FFFFFF);
@@ -280,14 +326,13 @@ bool AreaFile::load()
         std::vector<uint8> cellData(size);
         cr.bytes(cellData.data(), size);
 
-        uint32 flags = *(const uint32*)cellData.data(); // DO NOT swap
+        uint32 flags = *(const uint32*)cellData.data();
         std::vector<uint8> payload(cellData.begin() + 4, cellData.end());
 
         float baseX = fileBaseX + (float)(index % 16) * chunkSpan;
         float baseY = fileBaseY + (float)(index / 16) * chunkSpan;
 
-        // swapped=false: numeric reads are LE
-        auto chunk = std::make_shared<AreaChunkRender>(flags, payload, baseX, baseY, /*swapped=*/false);
+        auto chunk = std::make_shared<AreaChunkRender>(flags, payload, baseX, baseY, false);
         mChunks[index] = chunk;
 
         if (chunk && chunk->hasHeightmap())
@@ -305,6 +350,8 @@ bool AreaFile::load()
     }
 
     mAverageHeight = totalHeight / (float)validCount;
+
+    loadTexture();
     return true;
 }
 
@@ -315,21 +362,16 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, &matView[0][0]);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, &matProj[0][0]);
 
-    // Force white (only if shader supports these uniforms)
+    if (mHasTexture && mTextureID != 0)
     {
-        GLint loc = -1;
-
-        loc = glGetUniformLocation(shaderProgram, "hasColorMap");
-        if (loc >= 0) glUniform1i(loc, 0);
-
-        loc = glGetUniformLocation(shaderProgram, "color");
-        if (loc >= 0) glUniform4f(loc, 1.f, 1.f, 1.f, 1.f);
-
-        loc = glGetUniformLocation(shaderProgram, "baseColor");
-        if (loc >= 0) glUniform4f(loc, 1.f, 1.f, 1.f, 1.f);
-
-        loc = glGetUniformLocation(shaderProgram, "debugColor");
-        if (loc >= 0) glUniform4f(loc, 1.f, 1.f, 1.f, 1.f);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mTextureID);
+        glUniform1i(glGetUniformLocation(shaderProgram, "texSampler"), 0);
+        glUniform1i(glGetUniformLocation(shaderProgram, "hasTexture"), 1);
+    }
+    else
+    {
+        glUniform1i(glGetUniformLocation(shaderProgram, "hasTexture"), 0);
     }
 
     for (auto& c : mChunks)
@@ -341,7 +383,7 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
 AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseY, bool swapped)
     : mChunkData(payload), mFlags(flags)
 {
-    (void)swapped; // kept for signature compatibility; numeric reads are LE in this path.
+    (void)swapped;
 
     struct R
     {
@@ -387,7 +429,7 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         {
             for (int j = 0; j < 4; ++j)
             {
-                uint32 v = r.u32le(); // LE
+                uint32 v = r.u32le();
                 mZoneIds[j] = v;
             }
             continue;
@@ -404,7 +446,7 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
             {
                 for (int xx = -1; xx < 18; ++xx)
                 {
-                    uint16 hv = r.u16le();          // LE
+                    uint16 hv = r.u16le();
                     uint16 h  = (uint16)(hv & 0x7FFF);
 
                     AreaVertex v{};

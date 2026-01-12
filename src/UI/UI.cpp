@@ -6,6 +6,7 @@
 #include "../Area/AreaFile.h"
 #include "../Area/AreaRender.h"
 #include "splashscreen.h"
+#include "../tex/tex.h"
 
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@
 #include <cmath>
 #include <filesystem>
 #include <algorithm>
+#include <map>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -76,6 +78,47 @@ static bool ContainsNoCase(const std::string& haystack, const std::string& needl
     return it != haystack.end();
 }
 
+static std::string ToLowerCopy(std::string s)
+{
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+static std::string GetExtLower(const std::string& name)
+{
+    std::filesystem::path p(name);
+    std::string e = p.extension().string();
+    if (e.empty()) return "";
+    return ToLowerCopy(e);
+}
+
+static std::string FormatFolderLabel(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size() * 2);
+    char prev = 0;
+    for (size_t i = 0; i < s.size(); ++i)
+    {
+        char c = s[i];
+        if (c == '_' || c == '-') c = ' ';
+        bool isUpper = (c >= 'A' && c <= 'Z');
+        bool prevLower = (prev >= 'a' && prev <= 'z');
+        bool prevDigit = (prev >= '0' && prev <= '9');
+        bool currDigit = (c >= '0' && c <= '9');
+
+        if (i > 0 && c != ' ' && isUpper && (prevLower || prevDigit))
+            out.push_back(' ');
+        if (i > 0 && currDigit && !prevDigit && prev != ' ')
+            out.push_back(' ');
+
+        out.push_back(c);
+        prev = c;
+    }
+    while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
 static void SnapCameraToLoaded(AppState& state)
 {
     if (gLoadedAreas.empty()) return;
@@ -135,6 +178,30 @@ static void LoadAreasInFolder(AppState& state, ArchivePtr arc, IFileSystemEntryP
     }
     else
     {
+        state.currentArea.reset();
+    }
+}
+
+static void LoadSingleArea(AppState& state, ArchivePtr arc, const std::shared_ptr<FileEntry>& fileEntry)
+{
+    if (!arc || !fileEntry) return;
+
+    gLoadedAreas.clear();
+
+    std::string name = wstring_to_utf8(fileEntry->getEntryName());
+    std::cout << "Loading Area: " << name << std::endl;
+
+    auto af = std::make_shared<AreaFile>(arc, fileEntry);
+    if (af->load())
+    {
+        std::cout << "Area Loaded Successfully." << std::endl;
+        gLoadedAreas.push_back(af);
+        state.currentArea = af;
+        SnapCameraToLoaded(state);
+    }
+    else
+    {
+        std::cout << "Failed to load Area." << std::endl;
         state.currentArea.reset();
     }
 }
@@ -445,24 +512,17 @@ static void RenderEntryRecursive_Impl(AppState& state,
                 {
                     auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
                     if (fileEntry && currentArc)
-                    {
-                        gLoadedAreas.clear();
-
-                        std::cout << "Loading Area: " << name << std::endl;
-                        auto af = std::make_shared<AreaFile>(currentArc, fileEntry);
-                        if (af->load())
-                        {
-                            std::cout << "Area Loaded Successfully." << std::endl;
-                            gLoadedAreas.push_back(af);
-                            state.currentArea = af;
-                            SnapCameraToLoaded(state);
-                        }
-                        else
-                        {
-                            std::cout << "Failed to load Area." << std::endl;
-                            state.currentArea.reset();
-                        }
-                    }
+                        LoadSingleArea(state, currentArc, fileEntry);
+                }
+            }
+            // NEW: Texture Logic
+            else if (EndsWithNoCase(name, ".tex"))
+            {
+                auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
+                if (fileEntry && currentArc)
+                {
+                    // This function is defined in tex.cpp/.h
+                    Tex::OpenTexPreviewFromEntry(state, currentArc, fileEntry);
                 }
             }
         }
@@ -474,21 +534,37 @@ void RenderEntryRecursive(AppState& state, IFileSystemEntryPtr entry, ArchivePtr
     RenderEntryRecursive_Impl(state, entry, nullptr, currentArc, max_width, depth);
 }
 
+static bool DirHasAreaFiles(const IFileSystemEntryPtr& dir, const std::string& query)
+{
+    if (!dir || !dir->isDirectory()) return false;
+    for (auto& child : dir->getChildren())
+    {
+        if (!child || child->isDirectory()) continue;
+        std::string n = wstring_to_utf8(child->getEntryName());
+        if (!EndsWithNoCase(n, ".area")) continue;
+        if (!ContainsNoCase(n, query)) continue;
+        return true;
+    }
+    return false;
+}
+
 static bool HasAreaInSubtree(const IFileSystemEntryPtr& entry, const std::string& query)
 {
     if (!entry) return false;
 
     if (!entry->isDirectory())
-    {
-        std::string n = wstring_to_utf8(entry->getEntryName());
-        if (!EndsWithNoCase(n, ".area")) return false;
-        return ContainsNoCase(n, query);
-    }
+        return false;
+
+    if (DirHasAreaFiles(entry, query))
+        return true;
 
     for (auto& child : entry->getChildren())
     {
-        if (HasAreaInSubtree(child, query))
-            return true;
+        if (child && child->isDirectory())
+        {
+            if (HasAreaInSubtree(child, query))
+                return true;
+        }
     }
     return false;
 }
@@ -501,10 +577,21 @@ static void RenderAreaTreeFiltered(AppState& state,
                                   float& max_width,
                                   float depth)
 {
-    if (!entry) return;
+    if (!entry || !entry->isDirectory())
+        return;
 
     if (!HasAreaInSubtree(entry, query))
         return;
+
+    if (!DirHasAreaFiles(entry, query))
+    {
+        for (auto& child : entry->getChildren())
+        {
+            if (child && child->isDirectory())
+                RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth);
+        }
+        return;
+    }
 
     std::string name = wstring_to_utf8(entry->getEntryName());
     if (name.empty()) name = "/";
@@ -514,35 +601,88 @@ static void RenderAreaTreeFiltered(AppState& state,
     float current_w = indent_px + text_w + 50.0f;
     if (current_w > max_width) max_width = current_w;
 
-    if (entry->isDirectory())
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    bool open = ImGui::TreeNodeEx(name.c_str(), flags);
+
+    if (open)
     {
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-        bool open = ImGui::TreeNodeEx(name.c_str(), flags);
+        ImGui::PushID((void*)entry.get());
 
-        if (open)
+        std::string loadLabel = std::string("Load ") + FormatFolderLabel(name);
+        if (ImGui::Button(loadLabel.c_str()))
+            LoadAreasInFolder(state, arc, entry);
+
+        std::map<std::string, std::vector<IFileSystemEntryPtr>> byExt;
+
+        for (auto& child : entry->getChildren())
         {
-            for (auto& child : entry->getChildren())
-            {
-                if (!child || child->isDirectory()) continue;
+            if (!child || child->isDirectory()) continue;
+            std::string childName = wstring_to_utf8(child->getEntryName());
+            std::string ext = GetExtLower(childName);
+            if (ext.empty()) ext = "<none>";
+            byExt[ext].push_back(child);
+        }
 
-                std::string childName = wstring_to_utf8(child->getEntryName());
-                if (!EndsWithNoCase(childName, ".area")) continue;
-                if (!ContainsNoCase(childName, query)) continue;
+        std::vector<std::string> exts;
+        exts.reserve(byExt.size());
+        for (auto& kv : byExt) exts.push_back(kv.first);
+
+        std::sort(exts.begin(), exts.end(), [](const std::string& a, const std::string& b) {
+            if (a == ".area" && b != ".area") return true;
+            if (b == ".area" && a != ".area") return false;
+            return a < b;
+        });
+
+        for (auto& ext : exts)
+        {
+            auto& vec = byExt[ext];
+            std::sort(vec.begin(), vec.end(), [](const IFileSystemEntryPtr& A, const IFileSystemEntryPtr& B) {
+                std::string a = wstring_to_utf8(A->getEntryName());
+                std::string b = wstring_to_utf8(B->getEntryName());
+                return a < b;
+            });
+
+            ImGui::Dummy(ImVec2(0, 6));
+            ImGui::Separator();
+            ImGui::Text("%s", ext.c_str());
+            ImGui::Separator();
+
+            for (auto& f : vec)
+            {
+                std::string childName = wstring_to_utf8(f->getEntryName());
 
                 if (ImGui::Selectable(childName.c_str()))
                 {
-                    LoadAreasInFolder(state, arc, entry);
+                    std::string lowerExt = ToLowerCopy(ext);
+
+                    // Existing Area Logic
+                    if (lowerExt == ".area")
+                    {
+                        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                        if (fileEntry)
+                            LoadSingleArea(state, arc, fileEntry);
+                    }
+                    // NEW: Add Texture Logic here
+                    else if (lowerExt == ".tex")
+                    {
+                        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                        if (fileEntry)
+                        {
+                            Tex::OpenTexPreviewFromEntry(state, arc, fileEntry);
+                        }
+                    }
                 }
             }
-
-            for (auto& child : entry->getChildren())
-            {
-                if (child && child->isDirectory())
-                    RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth + 1.0f);
-            }
-
-            ImGui::TreePop();
         }
+
+        for (auto& child : entry->getChildren())
+        {
+            if (child && child->isDirectory())
+                RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth + 1.0f);
+        }
+
+        ImGui::PopID();
+        ImGui::TreePop();
     }
 }
 
@@ -813,9 +953,6 @@ void RenderUI(AppState& state)
 
                     for (auto& archive : state.archives)
                     {
-                        std::filesystem::path p(archive->getPath());
-                        std::string archiveName = p.filename().string();
-
                         auto root = archive->getRoot();
                         if (!root) continue;
 
@@ -826,16 +963,9 @@ void RenderUI(AppState& state)
                         }
                         if (!archiveHasArea) continue;
 
-                        float header_w = ImGui::CalcTextSize(archiveName.c_str()).x + 30.0f;
-                        if (header_w > calculated_width) calculated_width = header_w;
-
-                        if (ImGui::TreeNode(archiveName.c_str()))
+                        for (auto& child : root->getChildren())
                         {
-                            for (auto& child : root->getChildren())
-                            {
-                                RenderAreaTreeFiltered(state, child, root, archive, areaQuery, calculated_width, 1.0f);
-                            }
-                            ImGui::TreePop();
+                            RenderAreaTreeFiltered(state, child, root, archive, areaQuery, calculated_width, 0.0f);
                         }
                     }
 
@@ -849,4 +979,10 @@ void RenderUI(AppState& state)
 
     RenderSettingsWindow(&state.show_settings_window);
     RenderAboutWindow(&state.show_about_window);
+
+    // NEW: Render Texture Preview if active
+    if (state.texPreview)
+    {
+        Tex::RenderTexPreviewWindow(*state.texPreview);
+    }
 }

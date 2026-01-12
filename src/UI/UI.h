@@ -3,6 +3,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "imgui.h"
+#include "../tex/tex.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -44,6 +45,7 @@ struct AppState {
     bool sidebar_visible = false;
     float sidebar_current_width = 0.0f;
     float contentWidth = 280.0f;
+    std::shared_ptr<Tex::PreviewState> texPreview = std::make_shared<Tex::PreviewState>();
 
     bool archivesLoaded = false;
     std::vector<ArchivePtr> archives;

@@ -116,6 +116,10 @@ add_executable(Wildstar_Studio_2
         src/Area/AreaRender.h
         src/Utils/BinStream.h
         ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
+        src/tex/tex.cpp
+        src/tex/tex.h
+        src/tex/texjpeg.cpp
+        src/tex/texjpeg.h
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE
