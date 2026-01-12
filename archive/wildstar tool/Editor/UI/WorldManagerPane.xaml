@@ -1,0 +1,305 @@
+﻿<UserControl x:Class="ProjectWS.Editor.WorldManagerPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:glControl="clr-namespace:OpenTK.Wpf;assembly=GLWpfControl" xmlns:fa="http://schemas.awesome.incremented/wpf/xaml/fontawesome.sharp"
+             mc:Ignorable="d"
+             d:DesignHeight="720" d:DesignWidth="1280">
+    <UserControl.Resources>
+        <ContextMenu x:Key="contextMenuRMB" Name="contextMenuRMB">
+        </ContextMenu>
+    </UserControl.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="34"/>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="23"/>
+        </Grid.RowDefinitions>
+        <ToolBarTray Grid.Row="0" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="0,0,0,0">
+            <ToolBar HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0">
+                <RadioButton x:Name = "button_Select" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Checked="button_Select_Checked" Unchecked="button_Select_Unchecked"
+                        ToolTip="Select" IsChecked="True">
+                    <Grid>
+                        <fa:IconBlock Icon="MousePointer"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                    </Grid>
+                </RadioButton>
+                <RadioButton x:Name = "button_MarqueeSelect" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Checked="button_MarqueeSelect_Checked" Unchecked="button_MarqueeSelect_Unchecked"
+                        ToolTip="Marquee Select">
+                    <Grid>
+                        <fa:IconBlock Icon="Square"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                    </Grid>
+                </RadioButton>
+                <Separator></Separator>
+                <Button x:Name = "button_CutChunk" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Click="button_CutChunk_Click"
+                        ToolTip="Cut Chunk">
+                    <Grid>
+                        <fa:IconBlock Icon="Cut"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_CopyChunk" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Click="button_CopyChunk_Click"
+                        ToolTip="Copy Chunk">
+                    <Grid>
+                        <fa:IconBlock Icon="Copy"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_PasteChunk" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Click="button_PasteChunk_Click"
+                        ToolTip="Paste Chunk">
+                    <Grid>
+                        <fa:IconBlock Icon="Paste"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                    </Grid>
+                </Button>
+                <Separator></Separator>
+                <Button x:Name = "button_AddChunk" 
+                        Width="30" Height="30" Padding="0,0,0,0"
+                        Click="button_AddChunk_Click"
+                        ToolTip="Create New Chunk">
+                    <Grid>
+                        <fa:IconBlock Icon="Cube"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Circle" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="PlusCircle"
+                                      Foreground="RoyalBlue"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,16.5,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_RemoveChunk"
+                        Width="30" Height="30" Padding="0,0"
+                        Click="button_RemoveChunk_Click"
+                        ToolTip="Remove Chunk">
+                    <Grid>
+                        <fa:IconBlock Icon="Cube"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Circle" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="CircleMinus"
+                                      Foreground="IndianRed"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,16.5,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+                <Separator></Separator>
+                <Button x:Name = "button_DeselectAll"
+                        Width="30" Height="30" Padding="0,0"
+                        Click="button_DeselectAll_Click"
+                        ToolTip="Clear Selection">
+                    <Grid>
+                        <fa:IconBlock Icon="SquareXmark"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="20"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_TeleportToCellInSandbox"
+                        Width="30" Height="30" Padding="0,0"
+                        Click="button_TeleportToCellInSandbox_Click"
+                        ToolTip="Teleport to selected chunk in sandbox.">
+                    <Grid>
+                        <fa:IconBlock Icon="Location"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="20"/>
+                    </Grid>
+                </Button>
+            </ToolBar>
+            <ToolBar HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0">
+                <TextBlock IsHitTestVisible="False" Foreground="#d0d0d0" Width="35"
+                           Text="Map" TextAlignment="Center" VerticalAlignment="Center"/>
+                <ComboBox Text="Map" Width="200"
+                          SelectionChanged="mapComboBox_SelectionChanged"
+                          Name="mapComboBox" VerticalAlignment="Center" Margin="5,0,5,0"
+                          ItemsSource="{Binding mapNames}" ToolTip="Map List"/>
+                <Button Name="button_LoadMap" Click="button_LoadMap_Click">Load</Button>
+                <Button x:Name = "button_AddMap" Width="30" Height="30"
+                        Padding="0,0" Click="button_AddMap_Click"
+                        ToolTip="Create New Map">
+                    <Grid>
+                        <fa:IconBlock Icon="Map"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Circle" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="PlusCircle"
+                                      Foreground="RoyalBlue"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,16.5,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_RemoveMap" Width="30" Height="30" 
+                        Padding="0,0" Click="button_RemoveMap_Click"
+                        ToolTip="Remove Map">
+                    <Grid>
+                        <fa:IconBlock Icon="Map"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Circle" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="CircleMinus"
+                                      Foreground="IndianRed"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,16.5,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_ImportMap" Width="30" Height="30" 
+                        Padding="0,0" Click="button_ImportMap_Click"
+                        ToolTip="Import Map">
+                    <Grid>
+                        <fa:IconBlock Icon="Map"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Circle" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="ArrowCircleDown"
+                                      Foreground="DarkSeaGreen"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,16,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+                <Button x:Name = "button_EditMap" Width="30" Height="30" 
+                        Padding="0,0" Click="button_EditMap_Click"
+                        ToolTip="Edit Map">
+                    <Grid>
+                        <fa:IconBlock Icon="Map"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Width="24" Height="21"/>
+                        <fa:IconBlock Icon="Square" IconFont="Solid"
+                                      Foreground="White"
+                                      FontSize="14"
+                                      Width="32" Height="32"
+                                      Padding="0,15,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                        <fa:IconBlock Icon="Edit"
+                                      Foreground="DarkSeaGreen"
+                                      FontSize="13"
+                                      Width="32" Height="32"
+                                      Padding="0,15,16,0"
+                                      HorizontalAlignment="Left"
+                                      VerticalAlignment="Bottom"/>
+                    </Grid>
+                </Button>
+            </ToolBar>
+            <ToolBar HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0">
+                <ToggleButton x:Name="toggle_Grid" IsChecked="True"
+                              Checked = "ToggleGridOn" Unchecked = "ToggleGridOff">
+                    <Grid>
+                        <fa:IconBlock Icon="GripLinesVertical"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Padding="11,0"
+                                      Width="20" Height="20"/>
+                        <fa:IconBlock Icon="GripLinesVertical"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      Padding="0,0,10,0"
+                                      Width="20" Height="20"/>
+                        <fa:IconBlock Icon="GripLines"
+                                      Foreground="White"
+                                      FontSize="20"
+                                      VerticalAlignment="Top"
+                                      Width="20" Height="14"/>
+
+                    </Grid>
+                </ToggleButton>
+            </ToolBar>
+            <!--
+            <ToolBar HorizontalAlignment="Center" VerticalAlignment="Center" Margin="2,0,0,0">
+                <TextBlock IsHitTestVisible="False" Foreground="#d0d0d0" Width="45"
+                           Text="Location" TextAlignment="Center" VerticalAlignment="Center"/>
+                <ComboBox Text="Map" Width="100"
+                          SelectionChanged="comboBox_location_SelectionChanged"
+                          Name="comboBox_location" VerticalAlignment="Center" Margin="5,0,5,0"
+                          ItemsSource="{Binding locationNames}" ToolTip="Map List"/>
+            </ToolBar>
+            -->
+        </ToolBarTray>
+        <Grid Name="RendererGrid" Background="#1f1f1f" Grid.Row="1">
+            <glControl:GLWpfControl Name="GLWpfControl" Focusable="True"/>
+        </Grid>
+        <DockPanel Grid.Row="2">
+            <StatusBar DockPanel.Dock="Bottom">
+                <StatusBarItem>
+                    <TextBlock Width="300" Name="textBlock_HighlightedChunk"/>
+                </StatusBarItem>
+                <StatusBarItem>
+                    <TextBlock Width="100" Name="textBlock_ZoomLevel"/>
+                </StatusBarItem>
+            </StatusBar>
+        </DockPanel>
+    </Grid>
+</UserControl>

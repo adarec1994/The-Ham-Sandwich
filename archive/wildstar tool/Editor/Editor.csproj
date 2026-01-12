@@ -1,0 +1,69 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <StartupObject>ProjectWS.Editor.Program</StartupObject>
+    <RootNamespace>ProjectWS.$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\.editorconfig" Link=".editorconfig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Extended.Wpf.Toolkit" Version="4.5.0" />
+    <PackageReference Include="FontAwesome.Sharp" Version="6.2.1" />
+    <PackageReference Include="FontAwesome.Sharp.Pro" Version="6.2.1" />
+    <PackageReference Include="OpenTK" Version="4.7.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Engine\Engine.csproj" />
+    <ProjectReference Include="..\Libs\AvalonDock\source\Components\AvalonDock.Themes.VS2013\AvalonDock.Themes.VS2013.csproj" />
+    <ProjectReference Include="..\Libs\AvalonDock\source\Components\AvalonDock\AvalonDock.csproj" />
+    <ProjectReference Include="..\Libs\ColorPicker-master\src\ColorPicker\ColorPicker.csproj" />
+    <ProjectReference Include="..\Libs\GLWpfControl\src\GLWpfControl\GLWpfControl.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.Core\Selen.Wpf.Core.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.GenericAppTree.Contracts\Selen.Wpf.GenericAppTree.Contracts.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.GenericAppTree\Selen.Wpf.GenericAppTree.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.SystemStyles\Selen.Wpf.SystemStyles.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="UI\WorldManagerPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\TerrainColorPaintPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\TerrainLayerPaintPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\TerrainPropPlacePane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\TerrainSkyPaintPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\ToolboxPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Toolbox\SkyEditorPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="UI\Renderers\WorldRendererPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Update="UI\Renderers\WorldRendererPane.xaml">
+      <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,87 @@
+namespace ProjectWS.Engine.Database.Definitions
+{
+	public class Creature2DisplayInfo : TblRecord
+	{
+		public override string GetFileName() => "Creature2DisplayInfo";
+		public override uint GetID() => this.ID;
+		
+		public uint ID;
+		public uint statusFlags;
+		public string assetPath;
+		public string assetTexture00;
+		public string assetTexture01;
+		public string assetTexture02;
+		public string assetTexture03;
+		public string assetTexture04;
+		public string assetTexture05;
+		public uint modelTextureId00;
+		public uint modelTextureId01;
+		public uint modelTextureId02;
+		public uint modelTextureId03;
+		public uint modelTextureId04;
+		public uint modelTextureId05;
+		public string colorShiftTexturePath;
+		public uint colorShiftTextureIdMask;
+		public uint materialDataIdSkinColor0;
+		public uint materialDataIdSkinColor1;
+		public uint materialDataIdWeaponColor0;
+		public uint materialDataIdWeaponColor1;
+		public uint materialDataIdArmorColor0;
+		public uint materialDataIdArmorColor1;
+		public uint materialDataIdDefault0;
+		public uint materialDataIdDefault1;
+		public uint creatureMaterialEnum;
+		public float scale;
+		public float hitRadius;
+		public float walkLand;
+		public float walkAir;
+		public float walkWater;
+		public float walkHover;
+		public float runLand;
+		public float runAir;
+		public float runWater;
+		public float runHover;
+		public uint itemVisualTypeIdFeet;
+		public float swimWaterDepth;
+		public uint raceId;
+		public uint sex;
+		public uint itemDisplayId00;
+		public uint itemDisplayId01;
+		public uint itemDisplayId02;
+		public uint itemDisplayId03;
+		public uint itemDisplayId04;
+		public uint itemDisplayId05;
+		public uint itemDisplayId06;
+		public uint itemDisplayId07;
+		public uint itemDisplayId08;
+		public uint itemDisplayId09;
+		public uint itemDisplayId10;
+		public uint itemDisplayId11;
+		public uint itemDisplayId12;
+		public uint itemDisplayId13;
+		public uint itemDisplayId14;
+		public uint itemDisplayId15;
+		public uint itemDisplayId16;
+		public uint itemDisplayId17;
+		public uint itemDisplayId18;
+		public uint itemDisplayId19;
+		public uint modelMeshId00;
+		public uint modelMeshId01;
+		public uint modelMeshId02;
+		public uint modelMeshId03;
+		public uint modelMeshId04;
+		public uint modelMeshId05;
+		public uint modelMeshId06;
+		public uint modelMeshId07;
+		public uint modelMeshId08;
+		public uint modelMeshId09;
+		public uint modelMeshId10;
+		public uint modelMeshId11;
+		public uint modelMeshId12;
+		public uint modelMeshId13;
+		public uint modelMeshId14;
+		public uint modelMeshId15;
+		public float groundOffsetHover;
+		public float groundOffsetFly;
+	}
+}

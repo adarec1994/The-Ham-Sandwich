@@ -1,0 +1,17 @@
+﻿<Application x:Class="ProjectWS.Editor.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="UI/MainWindow.xaml"
+             xmlns:local="clr-namespace:ProjectWS.Editor">
+<Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Selen.Wpf.SystemStyles;component/Styles.xaml"/>
+                <ResourceDictionary Source="/UI/ResourceDictionaries/GlobalStyle.xaml"/>
+                <ResourceDictionary Source="/UI/ResourceDictionaries/ToolbarStyle.xaml"/>
+                <ResourceDictionary Source="/UI/ResourceDictionaries/ToolboxStyle.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
+

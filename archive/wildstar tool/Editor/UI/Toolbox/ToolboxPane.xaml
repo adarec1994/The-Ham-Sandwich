@@ -1,0 +1,74 @@
+﻿<UserControl x:Class="ProjectWS.Editor.UI.Toolbox.ToolboxPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:editor="clr-namespace:ProjectWS.Editor"
+             xmlns:fa="http://schemas.awesome.incremented/wpf/xaml/fontawesome.sharp"
+             xmlns:local="clr-namespace:ProjectWS.Editor.UI.Toolbox"
+             mc:Ignorable="d"
+             d:DesignHeight="1000" Loaded="UserControl_Loaded" d:DesignWidth="400">
+    <Grid Name="MainGrid" Background="#1f1f1f">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="60"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" x:Name="ToolbarStackPanel" Margin="0,20,0,0" VerticalAlignment="Top" HorizontalAlignment="Center" Orientation="Horizontal">
+                <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="NoToolButton" ToolTip="No Tool" Width="40" Height="40" IsChecked="True" Checked="NoToolButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="ArrowPointer" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+            <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="TerrainToolButton" Width="40" ToolTip="Terrain Sculpt Tool" Height="40"  Checked="TerrainSculptButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="Mountain" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="TerrainLayerPaintToolButton" ToolTip="Layer Paint Tool" Width="40" Height="40" Checked="TerrainLayerPaintToolButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="Paintbrush" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="TerrainColorPaintToolButton" ToolTip="Color Paint Tool" Width="40" Height="40" Checked="TerrainColorPaintToolButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="Palette" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="SkyPaintToolButton" ToolTip="Sky Tool" Width="40" Height="40" Checked="SkyPaintToolButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="CloudSun" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolboxToolbarToggle}" x:Name="PropToolButton" ToolTip="Prop Tool" Width="40" Height="40" Checked="PropToolButton_Checked">
+                    <RadioButton.Content>
+                        <fa:IconBlock Icon="Tree" Foreground="White" FontSize="20"/>
+                    </RadioButton.Content>
+                </RadioButton>
+            </StackPanel>
+        <ScrollViewer Grid.Row="1" 
+                  HorizontalAlignment="Stretch" 
+                  Margin="0"
+                  CanContentScroll="True" >
+            <StackPanel Orientation="Vertical">
+                <ContentControl x:Name="NoToolControl" Visibility="Collapsed">
+                    <TextBox>No Tool</TextBox>
+                </ContentControl>
+                <ContentControl x:Name="TerrainSculptControl" Visibility="Collapsed">
+                    <local:TerrainSculptPane/>
+                </ContentControl>
+                <ContentControl x:Name="TerrainLayerPaintControl" Visibility="Collapsed">
+                    <local:TerrainLayerPaintPane/>
+                </ContentControl>
+                <ContentControl x:Name="TerrainColorPaintControl" Visibility="Collapsed">
+                    <local:TerrainColorPaintPane/>
+                </ContentControl>
+                <ContentControl x:Name="TerrainSkyPaintControl" Visibility="Collapsed">
+                    <local:TerrainSkyPaintPane/>
+                </ContentControl>
+                <ContentControl x:Name="TerrainPropPlaceControl" Visibility="Collapsed">
+                    <local:TerrainPropPlacePane x:Name="terrainPropPlacePane"/>
+                </ContentControl>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

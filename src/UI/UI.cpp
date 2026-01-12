@@ -2,12 +2,18 @@
 #include "../About/about.h"
 #include "../Settings/settings.h"
 #include "../Archive.h"
+#include "../Area/AreaFile.h"
+#include "../Area/AreaRender.h"
 #include "SplashScreen.h"
+
 #include <string>
 #include <vector>
 #include <iostream>
 #include <cmath>
 #include <filesystem>
+#include <algorithm>
+
+#include <Windows.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -16,6 +22,93 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+static std::vector<AreaFilePtr> gLoadedAreas;
+
+static std::string wstring_to_utf8(const std::wstring& str)
+{
+    if (str.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0, NULL, NULL);
+    std::string out(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, str.data(), (int)str.size(), out.data(), size_needed, NULL, NULL);
+    return out;
+}
+
+static bool EndsWithNoCase(const std::string& s, const std::string& suffix)
+{
+    if (s.size() < suffix.size()) return false;
+    const size_t off = s.size() - suffix.size();
+    for (size_t i = 0; i < suffix.size(); ++i)
+    {
+        unsigned char a = (unsigned char)std::tolower((unsigned char)s[off + i]);
+        unsigned char b = (unsigned char)std::tolower((unsigned char)suffix[i]);
+        if (a != b) return false;
+    }
+    return true;
+}
+
+static void SnapCameraToLoaded(AppState& state)
+{
+    if (gLoadedAreas.empty()) return;
+
+    float maxH = -100000.0f;
+    for (auto& a : gLoadedAreas)
+        if (a) maxH = std::max(maxH, a->getMaxHeight());
+
+    state.camera.Position = glm::vec3(240.0f, maxH + 800.0f, 240.0f);
+    state.camera.Yaw = -90.0f;
+    state.camera.Pitch = -65.0f;
+
+    glm::vec3 front;
+    front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+    front.y = sin(glm::radians(state.camera.Pitch));
+    front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+    state.camera.Front = glm::normalize(front);
+
+    state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
+    state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
+}
+
+static void LoadAreasInFolder(AppState& state, ArchivePtr arc, IFileSystemEntryPtr folderEntry)
+{
+    if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
+
+    gLoadedAreas.clear();
+
+    for (auto& child : folderEntry->getChildren())
+    {
+        if (!child || child->isDirectory()) continue;
+
+        std::string childName = wstring_to_utf8(child->getEntryName());
+        if (!EndsWithNoCase(childName, ".area")) continue;
+
+        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(child);
+        if (!fileEntry) continue;
+
+        std::cout << "Loading Area: " << childName << std::endl;
+
+        auto af = std::make_shared<AreaFile>(arc, fileEntry);
+        if (af->load())
+        {
+            std::cout << "Area Loaded Successfully." << std::endl;
+            gLoadedAreas.push_back(af);
+        }
+        else
+        {
+            std::cout << "Failed to load Area." << std::endl;
+        }
+    }
+
+    if (!gLoadedAreas.empty())
+    {
+        state.currentArea = gLoadedAreas.back();
+        SnapCameraToLoaded(state);
+    }
+    else
+    {
+        state.currentArea.reset();
+    }
+}
+
 bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_width, int* out_height)
 {
     int image_width = 0;
@@ -23,18 +116,19 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
     if (image_data == NULL) return false;
 
-    for (int i = 0; i < image_width * image_height * 4; i += 4) {
-        unsigned char alpha = image_data[i+3];
-        if (alpha > 0) {
+    for (int i = 0; i < image_width * image_height * 4; i += 4)
+    {
+        unsigned char alpha = image_data[i + 3];
+        if (alpha > 0)
+        {
             image_data[i]   = 255 - image_data[i];
             image_data[i+1] = 255 - image_data[i+1];
             image_data[i+2] = 255 - image_data[i+2];
         }
     }
 
-    GLuint image_texture;
-    glGenTextures(1, &image_texture);
-    glBindTexture(GL_TEXTURE_2D, image_texture);
+    glGenTextures(1, out_texture);
+    glBindTexture(GL_TEXTURE_2D, *out_texture);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -46,27 +140,29 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     glGenerateMipmap(GL_TEXTURE_2D);
 
     stbi_image_free(image_data);
-    *out_texture = image_texture;
     *out_width = image_width;
     *out_height = image_height;
     return true;
 }
 
-GLuint CompileShader(GLenum type, const char* source) {
+GLuint CompileShader(GLenum type, const char* source)
+{
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
     int success;
     char infoLog[512];
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (!success) {
+    if (!success)
+    {
         glGetShaderInfoLog(shader, 512, NULL, infoLog);
         std::cout << "ERROR::SHADER::COMPILATION_FAILED\n" << infoLog << std::endl;
     }
     return shader;
 }
 
-void InitGrid(AppState& state) {
+void InitGrid(AppState& state)
+{
     const char* vertexShaderSource = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
@@ -76,6 +172,7 @@ void InitGrid(AppState& state) {
             gl_Position = projection * view * vec4(aPos, 1.0);
         }
     )";
+
     const char* fragmentShaderSource = R"(
         #version 330 core
         out vec4 FragColor;
@@ -98,13 +195,15 @@ void InitGrid(AppState& state) {
     int size = 20;
     float step = 1.0f;
 
-    for (int i = -size; i <= size; ++i) {
+    for (int i = -size; i <= size; ++i)
+    {
         vertices.push_back((float)i * step); vertices.push_back(0.0f); vertices.push_back((float)-size * step);
         vertices.push_back((float)i * step); vertices.push_back(0.0f); vertices.push_back((float)size * step);
 
         vertices.push_back((float)-size * step); vertices.push_back(0.0f); vertices.push_back((float)i * step);
         vertices.push_back((float)size * step);  vertices.push_back(0.0f); vertices.push_back((float)i * step);
     }
+
     state.grid.VertexCount = (int)vertices.size() / 3;
 
     glGenVertexArrays(1, &state.grid.VAO);
@@ -116,6 +215,7 @@ void InitGrid(AppState& state) {
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+
     glBindVertexArray(0);
 }
 
@@ -126,18 +226,20 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
         AppState* state = (AppState*)glfwGetWindowUserPointer(window);
         if (state)
         {
-            state->camera.MovementSpeed += (float)yoffset;
+            state->camera.MovementSpeed += (float)yoffset * 5.0f;
             if (state->camera.MovementSpeed < 1.0f) state->camera.MovementSpeed = 1.0f;
-            if (state->camera.MovementSpeed > 10.0f) state->camera.MovementSpeed = 10.0f;
+            if (state->camera.MovementSpeed > 200.0f) state->camera.MovementSpeed = 200.0f;
         }
     }
 }
 
-void UpdateCamera(GLFWwindow* window, AppState& state) {
+void UpdateCamera(GLFWwindow* window, AppState& state)
+{
     ImGuiIO& io = ImGui::GetIO();
     float dt = io.DeltaTime;
 
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
+    {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
         ImVec2 mouse_delta = io.MouseDelta;
@@ -158,27 +260,28 @@ void UpdateCamera(GLFWwindow* window, AppState& state) {
         state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
         float velocity = state.camera.MovementSpeed * dt;
-        if (ImGui::IsKeyDown(ImGuiKey_W))
-            state.camera.Position += state.camera.Front * velocity;
-        if (ImGui::IsKeyDown(ImGuiKey_S))
-            state.camera.Position -= state.camera.Front * velocity;
-        if (ImGui::IsKeyDown(ImGuiKey_A))
-            state.camera.Position -= state.camera.Right * velocity;
-        if (ImGui::IsKeyDown(ImGuiKey_D))
-            state.camera.Position += state.camera.Right * velocity;
-
-    } else {
+        if (ImGui::IsKeyDown(ImGuiKey_W)) state.camera.Position += state.camera.Front * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_S)) state.camera.Position -= state.camera.Front * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_A)) state.camera.Position -= state.camera.Right * velocity;
+        if (ImGui::IsKeyDown(ImGuiKey_D)) state.camera.Position += state.camera.Right * velocity;
+    }
+    else
+    {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 }
 
-void RenderGrid(AppState& state, int display_w, int display_h) {
+void RenderGrid(AppState& state, int display_w, int display_h)
+{
     if (display_w <= 0 || display_h <= 0) return;
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
 
     glUseProgram(state.grid.ShaderProgram);
 
     glm::mat4 view = glm::lookAt(state.camera.Position, state.camera.Position + state.camera.Front, state.camera.Up);
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 100.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 20000.0f);
 
     unsigned int viewLoc = glGetUniformLocation(state.grid.ShaderProgram, "view");
     unsigned int projLoc = glGetUniformLocation(state.grid.ShaderProgram, "projection");
@@ -189,9 +292,17 @@ void RenderGrid(AppState& state, int display_w, int display_h) {
     glBindVertexArray(state.grid.VAO);
     glDrawArrays(GL_LINES, 0, state.grid.VertexCount);
     glBindVertexArray(0);
+
+    if (state.areaRender)
+    {
+        uint32 prog = state.areaRender->getProgram();
+        for (auto& a : gLoadedAreas)
+            if (a) a->render(view, projection, prog);
+    }
 }
 
-void ApplyBrainwaveStyle() {
+void ApplyBrainwaveStyle()
+{
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowPadding     = ImVec2(12, 12);
     style.FramePadding      = ImVec2(8, 6);
@@ -226,7 +337,8 @@ void ApplyBrainwaveStyle() {
     colors[ImGuiCol_Separator]     = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
 }
 
-void InitUI(AppState& state) {
+void InitUI(AppState& state)
+{
     ApplyBrainwaveStyle();
 
     ImGuiIO& io = ImGui::GetIO();
@@ -241,35 +353,83 @@ void InitUI(AppState& state) {
 
     state.aboutIconLoaded = LoadTextureFromFile("./assets/icons/about.png", &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
     if (!state.aboutIconLoaded) printf("Failed to load About icon.\n");
+
+    state.areaRender = std::make_shared<AreaRender>();
+    state.areaRender->init();
 }
 
-std::string wstring_to_utf8(const std::wstring& str) {
-    if (str.empty()) return std::string();
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0, NULL, NULL);
-    std::string strTo(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), &strTo[0], size_needed, NULL, NULL);
-    return strTo;
-}
-
-void RenderEntry(IFileSystemEntryPtr entry) {
+static void RenderEntryRecursive_Impl(AppState& state,
+                                     IFileSystemEntryPtr entry,
+                                     IFileSystemEntryPtr parentDir,
+                                     ArchivePtr currentArc,
+                                     float& max_width,
+                                     float depth)
+{
     std::string name = wstring_to_utf8(entry->getEntryName());
     if (name.empty()) name = "/";
 
-    if (entry->isDirectory()) {
+    float indent_px = depth * ImGui::GetStyle().IndentSpacing;
+    float text_w = ImGui::CalcTextSize(name.c_str()).x;
+    float current_w = indent_px + text_w + 50.0f;
+    if (current_w > max_width) max_width = current_w;
+
+    if (entry->isDirectory())
+    {
         bool open = ImGui::TreeNode(name.c_str());
-        if (open) {
-            for (auto child : entry->getChildren()) {
-                RenderEntry(child);
-            }
+        if (open)
+        {
+            for (auto child : entry->getChildren())
+                RenderEntryRecursive_Impl(state, child, entry, currentArc, max_width, depth + 1.0f);
             ImGui::TreePop();
         }
-    } else {
-        ImGui::Text("  %s", name.c_str());
+    }
+    else
+    {
+        if (ImGui::Selectable(name.c_str()))
+        {
+            if (EndsWithNoCase(name, ".area"))
+            {
+                if (currentArc && parentDir && parentDir->isDirectory())
+                {
+                    LoadAreasInFolder(state, currentArc, parentDir);
+                }
+                else
+                {
+                    auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
+                    if (fileEntry && currentArc)
+                    {
+                        gLoadedAreas.clear();
+
+                        std::cout << "Loading Area: " << name << std::endl;
+                        auto af = std::make_shared<AreaFile>(currentArc, fileEntry);
+                        if (af->load())
+                        {
+                            std::cout << "Area Loaded Successfully." << std::endl;
+                            gLoadedAreas.push_back(af);
+                            state.currentArea = af;
+                            SnapCameraToLoaded(state);
+                        }
+                        else
+                        {
+                            std::cout << "Failed to load Area." << std::endl;
+                            state.currentArea.reset();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
-void RenderUI(AppState& state) {
-    if (!state.archivesLoaded) {
+void RenderEntryRecursive(AppState& state, IFileSystemEntryPtr entry, ArchivePtr currentArc, float& max_width, float depth)
+{
+    RenderEntryRecursive_Impl(state, entry, nullptr, currentArc, max_width, depth);
+}
+
+void RenderUI(AppState& state)
+{
+    if (!state.archivesLoaded)
+    {
         RenderSplashScreen(state);
         return;
     }
@@ -277,18 +437,22 @@ void RenderUI(AppState& state) {
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGuiIO& io = ImGui::GetIO();
 
-    float target_panel_width = state.sidebar_visible ? 280.0f : 0.0f;
+    float target_panel_width = state.sidebar_visible ? state.contentWidth : 0.0f;
+    if (state.sidebar_visible && target_panel_width < 280.0f) target_panel_width = 280.0f;
+    if (target_panel_width > viewport->Size.x * 0.5f) target_panel_width = viewport->Size.x * 0.5f;
+
     float slide_speed = 1800.0f;
     float step = slide_speed * io.DeltaTime;
 
-    if (state.sidebar_current_width < target_panel_width) {
+    if (state.sidebar_current_width < target_panel_width)
+    {
         state.sidebar_current_width += step;
-        if (state.sidebar_current_width > target_panel_width)
-            state.sidebar_current_width = target_panel_width;
-    } else if (state.sidebar_current_width > target_panel_width) {
+        if (state.sidebar_current_width > target_panel_width) state.sidebar_current_width = target_panel_width;
+    }
+    else if (state.sidebar_current_width > target_panel_width)
+    {
         state.sidebar_current_width -= step;
-        if (state.sidebar_current_width < target_panel_width)
-            state.sidebar_current_width = target_panel_width;
+        if (state.sidebar_current_width < target_panel_width) state.sidebar_current_width = target_panel_width;
     }
 
     ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, 10.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
@@ -312,10 +476,12 @@ void RenderUI(AppState& state) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGuiWindowFlags strip_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    if (ImGui::Begin("##Strip", nullptr, strip_flags)) {
+    if (ImGui::Begin("##Strip", nullptr, strip_flags))
+    {
         bool is_active = (state.sidebar_visible && state.active_tab_index == 0);
 
-        if (is_active) {
+        if (is_active)
+        {
             ImGui::GetWindowDrawList()->AddRectFilled(
                 ImVec2(viewport->Pos.x, ImGui::GetCursorScreenPos().y + (button_height * 0.1f)),
                 ImVec2(viewport->Pos.x + 3, ImGui::GetCursorScreenPos().y + (button_height * 0.9f)),
@@ -325,27 +491,37 @@ void RenderUI(AppState& state) {
 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
 
-        if (state.iconLoaded) {
+        if (state.iconLoaded)
+        {
             float icon_size = 48.0f;
             float pad_x = (strip_width - icon_size) * 0.5f;
             float pad_y = (button_height - icon_size) * 0.5f;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
 
-            if (ImGui::ImageButton("##FileTab", (void*)(intptr_t)state.iconTexture, ImVec2(icon_size, icon_size), ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f))) {
+            if (ImGui::ImageButton("##FileTab", (void*)(intptr_t)state.iconTexture, ImVec2(icon_size, icon_size),
+                                   ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f)))
+            {
                 if (state.active_tab_index == 0) state.sidebar_visible = !state.sidebar_visible;
                 else { state.active_tab_index = 0; state.sidebar_visible = true; }
             }
+
             ImGui::PopStyleVar();
-        } else {
-            if (ImGui::Button("Files", ImVec2(strip_width, button_height))) {
+        }
+        else
+        {
+            if (ImGui::Button("Files", ImVec2(strip_width, button_height)))
+            {
                 if (state.active_tab_index == 0) state.sidebar_visible = !state.sidebar_visible;
                 else { state.active_tab_index = 0; state.sidebar_visible = true; }
             }
         }
+
         ImGui::PopStyleColor();
 
-        if (ImGui::Button("S", ImVec2(strip_width, button_height))) {
-             state.active_tab_index = 1; state.sidebar_visible = true;
+        if (ImGui::Button("S", ImVec2(strip_width, button_height)))
+        {
+            state.active_tab_index = 1;
+            state.sidebar_visible = true;
         }
 
         float bottom_margin = 10.0f;
@@ -354,39 +530,49 @@ void RenderUI(AppState& state) {
 
         ImGui::SetCursorPosY(about_y);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
-        if (state.aboutIconLoaded) {
+        if (state.aboutIconLoaded)
+        {
             float icon_size = 48.0f;
             float pad_x = (strip_width - icon_size) * 0.5f;
             float pad_y = (button_height - icon_size) * 0.5f;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
 
-            if (ImGui::ImageButton("##AboutTab", (void*)(intptr_t)state.aboutIconTexture, ImVec2(icon_size, icon_size), ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f))) {
+            if (ImGui::ImageButton("##AboutTab", (void*)(intptr_t)state.aboutIconTexture, ImVec2(icon_size, icon_size),
+                                   ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f)))
+            {
                 state.show_about_window = !state.show_about_window;
             }
+
             ImGui::PopStyleVar();
-        } else {
-            if (ImGui::Button("About", ImVec2(strip_width, button_height))) {
+        }
+        else
+        {
+            if (ImGui::Button("About", ImVec2(strip_width, button_height)))
                 state.show_about_window = !state.show_about_window;
-            }
         }
         ImGui::PopStyleColor();
 
         ImGui::SetCursorPosY(settings_y);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
-        if (state.settingsIconLoaded) {
+        if (state.settingsIconLoaded)
+        {
             float icon_size = 48.0f;
             float pad_x = (strip_width - icon_size) * 0.5f;
             float pad_y = (button_height - icon_size) * 0.5f;
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
 
-            if (ImGui::ImageButton("##SettingsTab", (void*)(intptr_t)state.settingsIconTexture, ImVec2(icon_size, icon_size), ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f))) {
+            if (ImGui::ImageButton("##SettingsTab", (void*)(intptr_t)state.settingsIconTexture, ImVec2(icon_size, icon_size),
+                                   ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f)))
+            {
                 state.show_settings_window = !state.show_settings_window;
             }
+
             ImGui::PopStyleVar();
-        } else {
-            if (ImGui::Button("Set", ImVec2(strip_width, button_height))) {
+        }
+        else
+        {
+            if (ImGui::Button("Set", ImVec2(strip_width, button_height)))
                 state.show_settings_window = !state.show_settings_window;
-            }
         }
         ImGui::PopStyleColor();
     }
@@ -394,37 +580,61 @@ void RenderUI(AppState& state) {
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor();
 
-    if (state.sidebar_current_width > 1.0f) {
+    if (state.sidebar_current_width > 1.0f)
+    {
         ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + strip_width, viewport->Pos.y));
         ImGui::SetNextWindowSize(ImVec2(state.sidebar_current_width, viewport->Size.y));
         ImGuiWindowFlags panel_flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
 
-        if (ImGui::Begin("##Panel", nullptr, panel_flags)) {
+        if (ImGui::Begin("##Panel", nullptr, panel_flags))
+        {
             ImGui::Spacing();
-            if (state.active_tab_index == 0) {
+            if (state.active_tab_index == 0)
+            {
                 ImGui::Text("EXPLORER");
                 ImGui::Separator();
                 ImGui::Dummy(ImVec2(0, 10));
 
-                if (ImGui::BeginChild("FileTree", ImVec2(0, 0), false)) {
-                    for (auto& archive : state.archives) {
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                char buf[64] = "";
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputTextWithHint("##Search", "Search files...", buf, 64);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+
+                ImGui::Dummy(ImVec2(0, 10));
+
+                if (ImGui::BeginChild("FileTree", ImVec2(0, 0), false))
+                {
+                    float calculated_width = 280.0f;
+
+                    for (auto& archive : state.archives)
+                    {
                         std::filesystem::path p(archive->getPath());
                         std::string archiveName = p.filename().string();
 
-                        if (ImGui::TreeNode(archiveName.c_str())) {
+                        float header_w = ImGui::CalcTextSize(archiveName.c_str()).x + 30.0f;
+                        if (header_w > calculated_width) calculated_width = header_w;
+
+                        if (ImGui::TreeNode(archiveName.c_str()))
+                        {
                             auto root = archive->getRoot();
-                            if (root) {
-                                for(auto child : root->getChildren()) {
-                                    RenderEntry(child);
-                                }
+                            if (root)
+                            {
+                                for (auto child : root->getChildren())
+                                    RenderEntryRecursive_Impl(state, child, root, archive, calculated_width, 1.0f);
                             }
                             ImGui::TreePop();
                         }
                     }
-                    ImGui::EndChild();
-                }
 
-            } else if (state.active_tab_index == 1) {
+                    ImGui::EndChild();
+                    state.contentWidth = calculated_width;
+                }
+            }
+            else if (state.active_tab_index == 1)
+            {
                 ImGui::Text("SEARCH");
                 ImGui::Separator();
             }

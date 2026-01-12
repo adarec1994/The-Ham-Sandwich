@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <StartupObject>ProjectWS.Editor.Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\.editorconfig" Link=".editorconfig" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DotNetProjects.Extended.Wpf.Toolkit" Version="5.0.103" />
+    <PackageReference Include="OpenTK" Version="4.7.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Engine\Engine.csproj" />
+    <ProjectReference Include="..\Libs\AvalonDock\source\Components\AvalonDock.Themes.VS2013\AvalonDock.Themes.VS2013.csproj" />
+    <ProjectReference Include="..\Libs\AvalonDock\source\Components\AvalonDock\AvalonDock.csproj" />
+    <ProjectReference Include="..\Libs\ColorPicker-master\src\ColorPicker\ColorPicker.csproj" />
+    <ProjectReference Include="..\Libs\GLWpfControl\src\GLWpfControl\GLWpfControl.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.Core\Selen.Wpf.Core.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.GenericAppTree.Contracts\Selen.Wpf.GenericAppTree.Contracts.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.GenericAppTree\Selen.Wpf.GenericAppTree.csproj" />
+    <ProjectReference Include="..\Libs\Selen.Wpf\Selen.Wpf.SystemStyles\Selen.Wpf.SystemStyles.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="SkyEditorPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Update="WorldRendererPane.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Update="WorldRendererPane.xaml">
+      <XamlRuntime>$(DefaultXamlRuntime)</XamlRuntime>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
+
+</Project>

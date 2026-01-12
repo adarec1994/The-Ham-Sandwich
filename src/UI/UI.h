@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glad/glad.h> 
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "imgui.h"
 
@@ -11,20 +11,24 @@
 #include <memory>
 #include <string>
 
-// Forward declaration to avoid circular includes
 class Archive;
+class AreaFile; // Forward declaration
+class AreaRender; // Forward declaration
+
 typedef std::shared_ptr<Archive> ArchivePtr;
+typedef std::shared_ptr<AreaFile> AreaFilePtr;
+typedef std::shared_ptr<AreaRender> AreaRenderPtr;
 
 struct Camera {
-    glm::vec3 Position = glm::vec3(0.0f, 5.0f, 10.0f);
+    glm::vec3 Position = glm::vec3(0.0f, 50.0f, 0.0f); // Higher start for terrain
     glm::vec3 Front    = glm::vec3(0.0f, -0.5f, -1.0f);
     glm::vec3 Up       = glm::vec3(0.0f, 1.0f, 0.0f);
     glm::vec3 Right    = glm::vec3(1.0f, 0.0f, 0.0f);
     glm::vec3 WorldUp  = glm::vec3(0.0f, 1.0f, 0.0f);
 
     float Yaw   = -90.0f;
-    float Pitch = -20.0f;
-    float MovementSpeed = 5.0f;
+    float Pitch = -45.0f; // Look down slightly
+    float MovementSpeed = 50.0f; // Faster for big terrains
     float MouseSensitivity = 0.1f;
 };
 
@@ -39,11 +43,18 @@ struct AppState {
     int active_tab_index = 0;
     bool sidebar_visible = false;
     float sidebar_current_width = 0.0f;
+    float contentWidth = 280.0f;
 
-    // Loading State
     bool archivesLoaded = false;
     std::vector<ArchivePtr> archives;
-    char searchPath[512] = "C:\\Program Files (x86)\\NCSOFT\\WildStar";
+
+    // Area Rendering State
+    AreaFilePtr currentArea;
+    AreaRenderPtr areaRender;
+
+    bool showFileDialog = false;
+    std::string currentDialogPath = "C:\\Program Files (x86)\\NCSOFT\\WildStar";
+    std::string selectedPath = "";
 
     GLuint iconTexture = 0;
     int iconWidth = 0;

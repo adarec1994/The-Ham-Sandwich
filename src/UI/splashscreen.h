@@ -1,4 +1,4 @@
 #pragma once
-#include "../UI/UI.h"
+#include "UI.h"
 
 void RenderSplashScreen(AppState& state);

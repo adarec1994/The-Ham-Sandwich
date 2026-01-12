@@ -2,6 +2,8 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "UI/UI.h"
+#include "Area/AreaFile.h"   // Add this
+#include "Area/AreaRender.h"
 
 #define GL_SILENCE_DEPRECATION
 #include <glad/glad.h>

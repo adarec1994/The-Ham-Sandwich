@@ -4,8 +4,11 @@ project(Wildstar_Studio_2 VERSION 1.0.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
 include(FetchContent)
 
+# --- GLM ---
 FetchContent_Declare(
         glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -13,6 +16,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+# --- GLAD ---
 FetchContent_Declare(
         glad
         GIT_REPOSITORY https://github.com/libigl/libigl-glad.git
@@ -28,6 +32,7 @@ if(NOT TARGET glad)
     target_include_directories(glad PUBLIC "${glad_SOURCE_DIR}/include")
 endif()
 
+# --- ZLIB ---
 FetchContent_Declare(
         zlib
         GIT_REPOSITORY https://github.com/madler/zlib.git
@@ -35,6 +40,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(zlib)
 
+# --- LIBLZMA (XZ) ---
+FetchContent_Declare(
+        liblzma
+        GIT_REPOSITORY https://github.com/xz-mirror/xz.git
+        GIT_TAG        v5.4.4
+)
+FetchContent_MakeAvailable(liblzma)
+
+# --- GLFW ---
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -46,6 +60,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
+# --- IMGUI ---
 FetchContent_Declare(
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -53,6 +68,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# --- IMGUI FILE DIALOG ---
+FetchContent_Declare(
+        ImGuiFileDialog
+        GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
+        GIT_TAG        v0.6.7
+)
+FetchContent_MakeAvailable(ImGuiFileDialog)
+
+# --- STB ---
 FetchContent_Declare(
         stb
         GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -76,6 +100,9 @@ target_link_libraries(imgui PUBLIC glfw glad)
 add_library(stb_lib INTERFACE)
 target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
+# Fix for LZMA API static definition
+add_definitions(-DLZMA_API_STATIC)
+
 add_executable(Wildstar_Studio_2
         src/main.cpp
         src/Archive.cpp
@@ -88,17 +115,27 @@ add_executable(Wildstar_Studio_2
         src/About/about.h
         src/Settings/settings.cpp
         src/Settings/settings.h
+        src/Area/AreaFile.cpp
+        src/Area/AreaFile.h
+        src/Area/AreaRender.cpp
+        src/Area/AreaRender.h
+        src/Utils/BinStream.h
+        ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE
         src/UI
         src/Settings
         src/About
+        src/Area
+        src/Utils
         ${zlib_SOURCE_DIR}
         ${zlib_BINARY_DIR}
+        ${liblzma_SOURCE_DIR}/src/liblzma/api
+        ${ImGuiFileDialog_SOURCE_DIR}
 )
 
-target_link_libraries(Wildstar_Studio_2 PRIVATE imgui glad glm zlibstatic stb_lib)
+target_link_libraries(Wildstar_Studio_2 PRIVATE imgui glad glm zlibstatic liblzma stb_lib)
 
 if(WIN32)
     target_link_libraries(Wildstar_Studio_2 PRIVATE opengl32)
