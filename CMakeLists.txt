@@ -122,6 +122,8 @@ add_executable(Wildstar_Studio_2
         src/tex/texjpeg.h
         src/Area/DataTable.cpp
         src/Area/DataTable.h
+        src/UI/camera.cpp
+        src/UI/design.cpp
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE
