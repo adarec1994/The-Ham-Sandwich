@@ -270,32 +270,78 @@ static void LoadSingleArea(AppState& state, ArchivePtr arc, const std::shared_pt
     }
 }
 
+// Replace your RenderAreas function with this to diagnose the issue:
+
 void RenderAreas(AppState& state, int display_w, int display_h)
 {
+    // DEBUG: Print every frame for a few frames
+    static int frameCount = 0;
+    if (frameCount < 5) {
+        std::cout << "RenderAreas called, frame " << frameCount
+                  << ", areas=" << gLoadedAreas.size() << "\n";
+        frameCount++;
+    }
+
     if (display_w <= 0 || display_h <= 0) return;
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
+    glDisable(GL_CULL_FACE);  // Disable backface culling
 
     glm::mat4 view = glm::lookAt(state.camera.Position, state.camera.Position + state.camera.Front, state.camera.Up);
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 20000.0f);
+    // INCREASED far plane to 100000
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 100000.0f);
 
-    if (state.areaRender)
-    {
-        uint32 prog = state.areaRender->getProgram();
-        glUseProgram(prog);
+    if (!state.areaRender) {
+        std::cout << "ERROR: areaRender is null!\n";
+        return;
+    }
 
-        unsigned int viewLoc = glGetUniformLocation(prog, "view");
-        unsigned int projLoc = glGetUniformLocation(prog, "projection");
-        if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-        if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+    uint32_t prog = state.areaRender->getProgram();
+    if (prog == 0) {
+        std::cout << "ERROR: shader program is 0!\n";
+        return;
+    }
 
-        for (const auto& area : gLoadedAreas)
-        {
-            if (area)
-            {
-                area->render(view, projection, prog, gSelectedChunk);
+    glUseProgram(prog);
+
+    GLint viewLoc = glGetUniformLocation(prog, "view");
+    GLint projLoc = glGetUniformLocation(prog, "projection");
+
+    if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
+    if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+
+    // DEBUG: Check each area
+    static bool debuggedOnce = false;
+    if (!debuggedOnce && !gLoadedAreas.empty()) {
+        for (size_t i = 0; i < gLoadedAreas.size(); i++) {
+            auto& area = gLoadedAreas[i];
+            if (area) {
+                std::cout << "Area " << i << ": chunks=" << area->getChunks().size()
+                          << " tileXY=(" << area->getTileX() << "," << area->getTileY() << ")\n";
+
+                // Check first chunk
+                const auto& chunks = area->getChunks();
+                if (!chunks.empty() && chunks[0]) {
+                    auto& c = chunks[0];
+                    std::cout << "  Chunk 0 bounds: ("
+                              << c->getMinBounds().x << "," << c->getMinBounds().y << "," << c->getMinBounds().z
+                              << ") to ("
+                              << c->getMaxBounds().x << "," << c->getMaxBounds().y << "," << c->getMaxBounds().z
+                              << ")\n";
+                }
+            } else {
+                std::cout << "Area " << i << ": NULL\n";
             }
+        }
+        debuggedOnce = true;
+    }
+
+    for (const auto& area : gLoadedAreas)
+    {
+        if (area)
+        {
+            area->render(view, projection, prog, gSelectedChunk);
         }
     }
 }

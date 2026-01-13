@@ -14,23 +14,13 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include "../tex/tex.h"
 
-const float CELL_SIZE = 32.0f;
-const float GRID_SIZE = 512.0f;
-const float VERTEX_STEP = 2.0f;
-const int WORLD_GRID_ORIGIN = 64;
-
+// Constants matching the original WildStar terrain format
+const float AreaFile::UnitSize = 2.0f;  // Distance between vertices
+const float AreaFile::GRID_SIZE = 512.0f;  // Size of each area tile in world units
 static DataTablePtr gWorldLayer = nullptr;
 
 std::vector<uint32> AreaChunkRender::indices;
 AreaChunkRender::Uniforms AreaChunkRender::uniforms;
-
-const int AreaChunkRender::DataSizes[32] =
-{
-    722, 16, 8450, 8450, 8450, 4, 64, 16,
-    4225, 2178, 4, 578, 1, 4624, 2312, 8450,
-    4096, 2312, 2312, 2312, 2312, 1, 16, 16900,
-    8, 8450, 21316, 4096, 16, 8450, 8450, 2312
-};
 
 const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms()
 {
@@ -102,6 +92,16 @@ void AreaFile::parseTileXYFromFilename()
     if (!parseHexByte(name, dot + 1, bx)) return;
     if (!parseHexByte(name, dot + 3, by)) return;
     mTileX = bx; mTileY = by;
+    calculateWorldOffset();
+}
+
+void AreaFile::calculateWorldOffset()
+{
+    // World grid: tile (64,64) is at origin (0,0)
+    // Each tile is 512 units
+    mWorldOffset.x = (float)(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
+    mWorldOffset.y = 0.0f;
+    mWorldOffset.z = (float)(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
 }
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
@@ -144,9 +144,9 @@ bool AreaFile::loadTexture() {
 
 bool AreaFile::load()
 {
-    std::cout << "=== AreaFile::load() ===\n";
     if (mContent.size() < 8) return false;
 
+    // Load WorldLayer table for texture lookups
     if (gWorldLayer == nullptr && mArchive) {
         auto genericEntry = mArchive->getByPath(L"DB\\WorldLayer.tbl");
         if (genericEntry) {
@@ -154,7 +154,6 @@ bool AreaFile::load()
             if (fileEntry) {
                 gWorldLayer = std::make_shared<DataTable>(fileEntry, mArchive);
                 if (!gWorldLayer->initialLoadIDs()) gWorldLayer = nullptr;
-                else std::cout << "Loaded WorldLayer.tbl successfully.\n";
             }
         }
     }
@@ -169,22 +168,30 @@ bool AreaFile::load()
 
     const uint8* base = mContent.data();
     R r{ base, base + mContent.size() };
-    uint32 sig = r.u32le(); uint32 ver = r.u32le();
 
+    uint32 sig = r.u32le();
+    uint32 ver = r.u32le();
+
+    // Check for 'area' signature (little-endian)
     if (sig != 0x61726561u && sig != 0x41524541u) return false;
 
+    // Find CHNK chunk
     std::vector<uint8> chnkData;
     while (r.can(8)) {
-        uint32 magic = r.u32le(); uint32 size = r.u32le();
+        uint32 magic = r.u32le();
+        uint32 size = r.u32le();
         if (!r.can(size)) break;
-        if (magic == 0x43484e4Bu) {
+        if (magic == 0x43484e4Bu || magic == 0x4B4E4843u) { // 'CHNK'
             chnkData.resize(size);
             r.bytes(chnkData.data(), size);
-        } else r.skip(size);
+        } else {
+            r.skip(size);
+        }
     }
 
     if (chnkData.empty()) {
-        mMinBounds = glm::vec3(-100,0,-100); mMaxBounds = glm::vec3(100,100,100);
+        mMinBounds = glm::vec3(-100,0,-100);
+        mMaxBounds = glm::vec3(100,100,100);
         return true;
     }
 
@@ -192,11 +199,9 @@ bool AreaFile::load()
     const uint8* cbase = chnkData.data();
     R cr{ cbase, cbase + chnkData.size() };
 
-    uint32 validCount = 0; float totalH = 0.0f; uint32 lastIndex = 0;
-
-    // Position 0,0 is at grid 64,64
-    float fileBaseX = (float)(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
-    float fileBaseY = (float)(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+    uint32 validCount = 0;
+    float totalH = 0.0f;
+    uint32 lastIndex = 0;
 
     while (cr.can(4)) {
         uint32 cellInfo = cr.u32le();
@@ -204,6 +209,7 @@ bool AreaFile::load()
         uint32 size = (cellInfo & 0x00FFFFFF);
         uint32 index = lastIndex + idxDelta;
         lastIndex = index + 1;
+
         if (index >= 256) break;
         if (!cr.can(size)) break;
         if (size < 4) { cr.skip(size); continue; }
@@ -211,16 +217,17 @@ bool AreaFile::load()
         std::vector<uint8> cellData(size);
         cr.bytes(cellData.data(), size);
         uint32 flags = *(const uint32*)cellData.data();
+
+        // Payload starts after the 4-byte flags
         std::vector<uint8> payload(cellData.begin() + 4, cellData.end());
 
-        // Inner cells are 16x16, each 32 units wide
-        float cellOffsetX = (float)(index % 16) * CELL_SIZE;
-        float cellOffsetY = (float)(index / 16) * CELL_SIZE;
+        // Calculate base position for this cell within the area
+        // Each cell is 16x16 vertices at 2 units per vertex = 32 units per cell
+        // 16 cells per row = 512 units per area file
+        float cellBaseX = (float)(index % 16) * 16.0f * UnitSize;
+        float cellBaseZ = (float)(index / 16) * 16.0f * UnitSize;
 
-        float finalBaseX = fileBaseX + cellOffsetX;
-        float finalBaseY = fileBaseY + cellOffsetY;
-
-        auto chunk = std::make_shared<AreaChunkRender>(flags, payload, finalBaseX, finalBaseY, mArchive);
+        auto chunk = std::make_shared<AreaChunkRender>(flags, payload, cellBaseX, cellBaseZ, mArchive);
         mChunks[index] = chunk;
 
         if (chunk && chunk->hasHeightmap()) {
@@ -232,173 +239,15 @@ bool AreaFile::load()
         }
     }
 
-    if (validCount > 0) mAverageHeight = totalH / (float)validCount;
-    else {
-        mMinBounds = glm::vec3(fileBaseX, 0, fileBaseY);
-        mMaxBounds = glm::vec3(fileBaseX+50, 50, fileBaseY+50);
+    if (validCount > 0) {
+        mAverageHeight = totalH / (float)validCount;
+    } else {
+        mMinBounds = glm::vec3(0, 0, 0);
+        mMaxBounds = glm::vec3(512, 50, 512);
     }
+
     loadTexture();
     return true;
-}
-
-AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseY, ArchivePtr archive)
-    : mChunkData(payload)
-    , mFlags(flags)
-    , mMinBounds(std::numeric_limits<float>::max())
-    , mMaxBounds(std::numeric_limits<float>::lowest())
-    , mSplatTexture(0)
-    , mColorMapTexture(0)
-{
-#pragma pack(push, 1)
-    struct HeightMap { uint16 data[19][19]; };
-    struct BlendData { uint16 data[65][65]; };
-#pragma pack(pop)
-
-    size_t currentOffset = 0;
-
-    for (int i = 0; i < 32; ++i)
-    {
-        if (mFlags & (1 << i))
-        {
-            size_t size = DataSizes[i];
-
-            if (currentOffset + size > mChunkData.size()) {
-                std::cout << "Chunk data overrun at flag index " << i << "\n";
-                break;
-            }
-
-            if (i == 0)
-            {
-                HeightMap& hm = *(HeightMap*)(mChunkData.data() + currentOffset);
-                float totalH = 0.0f;
-                mVertices.resize(19 * 19);
-
-                // Grid is 19x19 vertices
-                for (int yy = -1; yy < 18; ++yy) {
-                    for (int xx = -1; xx < 18; ++xx) {
-                        int hY = std::clamp(yy + 1, 0, 18);
-                        int hX = std::clamp(xx + 1, 0, 18);
-
-                        // Mask holes
-                        uint16 h = hm.data[hY][hX] & 0x7FFF;
-
-                        AreaVertex v{};
-                        // Stride 2.0 per vertex
-                        v.x = baseX + (float)xx * VERTEX_STEP;
-                        v.z = baseY + (float)yy * VERTEX_STEP;
-
-                        // Normalization: (h / 8) - 2048
-                        v.y = ((float)h / 8.0f) - 2048.0f;
-
-                        v.u = (float)xx / 16.0f;
-                        v.v = (float)yy / 16.0f;
-
-                        if (v.y > mMaxHeight) mMaxHeight = v.y;
-                        totalH += v.y;
-
-                        glm::vec3 pos(v.x, v.y, v.z);
-                        mMinBounds = glm::min(mMinBounds, pos);
-                        mMaxBounds = glm::max(mMaxBounds, pos);
-                        mVertices[(yy + 1) * 19 + (xx + 1)] = v;
-                    }
-                }
-                mAverageHeight = totalH / (19.0f * 19.0f);
-            }
-            else if (i == 1)
-            {
-                uint32* texIds = (uint32*)(mChunkData.data() + currentOffset);
-
-                if (archive && gWorldLayer) {
-                    WorldLayerEntry layer;
-                    for(int t=0; t<4; ++t) {
-                        uint32 tid = texIds[t];
-                        if(tid != 0 && gWorldLayer->getRowById(tid, layer)) {
-                            if(layer.colorMapPath && wcslen(layer.colorMapPath) > 0) {
-                                GLuint glID = LoadTextureFromArchive(archive, layer.colorMapPath);
-                                mLayerTextures.push_back(glID);
-
-                                float scale = 1.0f;
-                                if (layer.metersPerTexture > 0.1f)
-                                    scale = 1.0f / (layer.metersPerTexture / 32.0f);
-                                ((float*)&mTexScales)[t] = scale;
-                            } else {
-                                mLayerTextures.push_back(0);
-                            }
-                        } else {
-                            mLayerTextures.push_back(0);
-                        }
-                    }
-                }
-            }
-            else if (i == 2)
-            {
-                BlendData& blend = *(BlendData*)(mChunkData.data() + currentOffset);
-                mBlendValues.resize(65 * 65);
-                std::fill(mBlendValues.begin(), mBlendValues.end(), 0);
-
-                for (int t = 0; t < 4; ++t) {
-                    for (uint32 j = 0; j < 65 * 65; ++j) {
-                        uint16 val = blend.data[j / 65][j % 65];
-                        uint32 value = (val & (0xF << (t * 4))) >> (t * 4);
-                        uint8 weight = (uint8)((value / 15.0f) * 255.0f);
-                        mBlendValues[j] |= (weight << (8 * t));
-                    }
-                }
-
-                glGenTextures(1, &mSplatTexture);
-                glBindTexture(GL_TEXTURE_2D, mSplatTexture);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 65, 65, 0, GL_RGBA, GL_UNSIGNED_BYTE, mBlendValues.data());
-            }
-            currentOffset += size;
-        }
-    }
-
-    if (mVertices.empty()) return;
-
-    if (indices.empty()) {
-        indices.resize(16 * 16 * 12);
-        for (uint32 i = 0; i < 16; ++i) {
-            for (uint32 j = 0; j < 16; ++j) {
-                uint32 tribase = (i * 16 + j) * 12;
-                uint32 ibase = i * 33 + j;
-                indices[tribase] = ibase; indices[tribase + 1] = ibase + 1; indices[tribase + 2] = ibase + 17;
-                indices[tribase + 3] = ibase + 1; indices[tribase + 4] = ibase + 34; indices[tribase + 5] = ibase + 17;
-                indices[tribase + 6] = ibase + 34; indices[tribase + 7] = ibase + 33; indices[tribase + 8] = ibase + 17;
-                indices[tribase + 9] = ibase + 33; indices[tribase + 10] = ibase; indices[tribase + 11] = ibase + 17;
-            }
-        }
-    }
-
-    extendBuffer();
-    calcNormals();
-    calcTangentBitangent();
-
-    glGenVertexArrays(1, &mVAO);
-    glGenBuffers(1, &mVBO);
-    glGenBuffers(1, &mEBO);
-    glBindVertexArray(mVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, mVBO);
-    glBufferData(GL_ARRAY_BUFFER, mVertices.size() * sizeof(AreaVertex), mVertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32), indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)0);
-    glEnableVertexAttribArray(1); glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, nx));
-    glEnableVertexAttribArray(2); glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, u));
-    glBindVertexArray(0);
-    mIndexCount = (int)indices.size();
-}
-
-AreaChunkRender::~AreaChunkRender() {
-    if (mSplatTexture != 0) glDeleteTextures(1, &mSplatTexture);
-    if (mColorMapTexture != 0) glDeleteTextures(1, &mColorMapTexture);
-    if (!mLayerTextures.empty()) glDeleteTextures((GLsizei)mLayerTextures.size(), mLayerTextures.data());
-    if (mVAO) glDeleteVertexArrays(1, &mVAO);
-    if (mVBO) glDeleteBuffers(1, &mVBO);
-    if (mEBO) glDeleteBuffers(1, &mEBO);
 }
 
 static GLuint gFallbackWhite = 0;
@@ -441,17 +290,19 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     const auto& u = AreaChunkRender::getUniforms();
     if ((GLint)u.camPosition != -1) glUniform3f((GLint)u.camPosition, 0.0f, 0.0f, 0.0f);
 
-    glm::vec4 selectionColor(0.0f, 1.0f, 0.0f, 1.0f);
+    // Apply world position transform based on tile coordinates
+    glm::mat4 worldModel(1.0f);
+    worldModel = glm::translate(worldModel, mWorldOffset);
+    worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
 
-    glm::mat4 globalModel(1.0f);
-    globalModel = glm::rotate(globalModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec4 selectionColor(0.0f, 1.0f, 0.0f, 1.0f);
 
     bool isAreaSelected = false;
     if (selectedChunk) {
         for (const auto& c : mChunks) if (c == selectedChunk) { isAreaSelected = true; break; }
     }
 
-    if (u.model != -1) glUniformMatrix4fv(u.model, 1, GL_FALSE, &globalModel[0][0]);
+    if (u.model != -1) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
 
     if (u.highlightColor != -1) {
         if (isAreaSelected) glUniform4fv(u.highlightColor, 1, &selectionColor[0]);
@@ -463,33 +314,276 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     }
 }
 
+// ============================================================================
+// AreaChunkRender Implementation
+// ============================================================================
+
+AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseZ, ArchivePtr archive)
+    : mChunkData(payload)
+    , mFlags(flags)
+    , mMinBounds(std::numeric_limits<float>::max())
+    , mMaxBounds(std::numeric_limits<float>::lowest())
+    , mSplatTexture(0)
+    , mColorMapTexture(0)
+{
+    // Must have at least heightmap, texture IDs, and blend values
+    if (!hasHeightmap() || !hasTextureIds() || !hasBlendValues()) {
+        return;
+    }
+
+#pragma pack(push, 1)
+    struct HeightMap { uint16 data[19][19]; };
+    struct BlendData { uint16 data[65][65]; };
+    struct ColorData { uint16 data[65][65]; };
+#pragma pack(pop)
+
+    // Calculate offsets based on sequential data layout
+    size_t ofsHeightmap = 0;
+    size_t ofsTexIds = sizeof(HeightMap);                    // 722 bytes
+    size_t ofsBlend = ofsTexIds + 4 * sizeof(uint32);        // +16 = 738 bytes
+    size_t ofsColorMap = ofsBlend + sizeof(BlendData);       // +8450 = 9188 bytes
+
+    // Verify we have enough data
+    if (mChunkData.size() < ofsBlend + sizeof(BlendData)) {
+        std::cout << "Chunk data too small: " << mChunkData.size() << " bytes\n";
+        return;
+    }
+
+    HeightMap& hm = *(HeightMap*)(mChunkData.data() + ofsHeightmap);
+    uint32* textureIds = (uint32*)(mChunkData.data() + ofsTexIds);
+    BlendData& blend = *(BlendData*)(mChunkData.data() + ofsBlend);
+
+    ColorData* colorData = nullptr;
+    if (hasColorMap() && mChunkData.size() >= ofsColorMap + sizeof(ColorData)) {
+        colorData = (ColorData*)(mChunkData.data() + ofsColorMap);
+    }
+
+    // Build index buffer (shared across all chunks)
+    if (indices.empty()) {
+        // Diamond pattern: 16x16 cells, each with 4 triangles (center point subdivision)
+        indices.resize(16 * 16 * 4 * 3);
+
+        for (uint32 i = 0; i < 16; ++i) {
+            for (uint32 j = 0; j < 16; ++j) {
+                uint32 tribase = (i * 16 + j) * 4 * 3;
+                uint32 ibase = i * 33 + j;
+
+                // Four triangles per cell, sharing center vertex
+                // Top-left triangle
+                indices[tribase + 0] = ibase;
+                indices[tribase + 1] = ibase + 1;
+                indices[tribase + 2] = ibase + 17;  // Center vertex
+
+                // Top-right triangle
+                indices[tribase + 3] = ibase + 1;
+                indices[tribase + 4] = ibase + 34;
+                indices[tribase + 5] = ibase + 17;
+
+                // Bottom-right triangle
+                indices[tribase + 6] = ibase + 34;
+                indices[tribase + 7] = ibase + 33;
+                indices[tribase + 8] = ibase + 17;
+
+                // Bottom-left triangle
+                indices[tribase + 9] = ibase + 33;
+                indices[tribase + 10] = ibase;
+                indices[tribase + 11] = ibase + 17;
+            }
+        }
+    }
+
+    // Build vertex buffer with heightmap data
+    float totalHeight = 0.0f;
+    uint32 validHeights = 0;
+
+    mVertices.resize(19 * 19);
+
+    for (int32 y = -1; y < 18; ++y) {
+        for (int32 x = -1; x < 18; ++x) {
+            // Read height with hole mask removed
+            uint16 h = hm.data[y + 1][x + 1] & 0x7FFF;
+
+            AreaVertex v{};
+
+            // Position: 2 units between vertices, starting at baseX/baseZ
+            v.x = baseX + (float)x * AreaFile::UnitSize;
+            v.z = baseZ + (float)y * AreaFile::UnitSize;
+
+            // Height: raw value / 8 - 2048 (sea level offset)
+            v.y = -2048.0f + (float)h / 8.0f;
+
+            // UV coordinates: map 0-16 range to 0-1 for proper texture tiling
+            // The -1 and 17 vertices are edge vertices for normal calculation
+            // Inner 17x17 grid (0-16) maps to 0.0-1.0
+            v.u = (float)x / 16.0f;
+            v.v = (float)y / 16.0f;
+
+            if (v.y > mMaxHeight) mMaxHeight = v.y;
+            totalHeight += v.y;
+            validHeights++;
+
+            glm::vec3 pos(v.x, v.y, v.z);
+            mMinBounds = glm::min(mMinBounds, pos);
+            mMaxBounds = glm::max(mMaxBounds, pos);
+
+            mVertices[(y + 1) * 19 + x + 1] = v;
+        }
+    }
+
+    if (validHeights > 0) {
+        mAverageHeight = totalHeight / (float)validHeights;
+    }
+
+    // Load textures from WorldLayer database
+    mTexScales = Vector4(1.0f);
+
+    if (archive && gWorldLayer) {
+        WorldLayerEntry layer;
+        for (int t = 0; t < 4; ++t) {
+            uint32 tid = textureIds[t];
+            if (tid != 0 && gWorldLayer->getRowById(tid, layer)) {
+                if (layer.colorMapPath && wcslen(layer.colorMapPath) > 0) {
+                    GLuint glID = LoadTextureFromArchive(archive, layer.colorMapPath);
+                    mLayerTextures.push_back(glID);
+
+                    // Calculate texture scale from metersPerTexture
+                    float scale = 1.0f;
+                    if (layer.metersPerTexture > 0.1f) {
+                        scale = 1.0f / (layer.metersPerTexture / 32.0f);
+                    }
+                    ((float*)&mTexScales)[t] = scale;
+                } else {
+                    mLayerTextures.push_back(0);
+                }
+            } else {
+                mLayerTextures.push_back(0);
+            }
+        }
+    }
+
+    // Build blend/splat texture from blend data
+    // Each uint16 contains 4 nibbles (4 bits each) for the 4 texture layers
+    mBlendValues.resize(65 * 65);
+    std::fill(mBlendValues.begin(), mBlendValues.end(), 0);
+
+    for (uint32 i = 0; i < 4; ++i) {
+        for (uint32 j = 0; j < 65 * 65; ++j) {
+            uint16 val = blend.data[j / 65][j % 65];
+            uint32 value = (val >> (i * 4)) & 0xF;  // Extract 4-bit value for layer i
+            uint8 weight = (uint8)((value / 15.0f) * 255.0f);
+            mBlendValues[j] |= (weight << (8 * i));
+        }
+    }
+
+    glGenTextures(1, &mSplatTexture);
+    glBindTexture(GL_TEXTURE_2D, mSplatTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 65, 65, 0, GL_RGBA, GL_UNSIGNED_BYTE, mBlendValues.data());
+
+    // Build color map texture if present
+    if (hasColorMap() && colorData) {
+        std::vector<uint32> colorValues(65 * 65);
+        for (uint32 j = 0; j < 65 * 65; ++j) {
+            uint16 value = colorData->data[j / 65][j % 65];
+            // RGB565 format
+            uint32 r = value & 0x1F;
+            uint32 g = (value >> 5) & 0x3F;
+            uint32 b = (value >> 11) & 0x1F;
+            r = (uint32)((r / 31.0f) * 255.0f);
+            g = (uint32)((g / 63.0f) * 255.0f);
+            b = (uint32)((b / 31.0f) * 255.0f);
+            colorValues[j] = 0xFF000000 | (b << 16) | (g << 8) | r;
+        }
+
+        glGenTextures(1, &mColorMapTexture);
+        glBindTexture(GL_TEXTURE_2D, mColorMapTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 65, 65, 0, GL_RGBA, GL_UNSIGNED_BYTE, colorValues.data());
+    }
+
+    // Extend vertex buffer to include center vertices for diamond pattern
+    extendBuffer();
+
+    // Calculate normals and tangents
+    calcNormals();
+    calcTangentBitangent();
+
+    // Create OpenGL buffers
+    glGenVertexArrays(1, &mVAO);
+    glGenBuffers(1, &mVBO);
+    glGenBuffers(1, &mEBO);
+
+    glBindVertexArray(mVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, mVBO);
+    glBufferData(GL_ARRAY_BUFFER, mVertices.size() * sizeof(AreaVertex), mVertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32), indices.data(), GL_STATIC_DRAW);
+
+    // Position
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)0);
+
+    // Normal
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, nx));
+
+    // Tangent
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, tanx));
+
+    // TexCoord
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, u));
+
+    glBindVertexArray(0);
+    mIndexCount = (int)indices.size();
+}
+
+AreaChunkRender::~AreaChunkRender() {
+    if (mSplatTexture != 0) glDeleteTextures(1, &mSplatTexture);
+    if (mColorMapTexture != 0) glDeleteTextures(1, &mColorMapTexture);
+    if (!mLayerTextures.empty()) glDeleteTextures((GLsizei)mLayerTextures.size(), mLayerTextures.data());
+    if (mVAO) glDeleteVertexArrays(1, &mVAO);
+    if (mVBO) glDeleteBuffers(1, &mVBO);
+    if (mEBO) glDeleteBuffers(1, &mEBO);
+}
+
 void AreaChunkRender::render() {
     if (!mVAO) return;
     const auto& u = getUniforms();
 
+    // Bind splat/blend texture
+    glActiveTexture(GL_TEXTURE8);
     if (mSplatTexture != 0) {
-        glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, mSplatTexture);
-        if((GLint)u.alphaTexture != -1) glUniform1i((GLint)u.alphaTexture, 8);
     } else {
-        glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, gFallbackWhite);
-        if((GLint)u.alphaTexture != -1) glUniform1i((GLint)u.alphaTexture, 8);
     }
+    if ((GLint)u.alphaTexture != -1) glUniform1i((GLint)u.alphaTexture, 8);
 
-    for(size_t i=0; i < 4; ++i) {
+    // Bind layer textures
+    for (size_t i = 0; i < 4; ++i) {
         glActiveTexture(GL_TEXTURE0 + (GLenum)i);
-        if(i < mLayerTextures.size() && mLayerTextures[i] != 0) {
+        if (i < mLayerTextures.size() && mLayerTextures[i] != 0) {
             glBindTexture(GL_TEXTURE_2D, mLayerTextures[i]);
         } else {
             glBindTexture(GL_TEXTURE_2D, gFallbackWhite);
         }
-        if((GLint)u.textures[i] != -1) glUniform1i((GLint)u.textures[i], (GLint)i);
+        if ((GLint)u.textures[i] != -1) glUniform1i((GLint)u.textures[i], (GLint)i);
     }
 
+    // Set texture scales
     if ((GLint)u.texScale != -1) glUniform4fv((GLint)u.texScale, 1, &mTexScales[0]);
 
-    for(int i=0; i<4; ++i) {
+    // Bind normal textures (fallback to flat normal)
+    for (int i = 0; i < 4; ++i) {
         if ((GLint)u.normalTextures[i] != -1) {
             glActiveTexture(GL_TEXTURE4 + i);
             glBindTexture(GL_TEXTURE_2D, gFallbackFlatNormal);
@@ -497,7 +591,15 @@ void AreaChunkRender::render() {
         }
     }
 
-    if ((GLint)u.hasColorMap != -1) glUniform1i((GLint)u.hasColorMap, 0);
+    // Color map
+    if (hasColorMap() && mColorMapTexture != 0) {
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D, mColorMapTexture);
+        if ((GLint)u.colorTexture != -1) glUniform1i((GLint)u.colorTexture, 9);
+        if ((GLint)u.hasColorMap != -1) glUniform1i((GLint)u.hasColorMap, 1);
+    } else {
+        if ((GLint)u.hasColorMap != -1) glUniform1i((GLint)u.hasColorMap, 0);
+    }
 
     glBindVertexArray(mVAO);
     glDrawElements(GL_TRIANGLES, (GLsizei)indices.size(), GL_UNSIGNED_INT, 0);
@@ -505,93 +607,150 @@ void AreaChunkRender::render() {
 }
 
 void AreaChunkRender::extendBuffer() {
+    // Create final vertex buffer: 17x17 corner vertices + 16x16 center vertices
     std::vector<AreaVertex> vertices(17 * 17 + 16 * 16);
     mFullVertices = mVertices;
+
+    // Copy inner 17x17 grid (skip outer edge used for normal calculation)
     for (uint32 i = 0; i < 17; ++i) {
         for (uint32 j = 0; j < 17; ++j) {
-            vertices[i * 33 + j] = mVertices[(i + 1) * 19 + (j + 1)];
+            auto idx = i * 33 + j;
+            vertices[idx] = mVertices[(i + 1) * 19 + j + 1];
         }
     }
+
+    // Create center vertices for diamond pattern (average of 4 corners)
     for (uint32 i = 0; i < 16; ++i) {
         for (uint32 j = 0; j < 16; ++j) {
-            uint32 idx = 17 + i * 33 + j;
-            const auto& tl = mVertices[(i + 1) * 19 + (j + 1)];
-            const auto& tr = mVertices[(i + 1) * 19 + (j + 2)];
-            const auto& bl = mVertices[(i + 2) * 19 + (j + 1)];
-            const auto& br = mVertices[(i + 2) * 19 + (j + 2)];
+            auto idx = 17 + i * 33 + j;
+            auto& tl = mVertices[(i + 1) * 19 + j + 1];
+            auto& tr = mVertices[(i + 1) * 19 + j + 2];
+            auto& bl = mVertices[(i + 2) * 19 + j + 1];
+            auto& br = mVertices[(i + 2) * 19 + j + 2];
+
             AreaVertex v{};
-            v.x = (tl.x + tr.x + bl.x + br.x) * 0.25f;
-            v.y = (tl.y + tr.y + bl.y + br.y) * 0.25f;
-            v.z = (tl.z + tr.z + bl.z + br.z) * 0.25f;
-            v.u = (tl.u + tr.u) * 0.5f;
-            v.v = (tl.v + bl.v) * 0.5f;
+            v.x = (tl.x + tr.x + bl.x + br.x) / 4.0f;
+            v.y = (tl.y + tr.y + bl.y + br.y) / 4.0f;
+            v.z = (tl.z + tr.z + bl.z + br.z) / 4.0f;
+            v.u = (tl.u + tr.u) / 2.0f;
+            v.v = (tl.v + bl.v) / 2.0f;
+
             vertices[idx] = v;
         }
     }
+
     mVertices = std::move(vertices);
 }
 
 void AreaChunkRender::calcNormals() {
-    for (auto& v : mVertices) { v.nx = 0.0f; v.ny = 0.0f; v.nz = 0.0f; }
-    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-        uint32 i0 = indices[i];
-        uint32 i1 = indices[i + 1];
-        uint32 i2 = indices[i + 2];
-        if (i0 >= mVertices.size() || i1 >= mVertices.size() || i2 >= mVertices.size()) continue;
-        const AreaVertex& v0 = mVertices[i0];
-        const AreaVertex& v1 = mVertices[i1];
-        const AreaVertex& v2 = mVertices[i2];
-        float ax = v1.x - v0.x; float ay = v1.y - v0.y; float az = v1.z - v0.z;
-        float bx = v2.x - v0.x; float by = v2.y - v0.y; float bz = v2.z - v0.z;
-        float nx = ay * bz - az * by;
-        float ny = az * bx - ax * bz;
-        float nz = ax * by - ay * bx;
-        mVertices[i0].nx += nx; mVertices[i0].ny += ny; mVertices[i0].nz += nz;
-        mVertices[i1].nx += nx; mVertices[i1].ny += ny; mVertices[i1].nz += nz;
-        mVertices[i2].nx += nx; mVertices[i2].ny += ny; mVertices[i2].nz += nz;
+    // Calculate normals for corner vertices using 4-neighbor cross products
+    for (uint32 i = 1; i < 18; ++i) {
+        for (uint32 j = 1; j < 18; ++j) {
+            auto& tl = mFullVertices[(i - 1) * 19 + j - 1];
+            auto& tr = mFullVertices[(i - 1) * 19 + j + 1];
+            auto& br = mFullVertices[(i + 1) * 19 + j + 1];
+            auto& bl = mFullVertices[(i + 1) * 19 + j - 1];
+            auto& v = mFullVertices[i * 19 + j];
+
+            glm::vec3 P1(tl.x, tl.y, tl.z);
+            glm::vec3 P2(tr.x, tr.y, tr.z);
+            glm::vec3 P3(br.x, br.y, br.z);
+            glm::vec3 P4(bl.x, bl.y, bl.z);
+            glm::vec3 vert(v.x, v.y, v.z);
+
+            auto N1 = glm::cross(P2 - vert, P1 - vert);
+            auto N2 = glm::cross(P3 - vert, P2 - vert);
+            auto N3 = glm::cross(P4 - vert, P3 - vert);
+            auto N4 = glm::cross(P1 - vert, P4 - vert);
+
+            auto norm = glm::normalize(-(N1 + N2 + N3 + N4));
+
+            auto& vnew = mVertices[(i - 1) * 33 + j - 1];
+            vnew.nx = norm.x;
+            vnew.ny = norm.y;
+            vnew.nz = norm.z;
+        }
     }
-    for (auto& v : mVertices) {
-        float len = std::sqrt(v.nx * v.nx + v.ny * v.ny + v.nz * v.nz);
-        if (len > 1e-8f) { v.nx /= len; v.ny /= len; v.nz /= len; }
-        else { v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f; }
+
+    // Average normals for center vertices
+    for (uint32 i = 0; i < 16; ++i) {
+        for (uint32 j = 0; j < 16; ++j) {
+            auto idx = 17 + i * 33 + j;
+            auto& tl = mVertices[i * 33 + j];
+            auto& tr = mVertices[i * 33 + j + 1];
+            auto& bl = mVertices[(i + 1) * 33 + j];
+            auto& br = mVertices[(i + 1) * 33 + j + 1];
+
+            auto& v = mVertices[idx];
+            v.nx = (tl.nx + tr.nx + bl.nx + br.nx) / 4.0f;
+            v.ny = (tl.ny + tr.ny + bl.ny + br.ny) / 4.0f;
+            v.nz = (tl.nz + tr.nz + bl.nz + br.nz) / 4.0f;
+        }
     }
 }
 
 void AreaChunkRender::calcTangentBitangent() {
+    auto triCount = indices.size() / 3;
     std::vector<glm::vec3> tan1(mVertices.size(), glm::vec3(0.0f));
-    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
-        uint32 i0 = indices[i];
-        uint32 i1 = indices[i + 1];
-        uint32 i2 = indices[i + 2];
-        if (i0 >= mVertices.size() || i1 >= mVertices.size() || i2 >= mVertices.size()) continue;
-        const AreaVertex& v0 = mVertices[i0];
-        const AreaVertex& v1 = mVertices[i1];
-        const AreaVertex& v2 = mVertices[i2];
-        glm::vec3 p0(v0.x, v0.y, v0.z);
-        glm::vec3 p1(v1.x, v1.y, v1.z);
-        glm::vec3 p2(v2.x, v2.y, v2.z);
-        glm::vec2 w0(v0.u, v0.v);
-        glm::vec2 w1(v1.u, v1.v);
-        glm::vec2 w2(v2.u, v2.v);
-        glm::vec3 e1 = p1 - p0;
-        glm::vec3 e2 = p2 - p0;
-        glm::vec2 d1 = w1 - w0;
-        glm::vec2 d2 = w2 - w0;
-        float r = d1.x * d2.y - d1.y * d2.x;
-        if (std::fabs(r) < 1e-8f) continue;
-        r = 1.0f / r;
-        glm::vec3 sdir = (e1 * d2.y - e2 * d1.y) * r;
-        tan1[i0] += sdir; tan1[i1] += sdir; tan1[i2] += sdir;
+    std::vector<glm::vec3> tan2(mVertices.size(), glm::vec3(0.0f));
+
+    for (uint32 i = 0; i < triCount; ++i) {
+        auto i1 = indices[i * 3];
+        auto i2 = indices[i * 3 + 1];
+        auto i3 = indices[i * 3 + 2];
+
+        if (i1 >= mVertices.size() || i2 >= mVertices.size() || i3 >= mVertices.size()) continue;
+
+        auto& v1 = mVertices[i1];
+        auto& v2 = mVertices[i2];
+        auto& v3 = mVertices[i3];
+
+        float x1 = v2.x - v1.x;
+        float x2 = v3.x - v1.x;
+        float y1 = v2.y - v1.y;
+        float y2 = v3.y - v1.y;
+        float z1 = v2.z - v1.z;
+        float z2 = v3.z - v1.z;
+
+        float s1 = v2.u - v1.u;
+        float s2 = v3.u - v1.u;
+        float t1 = v2.v - v1.v;
+        float t2 = v3.v - v1.v;
+
+        float det = s1 * t2 - s2 * t1;
+        if (std::fabs(det) < 1e-8f) continue;
+        float r = 1.0f / det;
+
+        glm::vec3 sdir((t2 * x1 - t1 * x2) * r, (t2 * y1 - t1 * y2) * r, (t2 * z1 - t1 * z2) * r);
+        glm::vec3 tdir((s1 * x2 - s2 * x1) * r, (s1 * y2 - s2 * y1) * r, (s1 * z2 - s2 * z1) * r);
+
+        tan1[i1] += sdir;
+        tan1[i2] += sdir;
+        tan1[i3] += sdir;
+
+        tan2[i1] += tdir;
+        tan2[i2] += tdir;
+        tan2[i3] += tdir;
     }
-    for (size_t i = 0; i < mVertices.size(); ++i) {
-        glm::vec3 n(mVertices[i].nx, mVertices[i].ny, mVertices[i].nz);
-        glm::vec3 t = tan1[i];
+
+    for (uint32 i = 0; i < mVertices.size(); ++i) {
+        auto& v = mVertices[i];
+        glm::vec3 n(v.nx, v.ny, v.nz);
+        glm::vec3& t = tan1[i];
+        glm::vec3& t2 = tan2[i];
+
         if (glm::length(t) < 1e-8f) {
-            mVertices[i].tanx = 1.0f; mVertices[i].tany = 0.0f; mVertices[i].tanz = 0.0f; mVertices[i].tanw = 1.0f;
+            v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             continue;
         }
-        t = glm::normalize(t - n * glm::dot(n, t));
-        mVertices[i].tanx = t.x; mVertices[i].tany = t.y; mVertices[i].tanz = t.z; mVertices[i].tanw = 1.0f;
+
+        glm::vec3 tan = glm::normalize(t - n * glm::dot(n, t));
+        float tanw = glm::dot(glm::cross(n, t), t2) < 0.0f ? 1.0f : -1.0f;
+
+        v.tanx = tan.x;
+        v.tany = tan.y;
+        v.tanz = tan.z;
+        v.tanw = tanw;
     }
 }
 
