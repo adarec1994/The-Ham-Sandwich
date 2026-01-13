@@ -868,6 +868,8 @@ static void RenderAreaTreeFiltered(AppState& state,
         return;
 
     const IFileSystemEntry* key = entry.get();
+
+    // Quick cache check to skip empty branches
     auto itSub = gAreaCache.subtreeHas.find(key);
     if (itSub != gAreaCache.subtreeHas.end() && !itSub->second)
         return;
@@ -876,33 +878,45 @@ static void RenderAreaTreeFiltered(AppState& state,
         return;
 
     std::vector<IFileSystemEntryPtr> childDirs;
+    std::vector<IFileSystemEntryPtr> childFiles;
     childDirs.reserve(entry->getChildren().size());
+    childFiles.reserve(entry->getChildren().size());
+
+    bool hasQuery = !query.empty();
+    std::string queryLower = hasQuery ? ToLowerCopy(query) : "";
+
+    // 1. Separation Phase (Keep it lightweight)
     for (auto& child : entry->getChildren())
     {
-        if (!child || !child->isDirectory()) continue;
-        const IFileSystemEntry* ck = child.get();
-        auto it = gAreaCache.subtreeHas.find(ck);
-        if (it != gAreaCache.subtreeHas.end())
+        if (!child) continue;
+        if (child->isDirectory())
         {
-            if (it->second) childDirs.push_back(child);
+            // Folder logic: check cache
+            const IFileSystemEntry* ck = child.get();
+            auto it = gAreaCache.subtreeHas.find(ck);
+            bool show = (it != gAreaCache.subtreeHas.end()) ? it->second : HasAreaInSubtree(child, query);
+
+            if (show) childDirs.push_back(child);
         }
         else
         {
-            if (HasAreaInSubtree(child, query)) childDirs.push_back(child);
+            // File logic: Apply search query if present, otherwise just add
+            if (hasQuery)
+            {
+                std::string name = wstring_to_utf8(child->getEntryName());
+                if (!ContainsLowerFast(ToLowerCopy(name), queryLower)) continue;
+            }
+            childFiles.push_back(child);
         }
     }
 
     bool showNode = DirHasAreaFiles(entry, query);
 
+    // If no files here, just recurse children
     if (!showNode)
     {
-        ImGuiListClipper clipper;
-        clipper.Begin((int)childDirs.size());
-        while (clipper.Step())
-        {
-            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-                RenderAreaTreeFiltered(state, childDirs[i], entry, arc, query, max_width, depth);
-        }
+        for (auto& child : childDirs)
+            RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth);
         return;
     }
 
@@ -925,86 +939,54 @@ static void RenderAreaTreeFiltered(AppState& state,
         if (ImGui::Button(loadLabel.c_str()))
             LoadAreasInFolder(state, arc, entry);
 
-        std::map<std::string, std::vector<IFileSystemEntryPtr>> byExt;
-
-        std::string ql = ToLowerCopy(query);
-
-        for (auto& child : entry->getChildren())
+        // 2. Render Files (Optimized with Clipper)
+        if (!childFiles.empty())
         {
-            if (!child || child->isDirectory()) continue;
-            std::string childName = wstring_to_utf8(child->getEntryName());
-
-            if (!ql.empty())
-            {
-                std::string nl = ToLowerCopy(childName);
-                if (!ContainsLowerFast(nl, ql)) continue;
-            }
-
-            std::string ext = GetExtLower(childName);
-            if (ext.empty()) ext = "<none>";
-            byExt[ext].push_back(child);
-        }
-
-        std::vector<std::string> exts;
-        exts.reserve(byExt.size());
-        for (auto& kv : byExt) exts.push_back(kv.first);
-
-        std::sort(exts.begin(), exts.end(), [](const std::string& a, const std::string& b) {
-            if (a == ".area" && b != ".area") return true;
-            if (b == ".area" && a != ".area") return false;
-            return a < b;
-        });
-
-        for (auto& ext : exts)
-        {
-            auto& vec = byExt[ext];
-            std::sort(vec.begin(), vec.end(), [](const IFileSystemEntryPtr& A, const IFileSystemEntryPtr& B) {
-                std::string a = wstring_to_utf8(A->getEntryName());
-                std::string b = wstring_to_utf8(B->getEntryName());
-                return a < b;
+            std::sort(childFiles.begin(), childFiles.end(), [](const IFileSystemEntryPtr& A, const IFileSystemEntryPtr& B) {
+                return A->getEntryName() < B->getEntryName();
             });
 
             ImGui::Dummy(ImVec2(0, 6));
             ImGui::Separator();
-            ImGui::Text("%s", ext.c_str());
+            ImGui::Text("Files (%zu)", childFiles.size());
             ImGui::Separator();
 
             ImGuiListClipper clipper;
-            clipper.Begin((int)vec.size());
+            clipper.Begin((int)childFiles.size());
+
             while (clipper.Step())
             {
                 for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
                 {
-                    auto& f = vec[i];
-                    std::string childName = wstring_to_utf8(f->getEntryName());
+                    auto& f = childFiles[i];
 
-                    if (ImGui::Selectable(childName.c_str()))
+                    // Heavy string conversion only happens here, for visible items
+                    std::string fname = wstring_to_utf8(f->getEntryName());
+
+                    if (ImGui::Selectable(fname.c_str()))
                     {
-                        std::string lowerExt = ToLowerCopy(ext);
+                        // Check extension only on click/interaction
+                        std::string fExt = GetExtLower(fname);
 
-                        if (lowerExt == ".area")
+                        if (fExt == ".area")
                         {
                             auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
-                            if (fileEntry)
-                                LoadSingleArea(state, arc, fileEntry);
+                            if (fileEntry) LoadSingleArea(state, arc, fileEntry);
                         }
-                        else if (lowerExt == ".tex")
+                        else if (fExt == ".tex")
                         {
                             auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
-                            if (fileEntry)
-                                Tex::OpenTexPreviewFromEntry(state, arc, fileEntry);
+                            if (fileEntry) Tex::OpenTexPreviewFromEntry(state, arc, fileEntry);
                         }
                     }
                 }
             }
         }
 
-        ImGuiListClipper dirClipper;
-        dirClipper.Begin((int)childDirs.size());
-        while (dirClipper.Step())
+        // 3. Render Child Directories (Recursive, no clipper)
+        for (auto& child : childDirs)
         {
-            for (int i = dirClipper.DisplayStart; i < dirClipper.DisplayEnd; i++)
-                RenderAreaTreeFiltered(state, childDirs[i], entry, arc, query, max_width, depth + 1.0f);
+            RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth + 1.0f);
         }
 
         ImGui::PopID();
@@ -1317,26 +1299,35 @@ void RenderUI(AppState& state)
                         auto root = archive->getRoot();
                         if (!root) continue;
 
-                        bool archiveHasArea = false;
+                        IFileSystemEntryPtr mapEntry = nullptr;
                         for (auto& child : root->getChildren())
                         {
                             if (!child || !child->isDirectory()) continue;
-                            const IFileSystemEntry* ck = child.get();
-                            auto it = gAreaCache.subtreeHas.find(ck);
-                            if (it != gAreaCache.subtreeHas.end())
+                            std::string cname = wstring_to_utf8(child->getEntryName());
+                            if (ToLowerCopy(cname) == "map")
                             {
-                                if (it->second) { archiveHasArea = true; break; }
-                            }
-                            else
-                            {
-                                if (HasAreaInSubtree(child, areaQuery)) { archiveHasArea = true; break; }
+                                mapEntry = child;
+                                break;
                             }
                         }
-                        if (!archiveHasArea) continue;
 
-                        for (auto& child : root->getChildren())
+                        if (!mapEntry) continue;
+
+                        const IFileSystemEntry* ck = mapEntry.get();
+                        bool hasMatch = false;
+                        auto it = gAreaCache.subtreeHas.find(ck);
+                        if (it != gAreaCache.subtreeHas.end())
                         {
-                            RenderAreaTreeFiltered(state, child, root, archive, areaQuery, calculated_width, 0.0f);
+                            hasMatch = it->second;
+                        }
+                        else
+                        {
+                            hasMatch = HasAreaInSubtree(mapEntry, areaQuery);
+                        }
+
+                        if (hasMatch)
+                        {
+                            RenderAreaTreeFiltered(state, mapEntry, root, archive, areaQuery, calculated_width, 0.0f);
                         }
                     }
 
