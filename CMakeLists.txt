@@ -120,6 +120,8 @@ add_executable(Wildstar_Studio_2
         src/tex/tex.h
         src/tex/texjpeg.cpp
         src/tex/texjpeg.h
+        src/Area/DataTable.cpp
+        src/Area/DataTable.h
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE

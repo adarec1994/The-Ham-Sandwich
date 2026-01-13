@@ -4,15 +4,39 @@
 #include <string>
 #include <memory>
 #include <glm/glm.hpp>
-#include <fstream>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
+#include "DataTable.h"
 
 typedef glm::mat4 Matrix;
 typedef glm::vec3 Vector3;
 typedef glm::vec4 Vector4;
 
 #pragma pack(push, 1)
+struct WorldLayerEntry
+{
+    uint32 id;
+    wchar_t* description;
+    float heightScale;
+    float heightOffset;
+    float parallaxScale;
+    float parallaxOffset;
+    float metersPerTexture;
+    wchar_t* colorMapPath;
+    wchar_t* normalMapPath;
+    uint32 averageColor;
+    uint32 projection;
+    uint32 materialType;
+    uint32 worldClutterId00;
+    uint32 worldClutterId01;
+    uint32 worldClutterId02;
+    uint32 worldClutterId03;
+    float specularPower;
+    float emissiveGlow;
+    float scrollSpeed00;
+    float scrollSpeed01;
+};
+
 struct AreaVertex
 {
     float x, y, z;
@@ -24,6 +48,7 @@ struct AreaVertex
 
 class AreaChunkRender
 {
+public:
     struct Uniforms
     {
        uint32 colorTexture = 0;
@@ -33,8 +58,11 @@ class AreaChunkRender
        uint32 normalTextures[4]{};
        uint32 texScale = 0;
        uint32 camPosition = 0;
+       uint32 model = 0;
+       uint32 highlightColor = 0;
     };
 
+private:
     static std::vector<uint32> indices;
     static Uniforms uniforms;
     static const int DataSizes[32];
@@ -47,13 +75,16 @@ class AreaChunkRender
 
     float mMaxHeight = -100000.0f;
     float mAverageHeight = 0.0f;
+
+    glm::vec3 mMinBounds;
+    glm::vec3 mMaxBounds;
+
     std::vector<AreaVertex> mVertices;
     std::vector<AreaVertex> mFullVertices;
 
-    std::vector<uint32> mTextures;
-    std::vector<uint32> mNormalTextures;
-    uint32 mBlendTexture = 0;
-    uint32 mBlendTexture2 = 0;
+    uint32 mSplatTexture = 0;
+    uint32 mColorMapTexture = 0;
+    std::vector<uint32> mLayerTextures;
 
     std::vector<uint32> mBlendValues;
     uint32 mFlags = 0;
@@ -66,16 +97,24 @@ class AreaChunkRender
     void extendBuffer();
 
 public:
-    AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseY, bool swapped);
+    AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseY, ArchivePtr archive);
     ~AreaChunkRender();
 
     float getMaxHeight() const { return mMaxHeight; }
     float getAverageHeight() const { return mAverageHeight; }
+    glm::vec3 getMinBounds() const { return mMinBounds; }
+    glm::vec3 getMaxBounds() const { return mMaxBounds; }
+    uint32 getFlags() const { return mFlags; }
 
     bool hasHeightmap() const { return (mFlags & 1) != 0; }
+    bool hasTextureIds() const { return (mFlags & 2) != 0; }
+    bool hasBlendValues() const { return (mFlags & 4) != 0; }
+    bool hasColorMap() const { return (mFlags & 8) != 0; }
+
     void render();
 
     static void geometryInit(uint32 program);
+    static const Uniforms& getUniforms();
 };
 
 typedef std::shared_ptr<AreaChunkRender> AreaChunkRenderPtr;
@@ -91,15 +130,17 @@ class AreaFile
     float mMaxHeight = -100000.0f;
     float mAverageHeight = 0.0f;
 
+    glm::vec3 mMinBounds;
+    glm::vec3 mMaxBounds;
+    float mGlobalRotation = 0.0f;
+
+    glm::vec4 mBaseColor = glm::vec4(1.0f);
+
     int mTileX = 0;
     int mTileY = 0;
 
     unsigned int mTextureID = 0;
     bool mHasTexture = false;
-
-    static bool sOriginSet;
-    static int  sOriginTileX;
-    static int  sOriginTileY;
 
     void parseTileXYFromFilename();
     bool loadTexture();
@@ -111,10 +152,17 @@ public:
 
     void setTileXY(int tx, int ty) { mTileX = tx; mTileY = ty; }
 
-    void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram);
+    void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, AreaChunkRenderPtr selectedChunk);
 
     float getMaxHeight() const { return mMaxHeight; }
     float getAverageHeight() const { return mAverageHeight; }
+    glm::vec3 getMinBounds() const { return mMinBounds; }
+    glm::vec3 getMaxBounds() const { return mMaxBounds; }
+
+    void rotate90() { mGlobalRotation += 90.0f; }
+    float getRotation() const { return mGlobalRotation; }
+
+    const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
 
     static const float UnitSize;
 };

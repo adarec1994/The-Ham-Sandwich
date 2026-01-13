@@ -1,4 +1,3 @@
-// UI.cpp
 #include "UI.h"
 #include "../About/about.h"
 #include "../settings/Settings.h"
@@ -7,6 +6,7 @@
 #include "../Area/AreaRender.h"
 #include "splashscreen.h"
 #include "../tex/tex.h"
+#include <limits>
 
 #include <string>
 #include <vector>
@@ -15,9 +15,12 @@
 #include <filesystem>
 #include <algorithm>
 #include <map>
+#include <unordered_map>
 
 #ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
   #include <Windows.h>
 #else
   #include <codecvt>
@@ -31,12 +34,21 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 static std::vector<AreaFilePtr> gLoadedAreas;
 
 static bool   gAreaIconLoaded = false;
 static GLuint gAreaIconTexture = 0;
 static int    gAreaIconWidth = 0;
 static int    gAreaIconHeight = 0;
+
+static AreaChunkRenderPtr gSelectedChunk = nullptr;
+static int gSelectedChunkIndex = -1;
+static int gSelectedAreaIndex = -1;
+static std::string gSelectedChunkAreaName = "";
 
 static std::string wstring_to_utf8(const std::wstring& str)
 {
@@ -123,22 +135,125 @@ static void SnapCameraToLoaded(AppState& state)
 {
     if (gLoadedAreas.empty()) return;
 
-    float maxH = -100000.0f;
-    for (auto& a : gLoadedAreas)
-        if (a) maxH = std::max(maxH, a->getMaxHeight());
+    auto& targetArea = gLoadedAreas.front();
+    if (!targetArea) return;
 
-    state.camera.Position = glm::vec3(240.0f, maxH + 800.0f, 240.0f);
-    state.camera.Yaw = -90.0f;
-    state.camera.Pitch = -65.0f;
+    glm::vec3 minBounds = targetArea->getMinBounds();
+    glm::vec3 maxBounds = targetArea->getMaxBounds();
+
+    if (minBounds.x > maxBounds.x)
+    {
+        minBounds = glm::vec3(-100.0f, 0.0f, -100.0f);
+        maxBounds = glm::vec3(100.0f, 100.0f, 100.0f);
+    }
+
+    glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+
+    float radius = glm::length(maxBounds - minBounds) * 0.5f;
+    if (radius < 1.0f) radius = 10.0f;
+
+    state.camera.Yaw = -45.0f;
+    state.camera.Pitch = -30.0f;
 
     glm::vec3 front;
     front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
     front.y = sin(glm::radians(state.camera.Pitch));
     front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
     state.camera.Front = glm::normalize(front);
-
     state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
+
+    float distance = radius * 2.5f;
+    state.camera.Position = center - (state.camera.Front * distance);
+}
+
+static bool RayIntersectsBox(glm::vec3 rayOrigin, glm::vec3 rayDir, glm::vec3 boxMin, glm::vec3 boxMax, float& t)
+{
+    glm::vec3 tMin = (boxMin - rayOrigin) / rayDir;
+    glm::vec3 tMax = (boxMax - rayOrigin) / rayDir;
+    glm::vec3 t1 = glm::min(tMin, tMax);
+    glm::vec3 t2 = glm::max(tMin, tMax);
+    float tNear = glm::max(glm::max(t1.x, t1.y), t1.z);
+    float tFar = glm::min(glm::min(t2.x, t2.y), t2.z);
+
+    if (tNear > tFar || tFar < 0.0f) return false;
+    t = tNear;
+    return true;
+}
+
+static void CheckChunkSelection(AppState& state)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    int display_w, display_h;
+    glfwGetFramebufferSize(glfwGetCurrentContext(), &display_w, &display_h);
+
+    if (display_w <= 0 || display_h <= 0) return;
+
+    glm::mat4 view = glm::lookAt(state.camera.Position, state.camera.Position + state.camera.Front, state.camera.Up);
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 20000.0f);
+
+    float mouseX = io.MousePos.x;
+    float mouseY = (float)display_h - io.MousePos.y;
+
+    glm::vec3 rayStart = glm::unProject(glm::vec3(mouseX, mouseY, 0.0f), view, proj, glm::vec4(0, 0, display_w, display_h));
+    glm::vec3 rayEnd   = glm::unProject(glm::vec3(mouseX, mouseY, 1.0f), view, proj, glm::vec4(0, 0, display_w, display_h));
+    glm::vec3 rayDir   = glm::normalize(rayEnd - rayStart);
+
+    float closestDist = std::numeric_limits<float>::max();
+    AreaChunkRenderPtr hitChunk = nullptr;
+    int hitIndex = -1;
+    int hitAreaIdx = -1;
+    std::string hitAreaName = "";
+
+    for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
+    {
+        auto area = gLoadedAreas[areaIdx];
+        if (!area) continue;
+
+        glm::vec3 center = (area->getMinBounds() + area->getMaxBounds()) * 0.5f;
+        float rot = area->getRotation();
+
+        glm::mat4 model(1.0f);
+        model = glm::translate(model, center);
+        model = glm::rotate(model, glm::radians(rot), glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::translate(model, -center);
+        glm::mat4 invModel = glm::inverse(model);
+
+        glm::vec3 rayStartLocal = glm::vec3(invModel * glm::vec4(rayStart, 1.0f));
+        glm::vec3 rayDirLocal   = glm::vec3(invModel * glm::vec4(rayDir, 0.0f));
+
+        const auto& chunks = area->getChunks();
+        for (size_t i = 0; i < chunks.size(); ++i)
+        {
+            auto chunk = chunks[i];
+            if (!chunk) continue;
+
+            glm::vec3 minB = chunk->getMinBounds();
+            glm::vec3 maxB = chunk->getMaxBounds();
+            if (minB.x > maxB.x) continue;
+
+            float dist = 0.0f;
+            if (RayIntersectsBox(rayStartLocal, rayDirLocal, minB, maxB, dist))
+            {
+                if (dist < closestDist)
+                {
+                    closestDist = dist;
+                    hitChunk = chunk;
+                    hitIndex = (int)i;
+                    hitAreaIdx = (int)areaIdx;
+                    hitAreaName = "Area " + std::to_string(areaIdx);
+                }
+            }
+        }
+    }
+
+    if (hitChunk)
+    {
+        gSelectedChunk = hitChunk;
+        gSelectedChunkIndex = hitIndex;
+        gSelectedAreaIndex = hitAreaIdx;
+        gSelectedChunkAreaName = hitAreaName;
+    }
 }
 
 static void LoadAreasInFolder(AppState& state, ArchivePtr arc, IFileSystemEntryPtr folderEntry)
@@ -146,6 +261,7 @@ static void LoadAreasInFolder(AppState& state, ArchivePtr arc, IFileSystemEntryP
     if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
 
     gLoadedAreas.clear();
+    gSelectedChunk = nullptr;
 
     for (auto& child : folderEntry->getChildren())
     {
@@ -187,6 +303,7 @@ static void LoadSingleArea(AppState& state, ArchivePtr arc, const std::shared_pt
     if (!arc || !fileEntry) return;
 
     gLoadedAreas.clear();
+    gSelectedChunk = nullptr;
 
     std::string name = wstring_to_utf8(fileEntry->getEntryName());
     std::cout << "Loading Area: " << name << std::endl;
@@ -335,6 +452,11 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
     ImGuiIO& io = ImGui::GetIO();
     float dt = io.DeltaTime;
 
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
+    {
+        CheckChunkSelection(state);
+    }
+
     if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
     {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -394,7 +516,7 @@ void RenderGrid(AppState& state, int display_w, int display_h)
     {
         uint32 prog = state.areaRender->getProgram();
         for (auto& a : gLoadedAreas)
-            if (a) a->render(view, projection, prog);
+            if (a) a->render(view, projection, prog, gSelectedChunk);
     }
 }
 
@@ -480,26 +602,78 @@ static void RenderEntryRecursive_Impl(AppState& state,
                                      float& max_width,
                                      float depth)
 {
-    std::string name = wstring_to_utf8(entry->getEntryName());
-    if (name.empty()) name = "/";
-
-    float indent_px = depth * ImGui::GetStyle().IndentSpacing;
-    float text_w = ImGui::CalcTextSize(name.c_str()).x;
-    float current_w = indent_px + text_w + 50.0f;
-    if (current_w > max_width) max_width = current_w;
-
     if (entry->isDirectory())
     {
+        std::string name = wstring_to_utf8(entry->getEntryName());
+        if (name.empty()) name = "/";
+
+        float indent_px = depth * ImGui::GetStyle().IndentSpacing;
+        float text_w = ImGui::CalcTextSize(name.c_str()).x;
+        float current_w = indent_px + text_w + 50.0f;
+        if (current_w > max_width) max_width = current_w;
+
         bool open = ImGui::TreeNode(name.c_str());
         if (open)
         {
-            for (auto child : entry->getChildren())
-                RenderEntryRecursive_Impl(state, child, entry, currentArc, max_width, depth + 1.0f);
+            auto& children = entry->getChildren();
+            std::vector<IFileSystemEntryPtr> folders;
+            std::vector<IFileSystemEntryPtr> files;
+            folders.reserve(children.size());
+            files.reserve(children.size());
+
+            for (auto& child : children)
+            {
+                if (child->isDirectory()) folders.push_back(child);
+                else files.push_back(child);
+            }
+
+            for (auto& folder : folders)
+            {
+                RenderEntryRecursive_Impl(state, folder, entry, currentArc, max_width, depth + 1.0f);
+            }
+
+            ImGuiListClipper clipper;
+            clipper.Begin((int)files.size());
+            while (clipper.Step())
+            {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                {
+                    auto& f = files[i];
+                    std::string fname = wstring_to_utf8(f->getEntryName());
+
+                    float f_indent_px = (depth + 1.0f) * ImGui::GetStyle().IndentSpacing;
+                    float f_text_w = ImGui::CalcTextSize(fname.c_str()).x;
+                    float f_current_w = f_indent_px + f_text_w + 50.0f;
+                    if (f_current_w > max_width) max_width = f_current_w;
+
+                    if (ImGui::Selectable(fname.c_str()))
+                    {
+                        if (EndsWithNoCase(fname, ".area"))
+                        {
+                            auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                            if (fileEntry && currentArc)
+                                LoadSingleArea(state, currentArc, fileEntry);
+                        }
+                        else if (EndsWithNoCase(fname, ".tex"))
+                        {
+                            auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                            if (fileEntry && currentArc)
+                                Tex::OpenTexPreviewFromEntry(state, currentArc, fileEntry);
+                        }
+                    }
+                }
+            }
             ImGui::TreePop();
         }
     }
     else
     {
+        std::string name = wstring_to_utf8(entry->getEntryName());
+        float indent_px = depth * ImGui::GetStyle().IndentSpacing;
+        float text_w = ImGui::CalcTextSize(name.c_str()).x;
+        float current_w = indent_px + text_w + 50.0f;
+        if (current_w > max_width) max_width = current_w;
+
         if (ImGui::Selectable(name.c_str()))
         {
             if (EndsWithNoCase(name, ".area"))
@@ -515,13 +689,11 @@ static void RenderEntryRecursive_Impl(AppState& state,
                         LoadSingleArea(state, currentArc, fileEntry);
                 }
             }
-            // NEW: Texture Logic
             else if (EndsWithNoCase(name, ".tex"))
             {
                 auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
                 if (fileEntry && currentArc)
                 {
-                    // This function is defined in tex.cpp/.h
                     Tex::OpenTexPreviewFromEntry(state, currentArc, fileEntry);
                 }
             }
@@ -534,39 +706,152 @@ void RenderEntryRecursive(AppState& state, IFileSystemEntryPtr entry, ArchivePtr
     RenderEntryRecursive_Impl(state, entry, nullptr, currentArc, max_width, depth);
 }
 
+struct AreaFilterCache
+{
+    std::string queryLower;
+    std::vector<const Archive*> archives;
+    std::unordered_map<const IFileSystemEntry*, bool> subtreeHas;
+    std::unordered_map<const IFileSystemEntry*, bool> dirHas;
+};
+
+static AreaFilterCache gAreaCache;
+
+static bool ContainsLowerFast(const std::string& hayLower, const std::string& needleLower)
+{
+    if (needleLower.empty()) return true;
+    return hayLower.find(needleLower) != std::string::npos;
+}
+
+static bool BuildAreaCacheForDir(const IFileSystemEntryPtr& entry, const std::string& queryLower)
+{
+    if (!entry || !entry->isDirectory())
+        return false;
+
+    const IFileSystemEntry* key = entry.get();
+    auto it = gAreaCache.subtreeHas.find(key);
+    if (it != gAreaCache.subtreeHas.end())
+        return it->second;
+
+    bool dirHasMatch = false;
+    bool anyChildMatch = false;
+
+    for (auto& child : entry->getChildren())
+    {
+        if (!child) continue;
+
+        if (!child->isDirectory())
+        {
+            std::string n = wstring_to_utf8(child->getEntryName());
+            if (!EndsWithNoCase(n, ".area")) continue;
+
+            if (queryLower.empty())
+            {
+                dirHasMatch = true;
+            }
+            else
+            {
+                std::string nl = ToLowerCopy(n);
+                if (ContainsLowerFast(nl, queryLower))
+                    dirHasMatch = true;
+            }
+        }
+    }
+
+    for (auto& child : entry->getChildren())
+    {
+        if (!child || !child->isDirectory()) continue;
+        if (BuildAreaCacheForDir(child, queryLower))
+            anyChildMatch = true;
+    }
+
+    bool has = dirHasMatch || anyChildMatch;
+    gAreaCache.dirHas[key] = dirHasMatch;
+    gAreaCache.subtreeHas[key] = has;
+    return has;
+}
+
+static bool AreArchivesSame(const std::vector<ArchivePtr>& arcs, const std::vector<const Archive*>& prev)
+{
+    if (arcs.size() != prev.size()) return false;
+    for (size_t i = 0; i < arcs.size(); ++i)
+        if (arcs[i].get() != prev[i]) return false;
+    return true;
+}
+
+static void EnsureAreaCache(const AppState& state, const std::string& query)
+{
+    std::string ql = ToLowerCopy(query);
+
+    bool needRebuild = false;
+    if (ql != gAreaCache.queryLower) needRebuild = true;
+    if (!AreArchivesSame(state.archives, gAreaCache.archives)) needRebuild = true;
+
+    if (!needRebuild) return;
+
+    gAreaCache.queryLower = ql;
+    gAreaCache.archives.clear();
+    gAreaCache.archives.reserve(state.archives.size());
+    for (auto& a : state.archives) gAreaCache.archives.push_back(a.get());
+
+    gAreaCache.subtreeHas.clear();
+    gAreaCache.dirHas.clear();
+
+    for (auto& archive : state.archives)
+    {
+        auto root = archive ? archive->getRoot() : nullptr;
+        if (!root) continue;
+
+        for (auto& child : root->getChildren())
+        {
+            if (child && child->isDirectory())
+                BuildAreaCacheForDir(child, gAreaCache.queryLower);
+        }
+    }
+}
+
 static bool DirHasAreaFiles(const IFileSystemEntryPtr& dir, const std::string& query)
 {
     if (!dir || !dir->isDirectory()) return false;
+    const IFileSystemEntry* key = dir.get();
+    auto it = gAreaCache.dirHas.find(key);
+    if (it != gAreaCache.dirHas.end()) return it->second;
+
+    std::string ql = ToLowerCopy(query);
+
+    bool dirHasMatch = false;
     for (auto& child : dir->getChildren())
     {
         if (!child || child->isDirectory()) continue;
         std::string n = wstring_to_utf8(child->getEntryName());
         if (!EndsWithNoCase(n, ".area")) continue;
-        if (!ContainsNoCase(n, query)) continue;
-        return true;
+        if (ql.empty())
+        {
+            dirHasMatch = true;
+            break;
+        }
+        std::string nl = ToLowerCopy(n);
+        if (ContainsLowerFast(nl, ql))
+        {
+            dirHasMatch = true;
+            break;
+        }
     }
-    return false;
+    gAreaCache.dirHas[key] = dirHasMatch;
+    return dirHasMatch;
 }
 
 static bool HasAreaInSubtree(const IFileSystemEntryPtr& entry, const std::string& query)
 {
-    if (!entry) return false;
-
-    if (!entry->isDirectory())
+    if (!entry || !entry->isDirectory())
         return false;
 
-    if (DirHasAreaFiles(entry, query))
-        return true;
+    const IFileSystemEntry* key = entry.get();
+    auto it = gAreaCache.subtreeHas.find(key);
+    if (it != gAreaCache.subtreeHas.end())
+        return it->second;
 
-    for (auto& child : entry->getChildren())
-    {
-        if (child && child->isDirectory())
-        {
-            if (HasAreaInSubtree(child, query))
-                return true;
-        }
-    }
-    return false;
+    std::string ql = ToLowerCopy(query);
+    return BuildAreaCacheForDir(entry, ql);
 }
 
 static void RenderAreaTreeFiltered(AppState& state,
@@ -580,15 +865,41 @@ static void RenderAreaTreeFiltered(AppState& state,
     if (!entry || !entry->isDirectory())
         return;
 
+    const IFileSystemEntry* key = entry.get();
+    auto itSub = gAreaCache.subtreeHas.find(key);
+    if (itSub != gAreaCache.subtreeHas.end() && !itSub->second)
+        return;
+
     if (!HasAreaInSubtree(entry, query))
         return;
 
-    if (!DirHasAreaFiles(entry, query))
+    std::vector<IFileSystemEntryPtr> childDirs;
+    childDirs.reserve(entry->getChildren().size());
+    for (auto& child : entry->getChildren())
     {
-        for (auto& child : entry->getChildren())
+        if (!child || !child->isDirectory()) continue;
+        const IFileSystemEntry* ck = child.get();
+        auto it = gAreaCache.subtreeHas.find(ck);
+        if (it != gAreaCache.subtreeHas.end())
         {
-            if (child && child->isDirectory())
-                RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth);
+            if (it->second) childDirs.push_back(child);
+        }
+        else
+        {
+            if (HasAreaInSubtree(child, query)) childDirs.push_back(child);
+        }
+    }
+
+    bool showNode = DirHasAreaFiles(entry, query);
+
+    if (!showNode)
+    {
+        ImGuiListClipper clipper;
+        clipper.Begin((int)childDirs.size());
+        while (clipper.Step())
+        {
+            for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                RenderAreaTreeFiltered(state, childDirs[i], entry, arc, query, max_width, depth);
         }
         return;
     }
@@ -614,10 +925,19 @@ static void RenderAreaTreeFiltered(AppState& state,
 
         std::map<std::string, std::vector<IFileSystemEntryPtr>> byExt;
 
+        std::string ql = ToLowerCopy(query);
+
         for (auto& child : entry->getChildren())
         {
             if (!child || child->isDirectory()) continue;
             std::string childName = wstring_to_utf8(child->getEntryName());
+
+            if (!ql.empty())
+            {
+                std::string nl = ToLowerCopy(childName);
+                if (!ContainsLowerFast(nl, ql)) continue;
+            }
+
             std::string ext = GetExtLower(childName);
             if (ext.empty()) ext = "<none>";
             byExt[ext].push_back(child);
@@ -647,38 +967,42 @@ static void RenderAreaTreeFiltered(AppState& state,
             ImGui::Text("%s", ext.c_str());
             ImGui::Separator();
 
-            for (auto& f : vec)
+            ImGuiListClipper clipper;
+            clipper.Begin((int)vec.size());
+            while (clipper.Step())
             {
-                std::string childName = wstring_to_utf8(f->getEntryName());
-
-                if (ImGui::Selectable(childName.c_str()))
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
                 {
-                    std::string lowerExt = ToLowerCopy(ext);
+                    auto& f = vec[i];
+                    std::string childName = wstring_to_utf8(f->getEntryName());
 
-                    // Existing Area Logic
-                    if (lowerExt == ".area")
+                    if (ImGui::Selectable(childName.c_str()))
                     {
-                        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
-                        if (fileEntry)
-                            LoadSingleArea(state, arc, fileEntry);
-                    }
-                    // NEW: Add Texture Logic here
-                    else if (lowerExt == ".tex")
-                    {
-                        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
-                        if (fileEntry)
+                        std::string lowerExt = ToLowerCopy(ext);
+
+                        if (lowerExt == ".area")
                         {
-                            Tex::OpenTexPreviewFromEntry(state, arc, fileEntry);
+                            auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                            if (fileEntry)
+                                LoadSingleArea(state, arc, fileEntry);
+                        }
+                        else if (lowerExt == ".tex")
+                        {
+                            auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f);
+                            if (fileEntry)
+                                Tex::OpenTexPreviewFromEntry(state, arc, fileEntry);
                         }
                     }
                 }
             }
         }
 
-        for (auto& child : entry->getChildren())
+        ImGuiListClipper dirClipper;
+        dirClipper.Begin((int)childDirs.size());
+        while (dirClipper.Step())
         {
-            if (child && child->isDirectory())
-                RenderAreaTreeFiltered(state, child, entry, arc, query, max_width, depth + 1.0f);
+            for (int i = dirClipper.DisplayStart; i < dirClipper.DisplayEnd; i++)
+                RenderAreaTreeFiltered(state, childDirs[i], entry, arc, query, max_width, depth + 1.0f);
         }
 
         ImGui::PopID();
@@ -726,6 +1050,40 @@ void RenderUI(AppState& state)
         ImGui::Text("Camera Speed: %.1f", state.camera.MovementSpeed);
     }
     ImGui::End();
+
+    if (gSelectedChunk)
+    {
+        ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 250.0f, 80.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(240, 0));
+
+        if (ImGui::Begin("Chunk Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Index: %d", gSelectedChunkIndex);
+            if (!gSelectedChunkAreaName.empty())
+                ImGui::Text("%s", gSelectedChunkAreaName.c_str());
+
+            ImGui::Separator();
+
+            glm::vec3 minB = gSelectedChunk->getMinBounds();
+            glm::vec3 maxB = gSelectedChunk->getMaxBounds();
+
+            ImGui::Text("Bounds Min: (%.1f, %.1f, %.1f)", minB.x, minB.y, minB.z);
+            ImGui::Text("Bounds Max: (%.1f, %.1f, %.1f)", maxB.x, maxB.y, maxB.z);
+
+            ImGui::Separator();
+            ImGui::Text("Flags: 0x%X", gSelectedChunk->getFlags());
+            ImGui::Text("Avg Height: %.2f", gSelectedChunk->getAverageHeight());
+            ImGui::Text("Max Height: %.2f", gSelectedChunk->getMaxHeight());
+
+            ImGui::Separator();
+            if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < (int)gLoadedAreas.size()) {
+                if (ImGui::Button("Rotate Area 90")) {
+                    gLoadedAreas[gSelectedAreaIndex]->rotate90();
+                }
+            }
+        }
+        ImGui::End();
+    }
 
     float strip_width = 70.0f;
     float button_height = 50.0f;
@@ -946,6 +1304,7 @@ void RenderUI(AppState& state)
                 ImGui::Dummy(ImVec2(0, 10));
 
                 std::string areaQuery(areaBuf);
+                EnsureAreaCache(state, areaQuery);
 
                 if (ImGui::BeginChild("AreaTree", ImVec2(0, 0), false))
                 {
@@ -959,7 +1318,17 @@ void RenderUI(AppState& state)
                         bool archiveHasArea = false;
                         for (auto& child : root->getChildren())
                         {
-                            if (HasAreaInSubtree(child, areaQuery)) { archiveHasArea = true; break; }
+                            if (!child || !child->isDirectory()) continue;
+                            const IFileSystemEntry* ck = child.get();
+                            auto it = gAreaCache.subtreeHas.find(ck);
+                            if (it != gAreaCache.subtreeHas.end())
+                            {
+                                if (it->second) { archiveHasArea = true; break; }
+                            }
+                            else
+                            {
+                                if (HasAreaInSubtree(child, areaQuery)) { archiveHasArea = true; break; }
+                            }
                         }
                         if (!archiveHasArea) continue;
 
@@ -980,7 +1349,6 @@ void RenderUI(AppState& state)
     RenderSettingsWindow(&state.show_settings_window);
     RenderAboutWindow(&state.show_about_window);
 
-    // NEW: Render Texture Preview if active
     if (state.texPreview)
     {
         Tex::RenderTexPreviewWindow(*state.texPreview);

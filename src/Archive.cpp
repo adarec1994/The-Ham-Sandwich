@@ -5,6 +5,8 @@
 #include <zlib.h>
 #include <lzma.h>
 #include <cstring>
+#include <vector>
+#include <memory>
 
 std::wstring toUnicode(const char* src) {
     std::string s(src);
@@ -266,7 +268,8 @@ void DirectoryEntry::parseChildren() {
     }
 }
 
-void Archive::getFileData(FileEntryPtr file, std::vector<uint8>& content)
+// FIX: Use std::shared_ptr<FileEntry> and std::vector<unsigned char> explicitly
+void Archive::getFileData(std::shared_ptr<FileEntry> file, std::vector<unsigned char>& content)
 {
     std::cout << "\n=== getFileData ===\n";
 

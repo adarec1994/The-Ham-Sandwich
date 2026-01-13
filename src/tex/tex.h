@@ -7,8 +7,8 @@
 #include <glad/glad.h>
 
 struct AppState;
-struct Archive;
-struct FileEntry;
+class Archive;
+class FileEntry;
 
 using ArchivePtr = std::shared_ptr<Archive>;
 using FileEntryPtr = std::shared_ptr<FileEntry>;
