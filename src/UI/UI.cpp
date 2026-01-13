@@ -490,33 +490,35 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
     }
 }
 
-void RenderGrid(AppState& state, int display_w, int display_h)
+void RenderAreas(AppState& state, int display_w, int display_h)
 {
     if (display_w <= 0 || display_h <= 0) return;
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
 
-    glUseProgram(state.grid.ShaderProgram);
-
     glm::mat4 view = glm::lookAt(state.camera.Position, state.camera.Position + state.camera.Front, state.camera.Up);
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), (float)display_w / (float)display_h, 0.1f, 20000.0f);
-
-    unsigned int viewLoc = glGetUniformLocation(state.grid.ShaderProgram, "view");
-    unsigned int projLoc = glGetUniformLocation(state.grid.ShaderProgram, "projection");
-
-    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
-
-    glBindVertexArray(state.grid.VAO);
-    glDrawArrays(GL_LINES, 0, state.grid.VertexCount);
-    glBindVertexArray(0);
 
     if (state.areaRender)
     {
         uint32 prog = state.areaRender->getProgram();
-        for (auto& a : gLoadedAreas)
-            if (a) a->render(view, projection, prog, gSelectedChunk);
+        glUseProgram(prog);
+
+        // Pass matrices to shader
+        unsigned int viewLoc = glGetUniformLocation(prog, "view");
+        unsigned int projLoc = glGetUniformLocation(prog, "projection");
+        if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
+        if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+
+        // FIX: Loop through ALL loaded areas, not just the "current" one
+        for (const auto& area : gLoadedAreas)
+        {
+            if (area)
+            {
+                area->render(view, projection, prog, gSelectedChunk);
+            }
+        }
     }
 }
 

@@ -84,5 +84,5 @@ void InitUI(AppState& state);
 void InitGrid(AppState& state);
 void UpdateCamera(GLFWwindow* window, AppState& state);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
-void RenderGrid(AppState& state, int display_w, int display_h);
+void RenderAreas(AppState& state, int display_w, int display_h);
 void RenderUI(AppState& state);
