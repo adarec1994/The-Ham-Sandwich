@@ -3,7 +3,6 @@
 #include "ImGuiFileDialog.h"
 #include <filesystem>
 #include <iostream>
-#include <algorithm>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -62,7 +61,8 @@ void RenderSplashScreen(AppState& state) {
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                             ImGuiWindowFlags_NoScrollbar;
+                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                             ImGuiWindowFlags_NoNav;
 
     if (ImGui::Begin("Splash", nullptr, flags)) {
 
@@ -72,7 +72,6 @@ void RenderSplashScreen(AppState& state) {
                 &gSkipIconTexture, &gSkipIconWidth, &gSkipIconHeight);
         }
 
-        // --- Rounded "Skip" ImageButton (top-right) ---
         if (gSkipIconLoaded) {
             float icon_size = 44.0f;
             float pad = 14.0f;
@@ -88,7 +87,7 @@ void RenderSplashScreen(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_Border,        ImVec4(0, 0, 0, 0));
 
             if (ImGui::ImageButton("##SkipSplash",
-                (void*)(intptr_t)gSkipIconTexture,
+                reinterpret_cast<void*>(static_cast<intptr_t>(gSkipIconTexture)),
                 ImVec2(icon_size, icon_size),
                 ImVec2(0, 0), ImVec2(1, 1),
                 ImVec4(0, 0, 0, 0)))

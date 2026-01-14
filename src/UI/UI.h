@@ -13,8 +13,8 @@
 #include <string>
 
 class Archive;
-class AreaFile; // Forward declaration
-class AreaRender; // Forward declaration
+class AreaFile;
+class AreaRender;
 
 typedef std::shared_ptr<Archive> ArchivePtr;
 typedef std::shared_ptr<AreaFile> AreaFilePtr;

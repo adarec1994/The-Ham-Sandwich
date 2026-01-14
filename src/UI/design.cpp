@@ -28,14 +28,17 @@ static GLuint CompileShader(GLenum type, const char* source)
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
-    int success;
-    char infoLog[512];
+
+    int success = 0;
+    char infoLog[512]{};
+
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success)
     {
-        glGetShaderInfoLog(shader, 512, NULL, infoLog);
+        glGetShaderInfoLog(shader, 512, nullptr, infoLog);
         std::cout << "ERROR::SHADER::COMPILATION_FAILED\n" << infoLog << std::endl;
     }
+
     return shader;
 }
 
@@ -59,8 +62,8 @@ void InitGrid(AppState& state)
         }
     )";
 
-    GLuint vertexShader = CompileShader(GL_VERTEX_SHADER, vertexShaderSource);
-    GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
+    const GLuint vertexShader   = CompileShader(GL_VERTEX_SHADER, vertexShaderSource);
+    const GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
 
     state.grid.ShaderProgram = glCreateProgram();
     glAttachShader(state.grid.ShaderProgram, vertexShader);
@@ -70,28 +73,44 @@ void InitGrid(AppState& state)
     glDeleteShader(fragmentShader);
 
     std::vector<float> vertices;
-    int size = 20;
-    float step = 1.0f;
 
+    constexpr int size = 20;
     for (int i = -size; i <= size; ++i)
     {
-        vertices.push_back((float)i * step); vertices.push_back(0.0f); vertices.push_back((float)-size * step);
-        vertices.push_back((float)i * step); vertices.push_back(0.0f); vertices.push_back((float)size * step);
+        constexpr float step = 1.0f;
 
-        vertices.push_back((float)-size * step); vertices.push_back(0.0f); vertices.push_back((float)i * step);
-        vertices.push_back((float)size * step);  vertices.push_back(0.0f); vertices.push_back((float)i * step);
+        const float fi = static_cast<float>(i) * step;
+        constexpr float fs = static_cast<float>(size) * step;
+
+        vertices.push_back(fi);   vertices.push_back(0.0f); vertices.push_back(-fs);
+        vertices.push_back(fi);   vertices.push_back(0.0f); vertices.push_back( fs);
+
+        vertices.push_back(-fs);  vertices.push_back(0.0f); vertices.push_back(fi);
+        vertices.push_back( fs);  vertices.push_back(0.0f); vertices.push_back(fi);
     }
 
-    state.grid.VertexCount = (int)vertices.size() / 3;
+    state.grid.VertexCount = static_cast<int>(vertices.size() / 3);
 
     glGenVertexArrays(1, &state.grid.VAO);
     glGenBuffers(1, &state.grid.VBO);
 
     glBindVertexArray(state.grid.VAO);
     glBindBuffer(GL_ARRAY_BUFFER, state.grid.VBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
+        vertices.data(),
+        GL_STATIC_DRAW
+    );
 
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glVertexAttribPointer(
+        0,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        3 * static_cast<GLsizei>(sizeof(float)),
+        nullptr
+    );
     glEnableVertexAttribArray(0);
 
     glBindVertexArray(0);
@@ -101,17 +120,18 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
 {
     int image_width = 0;
     int image_height = 0;
-    unsigned char* image_data = stbi_load(filename, &image_width, &image_height, NULL, 4);
-    if (image_data == NULL) return false;
+    unsigned char* image_data = stbi_load(filename, &image_width, &image_height, nullptr, 4);
+    if (image_data == nullptr)
+        return false;
 
     for (int i = 0; i < image_width * image_height * 4; i += 4)
     {
         unsigned char alpha = image_data[i + 3];
         if (alpha > 0)
         {
-            image_data[i]   = 255 - image_data[i];
-            image_data[i+1] = 255 - image_data[i+1];
-            image_data[i+2] = 255 - image_data[i+2];
+            image_data[i]     = 255 - image_data[i];
+            image_data[i + 1] = 255 - image_data[i + 1];
+            image_data[i + 2] = 255 - image_data[i + 2];
         }
     }
 
@@ -124,12 +144,24 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        image_width,
+        image_height,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        image_data
+    );
     glGenerateMipmap(GL_TEXTURE_2D);
 
     stbi_image_free(image_data);
+
     *out_width = image_width;
     *out_height = image_height;
+
     return true;
 }
 

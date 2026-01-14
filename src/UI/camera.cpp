@@ -16,7 +16,6 @@ void SnapCameraToLoaded(AppState& state)
 {
     if (gLoadedAreas.empty()) return;
 
-    // Calculate combined world bounds of all loaded areas
     glm::vec3 combinedMin(std::numeric_limits<float>::max());
     glm::vec3 combinedMax(std::numeric_limits<float>::lowest());
     bool hasValidBounds = false;
@@ -25,11 +24,9 @@ void SnapCameraToLoaded(AppState& state)
     {
         if (!area) continue;
 
-        // Use WORLD bounds which account for tile position
         glm::vec3 minBounds = area->getWorldMinBounds();
         glm::vec3 maxBounds = area->getWorldMaxBounds();
 
-        // Validate bounds
         if (minBounds.x <= maxBounds.x && minBounds.z <= maxBounds.z)
         {
             combinedMin = glm::min(combinedMin, minBounds);
@@ -38,16 +35,13 @@ void SnapCameraToLoaded(AppState& state)
         }
     }
 
-    // Fallback if no valid bounds found
     if (!hasValidBounds)
     {
-        // Try to at least get world offset from first area
-        auto& firstArea = gLoadedAreas.front();
-        if (firstArea)
+        if (auto& firstArea = gLoadedAreas.front(); firstArea)
         {
             glm::vec3 offset = firstArea->getWorldOffset();
             combinedMin = offset + glm::vec3(-100.0f, 0.0f, -100.0f);
-            combinedMax = offset + glm::vec3(612.0f, 100.0f, 612.0f);  // 512 + 100 margin
+            combinedMax = offset + glm::vec3(612.0f, 100.0f, 612.0f);
         }
         else
         {
@@ -56,34 +50,31 @@ void SnapCameraToLoaded(AppState& state)
         }
     }
 
-    // Calculate center and radius
     glm::vec3 center = (combinedMin + combinedMax) * 0.5f;
     float radius = glm::length(combinedMax - combinedMin) * 0.5f;
 
-    // Ensure minimum radius
     if (radius < 50.0f) radius = 250.0f;
 
-    // Set camera orientation looking down at terrain from an angle
     state.camera.Yaw = -45.0f;
     state.camera.Pitch = -30.0f;
 
-    // Calculate front vector from yaw/pitch
+    const float yawRad   = glm::radians(state.camera.Yaw);
+    const float pitchRad = glm::radians(state.camera.Pitch);
+
     glm::vec3 front;
-    front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
-    front.y = sin(glm::radians(state.camera.Pitch));
-    front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+    front.x = glm::cos(yawRad) * glm::cos(pitchRad);
+    front.y = glm::sin(pitchRad);
+    front.z = glm::sin(yawRad) * glm::cos(pitchRad);
+
     state.camera.Front = glm::normalize(front);
     state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
-    // Position camera at distance from center, looking toward it
     float distance = radius * 1.5f;
     state.camera.Position = center - (state.camera.Front * distance);
 
-    // Adjust movement speed based on terrain size
     state.camera.MovementSpeed = std::max(50.0f, radius * 0.5f);
 
-    // Debug output
     std::cout << "Camera snapped to terrain:\n";
     std::cout << "  World Min: (" << combinedMin.x << ", " << combinedMin.y << ", " << combinedMin.z << ")\n";
     std::cout << "  World Max: (" << combinedMax.x << ", " << combinedMax.y << ", " << combinedMax.z << ")\n";
@@ -96,12 +87,14 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
     {
-        AppState* state = (AppState*)glfwGetWindowUserPointer(window);
-        if (state)
+        if (auto* state = static_cast<AppState*>(glfwGetWindowUserPointer(window)))
         {
-            state->camera.MovementSpeed += (float)yoffset * 5.0f;
-            if (state->camera.MovementSpeed < 1.0f) state->camera.MovementSpeed = 1.0f;
-            if (state->camera.MovementSpeed > 500.0f) state->camera.MovementSpeed = 500.0f;
+            state->camera.MovementSpeed += static_cast<float>(yoffset) * 5.0f;
+
+            if (state->camera.MovementSpeed < 1.0f)
+                state->camera.MovementSpeed = 1.0f;
+            if (state->camera.MovementSpeed > 500.0f)
+                state->camera.MovementSpeed = 500.0f;
         }
     }
 }
@@ -125,13 +118,16 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
         state.camera.Yaw   += mouse_delta.x * state.camera.MouseSensitivity;
         state.camera.Pitch -= mouse_delta.y * state.camera.MouseSensitivity;
 
-        if (state.camera.Pitch > 89.0f) state.camera.Pitch = 89.0f;
+        if (state.camera.Pitch > 89.0f)  state.camera.Pitch = 89.0f;
         if (state.camera.Pitch < -89.0f) state.camera.Pitch = -89.0f;
 
+        const float yawRad   = glm::radians(state.camera.Yaw);
+        const float pitchRad = glm::radians(state.camera.Pitch);
+
         glm::vec3 front;
-        front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
-        front.y = sin(glm::radians(state.camera.Pitch));
-        front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+        front.x = glm::cos(yawRad) * glm::cos(pitchRad);
+        front.y = glm::sin(pitchRad);
+        front.z = glm::sin(yawRad) * glm::cos(pitchRad);
         state.camera.Front = glm::normalize(front);
 
         state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));

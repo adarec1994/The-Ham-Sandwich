@@ -1,10 +1,11 @@
 #include "DataTable.h"
 #include <fstream>
+#include <filesystem>
 #include <string>
 
 void DataTable::exportAsSql(const std::wstring& filePath)
 {
-    std::wofstream os(filePath);
+   std::wofstream os{std::filesystem::path(filePath)};
 
     os << L"CREATE TABLE " << mTableName << L"(";
 
@@ -132,7 +133,7 @@ void DataTable::exportAsSql(const std::wstring& filePath)
 }
 
 void DataTable::exportAsCsv(const std::wstring& filePath) {
-    std::wofstream os(filePath);
+   std::wofstream os{std::filesystem::path(filePath)};
 
     for (uint32 i = 0; i < mColumnHeaders.size(); ++i) {
        if (i != 0) {
