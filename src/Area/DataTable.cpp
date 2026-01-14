@@ -105,7 +105,6 @@ void DataTable::exportAsSql(const std::wstring& filePath)
           {
              uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             // uint64 highBits = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
@@ -195,7 +194,6 @@ void DataTable::exportAsCsv(const std::wstring& filePath) {
           {
              uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             // uint64 highBits = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;

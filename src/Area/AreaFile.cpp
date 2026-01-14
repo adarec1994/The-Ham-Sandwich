@@ -6,17 +6,14 @@
 #include <algorithm>
 #include <string>
 #include <zlib.h>
-#include <map>
 #include <memory>
 #include <cstring>
-#include <cwctype>
 #include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 #include "../tex/tex.h"
 
-// Constants matching the original WildStar terrain format
-const float AreaFile::UnitSize = 2.0f;  // Distance between vertices
-const float AreaFile::GRID_SIZE = 512.0f;  // Size of each area tile in world units
+const float AreaFile::UnitSize = 2.0f;
+const float AreaFile::GRID_SIZE = 512.0f;
 static DataTablePtr gWorldLayer = nullptr;
 
 std::vector<uint32> AreaChunkRender::indices;
@@ -28,9 +25,9 @@ const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms()
 }
 
 static inline int hexNibble(wchar_t c) {
-    if (c >= L'0' && c <= L'9') return (int)(c - L'0');
-    if (c >= L'a' && c <= L'f') return 10 + (int)(c - L'a');
-    if (c >= L'A' && c <= L'F') return 10 + (int)(c - L'A');
+    if (c >= L'0' && c <= L'9') return static_cast<int>(c - L'0');
+    if (c >= L'a' && c <= L'f') return 10 + static_cast<int>(c - L'a');
+    if (c >= L'A' && c <= L'F') return 10 + static_cast<int>(c - L'A');
     return -1;
 }
 
@@ -48,7 +45,7 @@ static std::wstring ReplaceExtension(const std::wstring& path, const std::wstrin
     return path.substr(0, lastDot) + newExt;
 }
 
-static GLuint LoadTextureFromArchive(ArchivePtr archive, const std::wstring& fullPath)
+static GLuint LoadTextureFromArchive(const ArchivePtr& archive, const std::wstring& fullPath)
 {
     if (!archive || fullPath.empty()) return 0;
 
@@ -97,16 +94,14 @@ void AreaFile::parseTileXYFromFilename()
 
 void AreaFile::calculateWorldOffset()
 {
-    // World grid: tile (64,64) is at origin (0,0)
-    // Each tile is 512 units
-    mWorldOffset.x = (float)(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
+    mWorldOffset.x = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
     mWorldOffset.y = 0.0f;
-    mWorldOffset.z = (float)(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+    mWorldOffset.z = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
 }
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
-    : mArchive(archive)
-    , mFile(file)
+    : mArchive(std::move(archive))
+    , mFile(std::move(file))
     , mMinBounds(std::numeric_limits<float>::max())
     , mMaxBounds(std::numeric_limits<float>::lowest())
 {
@@ -130,13 +125,13 @@ bool AreaFile::loadTexture() {
     if (!mFile || !mArchive) return false;
     std::wstring areaName = mFile->getEntryName();
     std::wstring texName = ReplaceExtension(areaName, L".tex");
-    auto parent = mFile->getParent();
-    if(parent) {
+
+    if(auto parent = mFile->getParent()) {
         for(auto& child : parent->getChildren()) {
-             if(child->getEntryName() == texName) {
-                 mTextureID = LoadTextureFromArchive(mArchive, child->getFullPath());
-                 if(mTextureID != 0) { mHasTexture = true; return true; }
-             }
+            if(child->getEntryName() == texName) {
+                mTextureID = LoadTextureFromArchive(mArchive, child->getFullPath());
+                if(mTextureID != 0) { mHasTexture = true; return true; }
+            }
         }
     }
     return false;
@@ -146,12 +141,9 @@ bool AreaFile::load()
 {
     if (mContent.size() < 8) return false;
 
-    // Load WorldLayer table for texture lookups
     if (gWorldLayer == nullptr && mArchive) {
-        auto genericEntry = mArchive->getByPath(L"DB\\WorldLayer.tbl");
-        if (genericEntry) {
-            auto fileEntry = std::dynamic_pointer_cast<FileEntry>(genericEntry);
-            if (fileEntry) {
+        if (auto genericEntry = mArchive->getByPath(L"DB\\WorldLayer.tbl")) {
+            if (auto fileEntry = std::dynamic_pointer_cast<FileEntry>(genericEntry)) {
                 gWorldLayer = std::make_shared<DataTable>(fileEntry, mArchive);
                 if (!gWorldLayer->initialLoadIDs()) gWorldLayer = nullptr;
             }
@@ -160,8 +152,15 @@ bool AreaFile::load()
 
     struct R {
         const uint8* p; const uint8* e;
-        bool can(size_t n) const { return (size_t)(e - p) >= n; }
-        uint32 u32le() { uint32 v = (uint32)p[0] | ((uint32)p[1] << 8) | ((uint32)p[2] << 16) | ((uint32)p[3] << 24); p += 4; return v; }
+        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
+        uint32 u32le() {
+            uint32 v = static_cast<uint32>(p[0]) |
+                      (static_cast<uint32>(p[1]) << 8) |
+                      (static_cast<uint32>(p[2]) << 16) |
+                      (static_cast<uint32>(p[3]) << 24);
+            p += 4;
+            return v;
+        }
         void bytes(void* out, size_t n) { memcpy(out, p, n); p += n; }
         void skip(size_t n) { p += n; }
     };
@@ -170,18 +169,15 @@ bool AreaFile::load()
     R r{ base, base + mContent.size() };
 
     uint32 sig = r.u32le();
-    uint32 ver = r.u32le();
 
-    // Check for 'area' signature (little-endian)
     if (sig != 0x61726561u && sig != 0x41524541u) return false;
 
-    // Find CHNK chunk
     std::vector<uint8> chnkData;
     while (r.can(8)) {
         uint32 magic = r.u32le();
         uint32 size = r.u32le();
         if (!r.can(size)) break;
-        if (magic == 0x43484e4Bu || magic == 0x4B4E4843u) { // 'CHNK'
+        if (magic == 0x43484e4Bu || magic == 0x4B4E4843u) {
             chnkData.resize(size);
             r.bytes(chnkData.data(), size);
         } else {
@@ -216,16 +212,13 @@ bool AreaFile::load()
 
         std::vector<uint8> cellData(size);
         cr.bytes(cellData.data(), size);
-        uint32 flags = *(const uint32*)cellData.data();
 
-        // Payload starts after the 4-byte flags
+        uint32 flags = *reinterpret_cast<const uint32*>(cellData.data());
+
         std::vector<uint8> payload(cellData.begin() + 4, cellData.end());
 
-        // Calculate base position for this cell within the area
-        // Each cell is 16x16 vertices at 2 units per vertex = 32 units per cell
-        // 16 cells per row = 512 units per area file
-        float cellBaseX = (float)(index % 16) * 16.0f * UnitSize;
-        float cellBaseZ = (float)(index / 16) * 16.0f * UnitSize;
+        float cellBaseX = static_cast<float>(index % 16) * 16.0f * UnitSize;
+        float cellBaseZ = static_cast<float>(index / 16) * 16.0f * UnitSize;
 
         auto chunk = std::make_shared<AreaChunkRender>(flags, payload, cellBaseX, cellBaseZ, mArchive);
         mChunks[index] = chunk;
@@ -240,7 +233,7 @@ bool AreaFile::load()
     }
 
     if (validCount > 0) {
-        mAverageHeight = totalH / (float)validCount;
+        mAverageHeight = totalH / static_cast<float>(validCount);
     } else {
         mMinBounds = glm::vec3(0, 0, 0);
         mMaxBounds = glm::vec3(512, 50, 512);
@@ -273,7 +266,7 @@ static void EnsureFallbackTextures() {
     }
 }
 
-void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, AreaChunkRenderPtr selectedChunk)
+void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk)
 {
     glUseProgram(shaderProgram);
     GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
@@ -288,9 +281,8 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     }
 
     const auto& u = AreaChunkRender::getUniforms();
-    if ((GLint)u.camPosition != -1) glUniform3f((GLint)u.camPosition, 0.0f, 0.0f, 0.0f);
+    if (static_cast<GLint>(u.camPosition) != -1) glUniform3f(static_cast<GLint>(u.camPosition), 0.0f, 0.0f, 0.0f);
 
-    // Apply world position transform based on tile coordinates
     glm::mat4 worldModel(1.0f);
     worldModel = glm::translate(worldModel, mWorldOffset);
     worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
@@ -314,10 +306,6 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     }
 }
 
-// ============================================================================
-// AreaChunkRender Implementation
-// ============================================================================
-
 AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseZ, ArchivePtr archive)
     : mChunkData(payload)
     , mFlags(flags)
@@ -326,7 +314,6 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
     , mSplatTexture(0)
     , mColorMapTexture(0)
 {
-    // Must have at least heightmap, texture IDs, and blend values
     if (!hasHeightmap() || !hasTextureIds() || !hasBlendValues()) {
         return;
     }
@@ -337,13 +324,11 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
     struct ColorData { uint16 data[65][65]; };
 #pragma pack(pop)
 
-    // Calculate offsets based on sequential data layout
     size_t ofsHeightmap = 0;
-    size_t ofsTexIds = sizeof(HeightMap);                    // 722 bytes
-    size_t ofsBlend = ofsTexIds + 4 * sizeof(uint32);        // +16 = 738 bytes
-    size_t ofsColorMap = ofsBlend + sizeof(BlendData);       // +8450 = 9188 bytes
+    size_t ofsTexIds = sizeof(HeightMap);
+    size_t ofsBlend = ofsTexIds + 4 * sizeof(uint32);
+    size_t ofsColorMap = ofsBlend + sizeof(BlendData);
 
-    // Verify we have enough data
     if (mChunkData.size() < ofsBlend + sizeof(BlendData)) {
         std::cout << "Chunk data too small: " << mChunkData.size() << " bytes\n";
         return;
@@ -358,9 +343,7 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         colorData = (ColorData*)(mChunkData.data() + ofsColorMap);
     }
 
-    // Build index buffer (shared across all chunks)
     if (indices.empty()) {
-        // Diamond pattern: 16x16 cells, each with 4 triangles (center point subdivision)
         indices.resize(16 * 16 * 4 * 3);
 
         for (uint32 i = 0; i < 16; ++i) {
@@ -368,23 +351,18 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
                 uint32 tribase = (i * 16 + j) * 4 * 3;
                 uint32 ibase = i * 33 + j;
 
-                // Four triangles per cell, sharing center vertex
-                // Top-left triangle
                 indices[tribase + 0] = ibase;
                 indices[tribase + 1] = ibase + 1;
-                indices[tribase + 2] = ibase + 17;  // Center vertex
+                indices[tribase + 2] = ibase + 17;
 
-                // Top-right triangle
                 indices[tribase + 3] = ibase + 1;
                 indices[tribase + 4] = ibase + 34;
                 indices[tribase + 5] = ibase + 17;
 
-                // Bottom-right triangle
                 indices[tribase + 6] = ibase + 34;
                 indices[tribase + 7] = ibase + 33;
                 indices[tribase + 8] = ibase + 17;
 
-                // Bottom-left triangle
                 indices[tribase + 9] = ibase + 33;
                 indices[tribase + 10] = ibase;
                 indices[tribase + 11] = ibase + 17;
@@ -392,7 +370,6 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         }
     }
 
-    // Build vertex buffer with heightmap data
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
 
@@ -400,21 +377,15 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
 
     for (int32 y = -1; y < 18; ++y) {
         for (int32 x = -1; x < 18; ++x) {
-            // Read height with hole mask removed
             uint16 h = hm.data[y + 1][x + 1] & 0x7FFF;
 
             AreaVertex v{};
 
-            // Position: 2 units between vertices, starting at baseX/baseZ
             v.x = baseX + (float)x * AreaFile::UnitSize;
             v.z = baseZ + (float)y * AreaFile::UnitSize;
 
-            // Height: raw value / 8 - 2048 (sea level offset)
             v.y = -2048.0f + (float)h / 8.0f;
 
-            // UV coordinates: map 0-16 range to 0-1 for proper texture tiling
-            // The -1 and 17 vertices are edge vertices for normal calculation
-            // Inner 17x17 grid (0-16) maps to 0.0-1.0
             v.u = (float)x / 16.0f;
             v.v = (float)y / 16.0f;
 
@@ -434,7 +405,6 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         mAverageHeight = totalHeight / (float)validHeights;
     }
 
-    // Load textures from WorldLayer database
     mTexScales = Vector4(1.0f);
 
     if (archive && gWorldLayer) {
@@ -446,7 +416,6 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
                     GLuint glID = LoadTextureFromArchive(archive, layer.colorMapPath);
                     mLayerTextures.push_back(glID);
 
-                    // Calculate texture scale from metersPerTexture
                     float scale = 1.0f;
                     if (layer.metersPerTexture > 0.1f) {
                         scale = 1.0f / (layer.metersPerTexture / 32.0f);
@@ -461,15 +430,13 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         }
     }
 
-    // Build blend/splat texture from blend data
-    // Each uint16 contains 4 nibbles (4 bits each) for the 4 texture layers
     mBlendValues.resize(65 * 65);
     std::fill(mBlendValues.begin(), mBlendValues.end(), 0);
 
     for (uint32 i = 0; i < 4; ++i) {
         for (uint32 j = 0; j < 65 * 65; ++j) {
             uint16 val = blend.data[j / 65][j % 65];
-            uint32 value = (val >> (i * 4)) & 0xF;  // Extract 4-bit value for layer i
+            uint32 value = (val >> (i * 4)) & 0xF;
             uint8 weight = (uint8)((value / 15.0f) * 255.0f);
             mBlendValues[j] |= (weight << (8 * i));
         }
@@ -483,7 +450,6 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 65, 65, 0, GL_RGBA, GL_UNSIGNED_BYTE, mBlendValues.data());
 
-    // Build color map texture if present
     if (hasColorMap() && colorData) {
         std::vector<uint32> colorValues(65 * 65);
         for (uint32 j = 0; j < 65 * 65; ++j) {
@@ -507,14 +473,11 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 65, 65, 0, GL_RGBA, GL_UNSIGNED_BYTE, colorValues.data());
     }
 
-    // Extend vertex buffer to include center vertices for diamond pattern
     extendBuffer();
 
-    // Calculate normals and tangents
     calcNormals();
     calcTangentBitangent();
 
-    // Create OpenGL buffers
     glGenVertexArrays(1, &mVAO);
     glGenBuffers(1, &mVBO);
     glGenBuffers(1, &mEBO);
@@ -526,19 +489,15 @@ AreaChunkRender::AreaChunkRender(uint32 flags, const std::vector<uint8>& payload
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32), indices.data(), GL_STATIC_DRAW);
 
-    // Position
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)0);
 
-    // Normal
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, nx));
 
-    // Tangent
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, tanx));
 
-    // TexCoord
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, u));
 
@@ -559,7 +518,6 @@ void AreaChunkRender::render() {
     if (!mVAO) return;
     const auto& u = getUniforms();
 
-    // Bind splat/blend texture
     glActiveTexture(GL_TEXTURE8);
     if (mSplatTexture != 0) {
         glBindTexture(GL_TEXTURE_2D, mSplatTexture);
@@ -568,7 +526,6 @@ void AreaChunkRender::render() {
     }
     if ((GLint)u.alphaTexture != -1) glUniform1i((GLint)u.alphaTexture, 8);
 
-    // Bind layer textures
     for (size_t i = 0; i < 4; ++i) {
         glActiveTexture(GL_TEXTURE0 + (GLenum)i);
         if (i < mLayerTextures.size() && mLayerTextures[i] != 0) {
@@ -579,10 +536,8 @@ void AreaChunkRender::render() {
         if ((GLint)u.textures[i] != -1) glUniform1i((GLint)u.textures[i], (GLint)i);
     }
 
-    // Set texture scales
     if ((GLint)u.texScale != -1) glUniform4fv((GLint)u.texScale, 1, &mTexScales[0]);
 
-    // Bind normal textures (fallback to flat normal)
     for (int i = 0; i < 4; ++i) {
         if ((GLint)u.normalTextures[i] != -1) {
             glActiveTexture(GL_TEXTURE4 + i);
@@ -591,7 +546,6 @@ void AreaChunkRender::render() {
         }
     }
 
-    // Color map
     if (hasColorMap() && mColorMapTexture != 0) {
         glActiveTexture(GL_TEXTURE9);
         glBindTexture(GL_TEXTURE_2D, mColorMapTexture);
@@ -607,11 +561,9 @@ void AreaChunkRender::render() {
 }
 
 void AreaChunkRender::extendBuffer() {
-    // Create final vertex buffer: 17x17 corner vertices + 16x16 center vertices
     std::vector<AreaVertex> vertices(17 * 17 + 16 * 16);
     mFullVertices = mVertices;
 
-    // Copy inner 17x17 grid (skip outer edge used for normal calculation)
     for (uint32 i = 0; i < 17; ++i) {
         for (uint32 j = 0; j < 17; ++j) {
             auto idx = i * 33 + j;
@@ -619,7 +571,6 @@ void AreaChunkRender::extendBuffer() {
         }
     }
 
-    // Create center vertices for diamond pattern (average of 4 corners)
     for (uint32 i = 0; i < 16; ++i) {
         for (uint32 j = 0; j < 16; ++j) {
             auto idx = 17 + i * 33 + j;
@@ -643,7 +594,6 @@ void AreaChunkRender::extendBuffer() {
 }
 
 void AreaChunkRender::calcNormals() {
-    // Calculate normals for corner vertices using 4-neighbor cross products
     for (uint32 i = 1; i < 18; ++i) {
         for (uint32 j = 1; j < 18; ++j) {
             auto& tl = mFullVertices[(i - 1) * 19 + j - 1];
@@ -672,7 +622,6 @@ void AreaChunkRender::calcNormals() {
         }
     }
 
-    // Average normals for center vertices
     for (uint32 i = 0; i < 16; ++i) {
         for (uint32 j = 0; j < 16; ++j) {
             auto idx = 17 + i * 33 + j;

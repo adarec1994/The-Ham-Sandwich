@@ -268,7 +268,6 @@ void DirectoryEntry::parseChildren() {
     }
 }
 
-// FIX: Use std::shared_ptr<FileEntry> and std::vector<unsigned char> explicitly
 void Archive::getFileData(std::shared_ptr<FileEntry> file, std::vector<unsigned char>& content)
 {
     std::cout << "\n=== getFileData ===\n";

@@ -158,7 +158,7 @@ public:
     [[nodiscard]] int getTileX() const { return mTileX; }
     [[nodiscard]] int getTileY() const { return mTileY; }
 
-    void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, AreaChunkRenderPtr selectedChunk);
+    void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk);
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
     [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }

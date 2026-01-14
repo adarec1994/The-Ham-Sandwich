@@ -50,7 +50,6 @@ struct AppState {
     bool archivesLoaded = false;
     std::vector<ArchivePtr> archives;
 
-    // Area Rendering State
     AreaFilePtr currentArea;
     AreaRenderPtr areaRender;
 

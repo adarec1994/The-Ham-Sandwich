@@ -563,9 +563,8 @@ namespace Tex
         if (!state.texPreview) return false;
 
         state.texPreview->open = true;
-        state.texPreview->title = "Texture Preview"; // Consider using fileEntry->getEntryName() if available
+        state.texPreview->title = "Texture Preview";
 
-        // This handles glDeleteTextures internally if texture != 0
         bool uploaded = UploadRGBAtoGL(img, state.texPreview->texture, state.texPreview->texW, state.texPreview->texH);
         state.texPreview->hasTexture = uploaded;
 
@@ -583,32 +582,25 @@ namespace Tex
     {
         if (!ps.open) return;
 
-        // 1. Center the Window
-        // ImGuiCond_Appearing means it sets the position only when the window first opens
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImVec2 center = viewport->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-        // 2. Set Fixed Size (550x580)
         ImGui::SetNextWindowSize(ImVec2(550, 580), ImGuiCond_Appearing);
 
-        // Optional: ImGuiWindowFlags_NoResize to lock size, or just NoCollapse
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 
         if (ImGui::Begin(ps.title.c_str(), &ps.open, flags))
         {
             if (ps.hasTexture && ps.texture != 0)
             {
-                // 3. Get available space inside the window
                 ImVec2 avail = ImGui::GetContentRegionAvail();
 
-                // Reserve space for text at bottom
                 avail.y -= ImGui::GetTextLineHeightWithSpacing();
 
                 float w = (float)ps.texW;
                 float h = (float)ps.texH;
 
-                // 4. Calculate Scale to Fit (Aspect Fit)
                 float scale = 1.0f;
                 if (w > 0.0f && h > 0.0f)
                 {
@@ -619,16 +611,13 @@ namespace Tex
 
                 ImVec2 drawSize(w * scale, h * scale);
 
-                // 5. Center the Image
                 float cursorX = ImGui::GetCursorPosX() + (avail.x - drawSize.x) * 0.5f;
                 float cursorY = ImGui::GetCursorPosY() + (avail.y - drawSize.y) * 0.5f;
 
                 ImGui::SetCursorPos(ImVec2(cursorX, cursorY));
 
-                // Draw Image
                 ImGui::Image((void*)(intptr_t)ps.texture, drawSize);
 
-                // 6. Draw Info Text at bottom
                 ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x, ImGui::GetWindowHeight() - ImGui::GetTextLineHeightWithSpacing() - ImGui::GetStyle().WindowPadding.y));
                 ImGui::Text("Original Size: %dx%d | Display: %.0fx%.0f", ps.texW, ps.texH, drawSize.x, drawSize.y);
             }

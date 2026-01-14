@@ -48,7 +48,6 @@ void LoadArchivesFromPath(AppState& state, const std::string& pathStr) {
     if (!state.archives.empty()) {
         state.archivesLoaded = true;
 
-        // Keep the sliding panel hidden by default
         state.sidebar_visible = false;
         state.sidebar_current_width = 0.0f;
     }
