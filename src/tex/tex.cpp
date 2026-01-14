@@ -5,12 +5,21 @@
 #include <algorithm>
 #include <iostream>
 #include "../UI/UI.h"
-
 #include "../Archive.h"
 #include "imgui.h"
 
+#ifndef GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
+#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT 0x83F1
+#endif
+#ifndef GL_COMPRESSED_RGBA_S3TC_DXT3_EXT
+#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT 0x83F2
+#endif
+#ifndef GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
+#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
+#endif
+
 static inline uint32_t rd_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
-static inline int32_t  rd_i32(const uint8_t* p) { int32_t v; std::memcpy(&v, p, 4); return v; }
+static inline uint16_t rd_u16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 
 static bool read_bytes(const uint8_t* data, size_t size, size_t& off, void* dst, size_t n)
 {
@@ -35,6 +44,12 @@ namespace Tex
         hasTexture = false;
         title.clear();
         open = false;
+
+        showR = true;
+        showG = true;
+        showB = true;
+        showA = true;
+        opaquePreview = false;
     }
 
     bool Header::read(const uint8_t* data, size_t size, size_t& offset)
@@ -105,11 +120,12 @@ namespace Tex
             }
             break;
         case 1:  textureType = TextureType::Argb2; break;
-        case 5:  textureType = TextureType::Rgb; break;
+        case 5:  textureType = TextureType::Argb16; break;
         case 6:  textureType = TextureType::Grayscale; break;
         case 13: textureType = TextureType::DXT1; break;
         case 14: textureType = TextureType::DXT3; break;
         case 15: textureType = TextureType::DXT5; break;
+        case 18: textureType = TextureType::Garbage; break;
         default: break;
         }
 
@@ -125,6 +141,8 @@ namespace Tex
         {
             int w = (int)(width / std::pow(2.0, (double)m));
             int h = (int)(height / std::pow(2.0, (double)m));
+            if (w < 1) w = 1;
+            if (h < 1) h = 1;
             sizes[increment] = (int)(((w + 3) / 4) * ((h + 3) / 4) * blockSize);
             increment++;
         }
@@ -350,6 +368,72 @@ namespace Tex
         return true;
     }
 
+    bool File::decodeArgb16(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+
+        const uint8_t* p = src;
+        for (int i = 0; i < width * height; ++i)
+        {
+            uint8_t bg = p[0];
+            uint8_t ra = p[1];
+            p += 2;
+
+            uint8_t r = (uint8_t)(((ra & 0xF0) >> 4) | (ra & 0xF0));
+            uint8_t g = (uint8_t)((bg & 0x0F) | ((bg & 0x0F) << 4));
+            uint8_t b = (uint8_t)(((bg & 0xF0) >> 4) | (bg & 0xF0));
+            uint8_t a = (uint8_t)((ra & 0x0F) | ((ra & 0x0F) << 4));
+
+            outRGBA[i * 4 + 0] = r;
+            outRGBA[i * 4 + 1] = g;
+            outRGBA[i * 4 + 2] = b;
+            outRGBA[i * 4 + 3] = a;
+        }
+        return true;
+    }
+
+    bool File::decodeGrayscale(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+        int padding = (4 - (width % 4)) % 4;
+
+        const uint8_t* p = src;
+        for (int i = 0; i < width * height; ++i)
+        {
+            uint8_t val = *p++;
+            outRGBA[i * 4 + 0] = val;
+            outRGBA[i * 4 + 1] = val;
+            outRGBA[i * 4 + 2] = val;
+            outRGBA[i * 4 + 3] = 255;
+
+            if ((i + 1) % width == 0) p += padding;
+        }
+        return true;
+    }
+
+    bool File::decodeGarbage(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
+    {
+        if (!src || width <= 0 || height <= 0) return false;
+        outRGBA.assign((size_t)width * (size_t)height * 4, 0);
+
+        const uint8_t* p = src;
+        for (int i = 0; i < width * height; ++i)
+        {
+            uint16_t r = rd_u16(p); p += 2;
+            uint16_t g = rd_u16(p); p += 2;
+            uint16_t b = rd_u16(p); p += 2;
+            uint16_t a = rd_u16(p); p += 2;
+
+            outRGBA[i * 4 + 0] = (uint8_t)(r >> 8);
+            outRGBA[i * 4 + 1] = (uint8_t)(g >> 8);
+            outRGBA[i * 4 + 2] = (uint8_t)(b >> 8);
+            outRGBA[i * 4 + 3] = (uint8_t)(a >> 8);
+        }
+        return true;
+    }
+
     bool File::readFromMemory(const uint8_t* data, size_t size)
     {
         failedReading = false;
@@ -378,13 +462,15 @@ namespace Tex
             }
         }
 
+        int mipCount = std::max(1, header.mipCount);
+
         switch (header.textureType)
         {
         case TextureType::DXT1:
             {
-                auto sizes = calculateDXTSizes(header.mipCount, header.width, header.height, 8);
-                mipData.reserve((size_t)header.mipCount);
-                for (int i = 0; i < header.mipCount; ++i)
+                auto sizes = calculateDXTSizes(mipCount, header.width, header.height, 8);
+                mipData.reserve((size_t)mipCount);
+                for (int i = 0; i < mipCount; ++i)
                 {
                     int sz = sizes[i];
                     if (sz < 0 || off + (size_t)sz > size) { failedReading = true; return false; }
@@ -398,9 +484,9 @@ namespace Tex
         case TextureType::DXT3:
         case TextureType::DXT5:
             {
-                auto sizes = calculateDXTSizes(header.mipCount, header.width, header.height, 16);
-                mipData.reserve((size_t)header.mipCount);
-                for (int i = 0; i < header.mipCount; ++i)
+                auto sizes = calculateDXTSizes(mipCount, header.width, header.height, 16);
+                mipData.reserve((size_t)mipCount);
+                for (int i = 0; i < mipCount; ++i)
                 {
                     int sz = sizes[i];
                     if (sz < 0 || off + (size_t)sz > size) { failedReading = true; return false; }
@@ -454,9 +540,40 @@ namespace Tex
                 }
                 return true;
             }
+        case TextureType::Argb16:
+        case TextureType::Grayscale:
+        case TextureType::Garbage:
+            {
+                mipData.reserve((size_t)mipCount);
+                for (int i = mipCount - 1; i >= 0; --i)
+                {
+                    int m = i;
+                    int w = (int)(header.width / std::pow(2.0, (double)m));
+                    int h = (int)(header.height / std::pow(2.0, (double)m));
+                    if (w < 1) w = 1;
+                    if (h < 1) h = 1;
+
+                    size_t levelSize = 0;
+                    if (header.textureType == TextureType::Argb16) {
+                        levelSize = (size_t)(w * h * 2);
+                    } else if (header.textureType == TextureType::Grayscale) {
+                         size_t padding = (4 - (w % 4)) % 4;
+                         levelSize = (size_t)((w + padding) * h);
+                    } else if (header.textureType == TextureType::Garbage) {
+                        levelSize = (size_t)(w * h * 8);
+                    }
+
+                    if (off + levelSize > size) { failedReading = true; return false; }
+                    std::vector<uint8_t> buf(levelSize);
+                    std::memcpy(buf.data(), data + off, levelSize);
+                    off += levelSize;
+
+                    mipData.insert(mipData.begin(), std::move(buf));
+                }
+                return true;
+            }
 
         case TextureType::Rgb:
-        case TextureType::Grayscale:
         case TextureType::Unknown:
         default:
             failedReading = true;
@@ -504,18 +621,38 @@ namespace Tex
             size_t expected = (size_t)w * (size_t)h * 4;
             if (buf.size() < expected) return false;
             out.width = w; out.height = h;
-            out.rgba.resize(expected);
-            std::memcpy(out.rgba.data(), buf.data(), expected);
+            out.rgba.assign(buf.begin(), buf.begin() + expected);
+            for(size_t i=0; i<out.rgba.size(); i+=4) {
+                std::swap(out.rgba[i], out.rgba[i+2]);
+            }
             return true;
+        }
+        if (header.textureType == TextureType::Argb16)
+        {
+            out.width = w; out.height = h;
+            return decodeArgb16(mipData[largestMipIndex].data(), w, h, out.rgba);
+        }
+        if (header.textureType == TextureType::Grayscale)
+        {
+            out.width = w; out.height = h;
+            return decodeGrayscale(mipData[largestMipIndex].data(), w, h, out.rgba);
+        }
+        if (header.textureType == TextureType::Garbage)
+        {
+            out.width = w; out.height = h;
+            return decodeGarbage(mipData[largestMipIndex].data(), w, h, out.rgba);
         }
 
         return false;
     }
 
-    static bool UploadRGBAtoGL(const ImageRGBA& img, GLuint& outTex, int& outW, int& outH)
+    static bool UploadToGL(const Tex::File& tf, GLuint& outTex, int& outW, int& outH)
     {
-        if (img.width <= 0 || img.height <= 0) return false;
-        if (img.rgba.empty()) return false;
+        if (tf.mipData.empty()) return false;
+
+        const auto& data = tf.mipData.back();
+        int w = tf.header.width;
+        int h = tf.header.height;
 
         if (outTex != 0) glDeleteTextures(1, &outTex);
         glGenTextures(1, &outTex);
@@ -526,53 +663,68 @@ namespace Tex
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+        GLenum compressedFmt = 0;
+        switch(tf.header.textureType) {
+            case Tex::TextureType::DXT1: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; break;
+            case Tex::TextureType::DXT3: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
+            case Tex::TextureType::DXT5: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; break;
+            default: break;
+        }
 
-        outW = img.width;
-        outH = img.height;
+        if (compressedFmt != 0) {
+            glCompressedTexImage2D(GL_TEXTURE_2D, 0, compressedFmt, w, h, 0, (GLsizei)data.size(), data.data());
+        } else {
+            Tex::ImageRGBA img;
+            if (!tf.decodeLargestMipToRGBA(img)) {
+                glDeleteTextures(1, &outTex);
+                outTex = 0;
+                return false;
+            }
+            w = img.width;
+            h = img.height;
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+        }
+
+        outW = w;
+        outH = h;
         return true;
     }
 
     bool OpenTexPreviewFromEntry(AppState& state, const ArchivePtr& arc, const FileEntryPtr& fileEntry)
     {
-        std::cout << "[TexPreview] Request to open texture..." << std::endl;
+        if (!state.texPreview) return false;
+
+        if (state.texPreview->texture != 0) {
+            glDeleteTextures(1, &state.texPreview->texture);
+            state.texPreview->texture = 0;
+        }
+        state.texPreview->hasTexture = false;
+        state.texPreview->texW = 0;
+        state.texPreview->texH = 0;
+        state.texPreview->open = true;
+        state.texPreview->title = "Processing...";
 
         if (!arc || !fileEntry) return false;
 
         std::vector<uint8_t> bytes;
         arc->getFileData(fileEntry, bytes);
 
-        if (bytes.empty()) {
-            std::cout << "[TexPreview] Error: File data is empty." << std::endl;
-            return false;
-        }
+        if (bytes.empty()) return false;
 
         Tex::File tf;
         if (!tf.readFromMemory(bytes.data(), bytes.size())) {
-            std::cout << "[TexPreview] Error: Header parse failed." << std::endl;
+            state.texPreview->title = "Error reading texture";
             return false;
         }
 
-        Tex::ImageRGBA img;
-        if (!tf.decodeLargestMipToRGBA(img)) {
-            std::cout << "[TexPreview] Error: Decode failed." << std::endl;
-            return false;
-        }
-
-        if (!state.texPreview) return false;
-
-        state.texPreview->open = true;
-        state.texPreview->title = "Texture Preview";
-
-        bool uploaded = UploadRGBAtoGL(img, state.texPreview->texture, state.texPreview->texW, state.texPreview->texH);
+        bool uploaded = UploadToGL(tf, state.texPreview->texture, state.texPreview->texW, state.texPreview->texH);
         state.texPreview->hasTexture = uploaded;
 
         if (uploaded) {
-            std::cout << "[TexPreview] GL Texture " << state.texPreview->texture
-                      << " created (" << state.texPreview->texW << "x" << state.texPreview->texH << ")." << std::endl;
+            state.texPreview->title = "Texture Preview";
         } else {
-            std::cout << "[TexPreview] Error: UploadRGBAtoGL failed." << std::endl;
+            state.texPreview->title = "Error uploading texture";
         }
 
         return uploaded;
@@ -586,7 +738,7 @@ namespace Tex
         ImVec2 center = viewport->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-        ImGui::SetNextWindowSize(ImVec2(550, 580), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(650, 580), ImGuiCond_Appearing);
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
 
@@ -594,32 +746,68 @@ namespace Tex
         {
             if (ps.hasTexture && ps.texture != 0)
             {
-                ImVec2 avail = ImGui::GetContentRegionAvail();
+                float controlWidth = ImGui::CalcTextSize("Opaque Preview").x + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::GetStyle().WindowPadding.x * 2.0f;
+                if (controlWidth < 120.0f) controlWidth = 120.0f;
 
-                avail.y -= ImGui::GetTextLineHeightWithSpacing();
-
-                float w = (float)ps.texW;
-                float h = (float)ps.texH;
-
-                float scale = 1.0f;
-                if (w > 0.0f && h > 0.0f)
+                if (ImGui::BeginTable("TexLayout", 2, ImGuiTableFlags_Resizable))
                 {
-                    float scaleX = avail.x / w;
-                    float scaleY = avail.y / h;
-                    scale = (scaleX < scaleY) ? scaleX : scaleY;
+                    ImGui::TableSetupColumn("Image", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Controls", ImGuiTableColumnFlags_WidthFixed, controlWidth);
+
+                    ImGui::TableNextRow();
+
+                    ImGui::TableSetColumnIndex(0);
+                    ImVec2 avail = ImGui::GetContentRegionAvail();
+                    avail.y -= ImGui::GetTextLineHeightWithSpacing();
+
+                    float w = (float)ps.texW;
+                    float h = (float)ps.texH;
+
+                    float scale = 1.0f;
+                    if (w > 0.0f && h > 0.0f)
+                    {
+                        float scaleX = avail.x / w;
+                        float scaleY = avail.y / h;
+                        scale = (scaleX < scaleY) ? scaleX : scaleY;
+                    }
+
+                    ImVec2 drawSize(w * scale, h * scale);
+
+                    float cursorX = ImGui::GetCursorPosX() + (avail.x - drawSize.x) * 0.5f;
+                    float cursorY = ImGui::GetCursorPosY() + (avail.y - drawSize.y) * 0.5f;
+
+                    ImGui::SetCursorPos(ImVec2(cursorX, cursorY));
+
+                    glBindTexture(GL_TEXTURE_2D, ps.texture);
+
+                    GLint swizzle = ps.opaquePreview ? GL_ONE : GL_ALPHA;
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, swizzle);
+
+                    ImVec4 tint(
+                        ps.showR ? 1.0f : 0.0f,
+                        ps.showG ? 1.0f : 0.0f,
+                        ps.showB ? 1.0f : 0.0f,
+                        ps.showA ? 1.0f : 0.0f
+                    );
+
+                    ImGui::Image((void*)(intptr_t)ps.texture, drawSize, ImVec2(0,0), ImVec2(1,1), tint, ImVec4(0,0,0,0));
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("Channels");
+                    ImGui::Separator();
+                    ImGui::Checkbox("Red", &ps.showR);
+                    ImGui::Checkbox("Green", &ps.showG);
+                    ImGui::Checkbox("Blue", &ps.showB);
+                    ImGui::Checkbox("Alpha", &ps.showA);
+
+                    ImGui::Dummy(ImVec2(0, 10));
+                    ImGui::Checkbox("Opaque Preview", &ps.opaquePreview);
+
+                    ImGui::EndTable();
                 }
 
-                ImVec2 drawSize(w * scale, h * scale);
-
-                float cursorX = ImGui::GetCursorPosX() + (avail.x - drawSize.x) * 0.5f;
-                float cursorY = ImGui::GetCursorPosY() + (avail.y - drawSize.y) * 0.5f;
-
-                ImGui::SetCursorPos(ImVec2(cursorX, cursorY));
-
-                ImGui::Image((void*)(intptr_t)ps.texture, drawSize);
-
                 ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x, ImGui::GetWindowHeight() - ImGui::GetTextLineHeightWithSpacing() - ImGui::GetStyle().WindowPadding.y));
-                ImGui::Text("Original Size: %dx%d | Display: %.0fx%.0f", ps.texW, ps.texH, drawSize.x, drawSize.y);
+                ImGui::Text("Size: %dx%d", ps.texW, ps.texH);
             }
             else
             {

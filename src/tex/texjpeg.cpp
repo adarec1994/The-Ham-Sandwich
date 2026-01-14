@@ -374,10 +374,10 @@ namespace Tex
                         prevDc[0] = ProcessBlock(prevDc[0], s, dcLum, acLum, lq[0], true, l0);
                         prevDc[1] = ProcessBlock(prevDc[1], s, dcChrom, acChrom, cq[1], false, c0);
                         prevDc[2] = ProcessBlock(prevDc[2], s, dcChrom, acChrom, cq[2], false, c1);
-                        if (hdr.layerInfos[3].hasReplacement == 0)
+
+                        bool hasL1 = (hdr.layerInfos[3].hasReplacement == 0);
+                        if (hasL1)
                             prevDc[3] = ProcessBlock(prevDc[3], s, dcLum, acLum, lq[3], true, l1);
-                        else
-                            std::memset(l1, 1, sizeof(l1));
 
                         for (int r = 0; r < 8; r++)
                         {
@@ -386,7 +386,11 @@ namespace Tex
                             {
                                 if (x * 8 + c >= w) continue;
                                 int idx = r * 8 + c;
-                                auto color = YCbCrToColor32(l0[idx], l1[idx], c0[idx], c1[idx]);
+
+                                int16_t alpha = 1;
+                                if (hasL1) alpha = l1[idx];
+
+                                auto color = YCbCrToColor32(l0[idx], alpha, c0[idx], c1[idx]);
                                 int pIdx = ((y * 8 + r) * w + (x * 8 + c)) * 4;
                                 data[pIdx + 0] = color[0]; data[pIdx + 1] = color[1];
                                 data[pIdx + 2] = color[2]; data[pIdx + 3] = color[3];
@@ -411,6 +415,8 @@ namespace Tex
                 BitStream bs(input.data(), input.size());
                 int w = (int)(header.width / std::pow(2, mipLevel));
                 int h = (int)(header.height / std::pow(2, mipLevel));
+                if (w < 1) w = 1;
+                if (h < 1) h = 1;
                 outW = w; outH = h;
 
                 std::vector<uint8_t> data;

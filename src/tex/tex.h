@@ -23,8 +23,10 @@ namespace Tex
         Jpeg3,
         Argb1,
         Argb2,
+        Argb16,
         Rgb,
         Grayscale,
+        Garbage,
         DXT1,
         DXT3,
         DXT5,
@@ -81,6 +83,9 @@ namespace Tex
         static bool decodeDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeDXT3(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeDXT5(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
+        static bool decodeArgb16(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
+        static bool decodeGrayscale(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
+        static bool decodeGarbage(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
     };
 
     struct PreviewState
@@ -91,6 +96,13 @@ namespace Tex
         int texW = 0;
         int texH = 0;
         bool hasTexture = false;
+
+        bool showR = true;
+        bool showG = true;
+        bool showB = true;
+        bool showA = true;
+
+        bool opaquePreview = false;
 
         void clearGL();
     };

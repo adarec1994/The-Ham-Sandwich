@@ -14,6 +14,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <unordered_map>
+#include <codecvt>
+#include <locale>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
