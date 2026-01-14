@@ -2,8 +2,8 @@
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include "imgui.h"
 #include "../tex/tex.h"
+#include "imgui.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -55,8 +55,8 @@ struct AppState {
     AreaRenderPtr areaRender;
 
     bool showFileDialog = false;
-    std::string currentDialogPath = "C:\\Program Files (x86)\\NCSOFT\\WildStar";
-    std::string selectedPath = "";
+    std::string currentDialogPath = R"(C:\Program Files (x86)\NCSOFT\WildStar)";
+    std::string selectedPath;
 
     GLuint iconTexture = 0;
     int iconWidth = 0;
@@ -84,5 +84,5 @@ void InitUI(AppState& state);
 void InitGrid(AppState& state);
 void UpdateCamera(GLFWwindow* window, AppState& state);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
-void RenderAreas(AppState& state, int display_w, int display_h);
+void RenderAreas(const AppState& state, int display_w, int display_h);
 void RenderUI(AppState& state);

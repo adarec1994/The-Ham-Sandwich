@@ -39,10 +39,10 @@ struct WorldLayerEntry
 
 struct AreaVertex
 {
-    float x, y, z;       // Position
-    float nx, ny, nz;    // Normal
-    float tanx, tany, tanz, tanw;  // Tangent
-    float u, v;          // Texture coordinates
+    float x, y, z;
+    float nx, ny, nz;
+    float tanx, tany, tanz, tanw;
+    float u, v;
 };
 #pragma pack(pop)
 
@@ -99,18 +99,18 @@ public:
     AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseZ, ArchivePtr archive);
     ~AreaChunkRender();
 
-    float getMaxHeight() const { return mMaxHeight; }
-    float getAverageHeight() const { return mAverageHeight; }
-    glm::vec3 getMinBounds() const { return mMinBounds; }
-    glm::vec3 getMaxBounds() const { return mMaxBounds; }
-    uint32 getFlags() const { return mFlags; }
+    [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
+    [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }
+    [[nodiscard]] glm::vec3 getMinBounds() const { return mMinBounds; }
+    [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
+    [[nodiscard]] uint32 getFlags() const { return mFlags; }
 
-    bool hasHeightmap() const { return (mFlags & 1) != 0; }
-    bool hasTextureIds() const { return (mFlags & 2) != 0; }
-    bool hasBlendValues() const { return (mFlags & 4) != 0; }
-    bool hasColorMap() const { return (mFlags & 8) != 0; }
-    bool hasUnk1() const { return (mFlags & 0x40) != 0 || (mFlags & 0x80) != 0; }
-    bool hasShadowMap() const { return (mFlags & 0x100) != 0; }
+    [[nodiscard]] bool hasHeightmap() const { return (mFlags & 1) != 0; }
+    [[nodiscard]] bool hasTextureIds() const { return (mFlags & 2) != 0; }
+    [[nodiscard]] bool hasBlendValues() const { return (mFlags & 4) != 0; }
+    [[nodiscard]] bool hasColorMap() const { return (mFlags & 8) != 0; }
+    [[nodiscard]] bool hasUnk1() const { return (mFlags & 0x40) != 0 || (mFlags & 0x80) != 0; }
+    [[nodiscard]] bool hasShadowMap() const { return (mFlags & 0x100) != 0; }
 
     void render();
 
@@ -140,7 +140,6 @@ class AreaFile
     int mTileX = 0;
     int mTileY = 0;
 
-    // World offset based on tile coordinates
     glm::vec3 mWorldOffset = glm::vec3(0.0f);
 
     unsigned int mTextureID = 0;
@@ -156,33 +155,29 @@ public:
     bool load();
 
     void setTileXY(int tx, int ty) { mTileX = tx; mTileY = ty; calculateWorldOffset(); }
-    int getTileX() const { return mTileX; }
-    int getTileY() const { return mTileY; }
+    [[nodiscard]] int getTileX() const { return mTileX; }
+    [[nodiscard]] int getTileY() const { return mTileY; }
 
     void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, AreaChunkRenderPtr selectedChunk);
 
-    float getMaxHeight() const { return mMaxHeight; }
-    float getAverageHeight() const { return mAverageHeight; }
+    [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
+    [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }
 
-    // Local bounds (within area file coordinate space)
-    glm::vec3 getMinBounds() const { return mMinBounds; }
-    glm::vec3 getMaxBounds() const { return mMaxBounds; }
+    [[nodiscard]] glm::vec3 getMinBounds() const { return mMinBounds; }
+    [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
 
-    // World bounds (accounting for tile position)
-    glm::vec3 getWorldMinBounds() const { return mMinBounds + mWorldOffset; }
-    glm::vec3 getWorldMaxBounds() const { return mMaxBounds + mWorldOffset; }
-    glm::vec3 getWorldOffset() const { return mWorldOffset; }
+    [[nodiscard]] glm::vec3 getWorldMinBounds() const { return mMinBounds + mWorldOffset; }
+    [[nodiscard]] glm::vec3 getWorldMaxBounds() const { return mMaxBounds + mWorldOffset; }
+    [[nodiscard]] glm::vec3 getWorldOffset() const { return mWorldOffset; }
 
-    // World grid constants
-    static const int WORLD_GRID_ORIGIN = 64;
+    static constexpr int WORLD_GRID_ORIGIN = 64;
     static const float GRID_SIZE;
 
     void rotate90() { mGlobalRotation += 90.0f; }
-    float getRotation() const { return mGlobalRotation; }
+    [[nodiscard]] float getRotation() const { return mGlobalRotation; }
 
-    const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
+    [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
 
-    // Unit size: distance between adjacent vertices (2 units)
     static const float UnitSize;
 };
 

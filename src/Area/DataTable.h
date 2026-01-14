@@ -59,14 +59,14 @@ class DataTable
     std::map<uint32, uint32> mRows;
     ArchivePtr mArchive;
 
-    std::wstring escapeJsonString(const std::wstring& input) {
+    static std::wstring escapeJsonString(const std::wstring& input) {
        std::wostringstream ss;
-       for (auto iter = input.cbegin(); iter != input.cend(); iter++) {
-          if (std::iswalnum(*iter) == false && std::iswprint(*iter) == false) {
+       for (wchar_t ch : input) {
+          if (!std::iswalnum(ch) && !std::iswprint(ch)) {
              continue;
           }
 
-          switch (*iter) {
+          switch (ch) {
           case L'\\': ss << L"\\\\"; break;
           case L'"': ss << L"\\\""; break;
           case L'/': ss << L"\\/"; break;
@@ -75,20 +75,20 @@ class DataTable
           case L'\n': ss << L"\\n"; break;
           case L'\r': ss << L"\\r"; break;
           case L'\t': ss << L"\\t"; break;
-          default: ss << *iter; break;
+          default: ss << ch; break;
           }
        }
        return ss.str();
     }
 
-    std::wstring escapeSql(const std::wstring& input) {
+    static std::wstring escapeSql(const std::wstring& input) {
        std::wostringstream ss;
-       for (auto iter = input.cbegin(); iter != input.cend(); iter++) {
-          if (std::iswalnum(*iter) == false && std::iswprint(*iter) == false) {
+       for (wchar_t ch : input) {
+          if (!std::iswalnum(ch) && !std::iswprint(ch)) {
              continue;
           }
 
-          switch (*iter) {
+          switch (ch) {
           case L'\\': ss << L"\\\\"; break;
           case L'"': ss << L"'"; break;
           case L'/': ss << L"\\/"; break;
@@ -97,34 +97,41 @@ class DataTable
           case L'\n': ss << L"\\n"; break;
           case L'\r': ss << L"\\r"; break;
           case L'\t': ss << L"\\t"; break;
-          default: ss << *iter; break;
+          default: ss << ch; break;
           }
        }
        return ss.str();
     }
 
 public:
-    DataTable(FileEntryPtr file, ArchivePtr archive) : mArchive(archive) {
-       if (mArchive && file) {
-          mArchive->getFileData(file, mContent);
-          mStream = std::unique_ptr<BinStream>(new BinStream(mContent));
-       }
-    }
+   DataTable(const FileEntryPtr& file, ArchivePtr archive)
+           : mHeader{}, mArchive(std::move(archive))
+   {
+      if (mArchive && file) {
+         mArchive->getFileData(file, mContent);
+         mStream = std::make_unique<BinStream>(mContent);
+      }
+   }
 
     void exportAsSql(const std::wstring& filePath);
 
     bool initialLoad() {
+       // Check if stream was successfully created in constructor
+       if (!mStream) {
+           return false;
+       }
+
        mHeader = mStream->read<DTBLHeader>();
 
        mStream->seek(0x60 + mHeader.ofsFieldDesc);
-       mFieldDescs.resize((uint32)mHeader.numRows);
+       mFieldDescs.resize(static_cast<uint32>(mHeader.numRows));
 
        mStream->read(mFieldDescs.data(), sizeof(FieldDescEntry) * mHeader.numRows);
 
-       std::vector<wchar_t> tableName((uint32)mHeader.lenTableName);
+       std::vector<wchar_t> tableName(static_cast<uint32>(mHeader.lenTableName));
        mStream->seek(0x60);
        mStream->read(tableName.data(), tableName.size() * sizeof(wchar_t));
-       tableName.push_back((wchar_t)0);
+       tableName.push_back(static_cast<wchar_t>(0));
 
        mTableName = tableName.data();
 
@@ -147,10 +154,12 @@ public:
           case FieldType::StringTableOffset:
              size += 8;
              break;
+          default:
+             break;
           }
 
-          wchar_t* title = (wchar_t*)(mContent.data() + offset + mFieldDescs[i].ofsFieldTitleTable);
-          mColumnHeaders.push_back(title);
+          auto* title = reinterpret_cast<wchar_t*>(mContent.data() + offset + mFieldDescs[i].ofsFieldTitleTable);
+          mColumnHeaders.emplace_back(title);
        }
 
        return true;
@@ -164,7 +173,7 @@ public:
        mStream->seek(mHeader.ofsEntries + 0x60);
        for (uint32 i = 0; i < mHeader.numEntries; ++i) {
           mStream->seek(mHeader.ofsEntries + 0x60 + i * mHeader.recordSize);
-          uint32 id = mStream->read<uint32>();
+          auto id = mStream->read<uint32>();
           mRows[id] = i;
        }
 
@@ -177,18 +186,17 @@ public:
           return false;
        }
 
-
        mStream->seek(index * mHeader.recordSize + 0x60 + mHeader.ofsEntries);
        std::vector<uint8> data(static_cast<std::size_t>(mHeader.recordSize));
        mStream->read(data.data(), data.size());
 
        bool skip = false;
-       uint8* outPtr = (uint8*)&row;
+       auto* outPtr = reinterpret_cast<uint8*>(&row);
        uint32 curOffset = 0;
        uint8* ptr = data.data();
 
        for (uint32 j = 0; j < mFieldDescs.size(); ++j) {
-          if (skip == true && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
+          if (skip && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
              ptr += 4;
           }
 
@@ -198,7 +206,7 @@ public:
                 return false;
              }
 
-             *(uint32*)(outPtr + curOffset) = *(uint32*)ptr;
+             *reinterpret_cast<uint32*>(outPtr + curOffset) = *reinterpret_cast<uint32*>(ptr);
              curOffset += sizeof(uint32);
              ptr += sizeof(uint32);
              break;
@@ -208,7 +216,7 @@ public:
                 return false;
              }
 
-             *(uint64*)(outPtr + curOffset) = *(uint64*)ptr;
+             *reinterpret_cast<uint64*>(outPtr + curOffset) = *reinterpret_cast<uint64*>(ptr);
              curOffset += sizeof(uint64);
              ptr += sizeof(uint64);
              break;
@@ -218,7 +226,7 @@ public:
                 return false;
              }
 
-             *(float*)(outPtr + curOffset) = *(float*)ptr;
+             *reinterpret_cast<float*>(outPtr + curOffset) = *reinterpret_cast<float*>(ptr);
              curOffset += sizeof(float);
              ptr += sizeof(float);
              break;
@@ -227,7 +235,7 @@ public:
              if (curOffset + 1 > sizeof(T)) {
                 return false;
              }
-             *(bool*)(outPtr + curOffset) = (*(uint32*)ptr) != 0 ? true : false;
+             *reinterpret_cast<bool*>(outPtr + curOffset) = (*reinterpret_cast<uint32*>(ptr)) != 0;
              curOffset += sizeof(bool);
              ptr += 4;
              break;
@@ -238,13 +246,15 @@ public:
                 return false;
              }
 
-             uint32 ofsLower = *(uint32*)ptr;
+             uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             uint64 offset = *(uint32*)ptr;
+             // Unused high bytes of offset?
+             // uint64 offset = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
 
+             uint64 offset = 0;
              if (ofsLower > 0) {
                 offset = ofsLower;
              }
@@ -252,15 +262,17 @@ public:
              offset += mHeader.ofsEntries + 0x60;
 
              if (offset < mContent.size()) {
-                *(wchar_t**)(outPtr + curOffset) = (wchar_t*)&mContent[(uint32)offset];
+                *reinterpret_cast<wchar_t**>(outPtr + curOffset) = reinterpret_cast<wchar_t*>(&mContent[static_cast<uint32>(offset)]);
              }
              else {
-                *(wchar_t**)(outPtr + curOffset) = (wchar_t*)L"";
+                *reinterpret_cast<wchar_t**>(outPtr + curOffset) = const_cast<wchar_t*>(L"");
              }
 
              curOffset += sizeof(wchar_t*);
           }
           break;
+          default:
+              break;
           }
        }
 
@@ -279,12 +291,12 @@ public:
        mStream->read(data.data(), data.size());
 
        bool skip = false;
-       uint8* outPtr = (uint8*)&row;
+       auto* outPtr = reinterpret_cast<uint8*>(&row);
        uint32 curOffset = 0;
        uint8* ptr = data.data();
 
        for (uint32 j = 0; j < mFieldDescs.size(); ++j) {
-          if (skip == true && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
+          if (skip && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
              ptr += 4;
           }
 
@@ -294,7 +306,7 @@ public:
                 return false;
              }
 
-             *(uint32*)(outPtr + curOffset) = *(uint32*)ptr;
+             *reinterpret_cast<uint32*>(outPtr + curOffset) = *reinterpret_cast<uint32*>(ptr);
              curOffset += sizeof(uint32);
              ptr += sizeof(uint32);
              break;
@@ -304,7 +316,7 @@ public:
                 return false;
              }
 
-             *(uint64*)(outPtr + curOffset) = *(uint64*)ptr;
+             *reinterpret_cast<uint64*>(outPtr + curOffset) = *reinterpret_cast<uint64*>(ptr);
              curOffset += sizeof(uint64);
              ptr += sizeof(uint64);
              break;
@@ -314,7 +326,7 @@ public:
                 return false;
              }
 
-             *(float*)(outPtr + curOffset) = *(float*)ptr;
+             *reinterpret_cast<float*>(outPtr + curOffset) = *reinterpret_cast<float*>(ptr);
              curOffset += sizeof(float);
              ptr += sizeof(float);
              break;
@@ -323,7 +335,7 @@ public:
              if (curOffset + 1 > sizeof(T)) {
                 return false;
              }
-             *(bool*)(outPtr + curOffset) = (*(uint32*)ptr) != 0 ? true : false;
+             *reinterpret_cast<bool*>(outPtr + curOffset) = (*reinterpret_cast<uint32*>(ptr)) != 0;
              curOffset += sizeof(bool);
              ptr += 4;
              break;
@@ -334,13 +346,14 @@ public:
                 return false;
              }
 
-             uint32 ofsLower = *(uint32*)ptr;
+             uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             uint64 offset = *(uint32*)ptr;
+             // uint64 offset = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
 
+             uint64 offset = 0;
              if (ofsLower > 0) {
                 offset = ofsLower;
              }
@@ -348,15 +361,17 @@ public:
              offset += mHeader.ofsEntries + 0x60;
 
              if (offset < mContent.size()) {
-                *(wchar_t**)(outPtr + curOffset) = (wchar_t*)&mContent[(uint32)offset];
+                *reinterpret_cast<wchar_t**>(outPtr + curOffset) = reinterpret_cast<wchar_t*>(&mContent[static_cast<uint32>(offset)]);
              }
              else {
-                *(wchar_t**)(outPtr + curOffset) = (wchar_t*)L"";
+                *reinterpret_cast<wchar_t**>(outPtr + curOffset) = const_cast<wchar_t*>(L"");
              }
 
              curOffset += sizeof(wchar_t*);
           }
           break;
+          default:
+              break;
           }
        }
 
@@ -368,18 +383,18 @@ public:
           return L"[ ]";
        }
 
-       end = std::min(end, (uint32)mHeader.numEntries);
+       end = std::min(end, static_cast<uint32>(mHeader.numEntries));
        uint32 numElems = end - start;
 
        mStream->seek(mHeader.ofsEntries + 0x60 + start * mHeader.recordSize);
-       std::vector<uint8> dataBuffer((uint32)mHeader.recordSize);
+       std::vector<uint8> dataBuffer(static_cast<uint32>(mHeader.recordSize));
        std::wstringstream strm;
        strm << L"[ ";
 
        bool first = true;
 
        for (uint32 i = 0; i < numElems; ++i) {
-          if (first == true) {
+          if (first) {
              first = false;
           }
           else {
@@ -395,7 +410,7 @@ public:
           bool skip = false;
 
           for (uint32 j = 0; j < mFieldDescs.size(); ++j) {
-             if (skip == true && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
+             if (skip && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
                 ptr += 4;
              }
 
@@ -409,49 +424,52 @@ public:
              strm << L"\"" << mColumnHeaders[j] << L"\": ";
              switch (mFieldDescs[j].type) {
              case FieldType::UInt32:
-                strm << *(uint32*)ptr;
+                strm << *reinterpret_cast<uint32*>(ptr);
                 ptr += sizeof(uint32);
                 break;
 
              case FieldType::UInt64:
-                strm << *(uint64*)ptr;
+                strm << *reinterpret_cast<uint64*>(ptr);
                 ptr += sizeof(uint64);
                 break;
 
              case FieldType::Float:
-                strm << *(float*)ptr;
+                strm << *reinterpret_cast<float*>(ptr);
                 ptr += sizeof(float);
                 break;
 
              case FieldType::Bool:
-                strm << ((*(uint32*)ptr) != 0 ? L"\"true\"" : L"\"false\"");
+                strm << ((*reinterpret_cast<uint32*>(ptr)) != 0 ? L"\"true\"" : L"\"false\"");
                 ptr += 4;
                 break;
 
              case FieldType::StringTableOffset:
              {
-                uint32 ofsLower = *(uint32*)ptr;
+                uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
                 ptr += 4;
-                uint64 offset = *(uint32*)ptr;
+                // uint64 offset = *reinterpret_cast<uint32*>(ptr);
                 ptr += 4;
 
                 skip = ofsLower == 0;
 
+                uint64 offset = 0;
                 if (ofsLower > 0) {
                    offset = ofsLower;
                 }
 
                 offset += mHeader.ofsEntries + 0x60;
 
-                std::wstring str = L"";
-                if (offset < mContent.size()) {
-                   str = (wchar_t*)&mContent[(uint32)offset];
-                }
+                   std::wstring str;
+                   if (offset < mContent.size()) {
+                      str = reinterpret_cast<wchar_t*>(&mContent[static_cast<uint32>(offset)]);
+                   }
 
                 str = escapeJsonString(str);
                 strm << L"\"" << str << L"\"";
              }
              break;
+             default:
+                 break;
              }
           }
 
@@ -463,7 +481,7 @@ public:
        return strm.str();
     }
 
-    std::wstring createScheme() {
+   [[nodiscard]] std::wstring createScheme() const {
        std::wstringstream strm;
        strm << L"[ { \"name\": \"" << mColumnHeaders[0] << L"\", \"label\": \"" << mColumnHeaders[0] << L"\", \"editable\": false, \"cell\": \"integer\" }";
 
@@ -483,6 +501,9 @@ public:
           case FieldType::Float:
              strm << L"number";
              break;
+          default:
+             strm << L"string";
+             break;
           }
 
           strm << L"\" }";
@@ -495,9 +516,9 @@ public:
 
     void exportAsCsv(const std::wstring& filePath);
 
-    uint32 numEntries() const { return (uint32)mHeader.numEntries; }
+   [[nodiscard]] uint32 numEntries() const { return static_cast<uint32>(mHeader.numEntries); }
 
-    const std::vector<std::wstring>& getColumnTitles() const { return mColumnHeaders; }
+   [[nodiscard]] const std::vector<std::wstring>& getColumnTitles() const { return mColumnHeaders; }
 };
 
 typedef std::shared_ptr<DataTable> DataTablePtr;

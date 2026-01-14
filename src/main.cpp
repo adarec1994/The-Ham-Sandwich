@@ -2,9 +2,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "UI/UI.h"
-#include "Area/AreaFile.h"   // Add this
-#include "Area/AreaRender.h"
-#include "tex/tex.h"
+#include "Area/AreaFile.h"
 
 #define GL_SILENCE_DEPRECATION
 #include <glad/glad.h>
@@ -31,7 +29,7 @@ int main()
 
     glfwSetScrollCallback(window, scroll_callback);
 
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }

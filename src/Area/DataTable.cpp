@@ -17,7 +17,7 @@ void DataTable::exportAsSql(const std::wstring& filePath)
 
     for (uint32 i = 0; i < mHeader.numRows; ++i)
     {
-       wchar_t* title = (wchar_t*)(mContent.data() + offset + mFieldDescs[i].ofsFieldTitleTable);
+       auto* title = reinterpret_cast<wchar_t*>(mContent.data() + offset + mFieldDescs[i].ofsFieldTitleTable);
 
        os << title << " ";
 
@@ -34,6 +34,9 @@ void DataTable::exportAsSql(const std::wstring& filePath)
        case FieldType::StringTableOffset:
           os << "VARCHAR(255)";
           break;
+       default:
+          os << "TEXT";
+          break;
        }
 
        if (i == mHeader.numRows - 1)
@@ -41,14 +44,14 @@ void DataTable::exportAsSql(const std::wstring& filePath)
        else
           os << ", ";
 
-       mColumnHeaders.push_back(title);
+       mColumnHeaders.emplace_back(title);
     }
 
     os << std::endl;
 
     mStream->seek(mHeader.ofsEntries + 0x60);
 
-    std::vector<uint8> dataBuffer((uint32)mHeader.recordSize);
+    std::vector<uint8> dataBuffer(static_cast<uint32>(mHeader.recordSize));
 
     for (uint32 i = 0; i < mHeader.numEntries; ++i)
     {
@@ -61,7 +64,7 @@ void DataTable::exportAsSql(const std::wstring& filePath)
 
        for (uint32 j = 0; j < mFieldDescs.size(); ++j)
        {
-          if (skip == true && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset)
+          if (skip && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset)
           {
              ptr += 4;
              skip = false;
@@ -79,49 +82,52 @@ void DataTable::exportAsSql(const std::wstring& filePath)
           switch (mFieldDescs[j].type)
           {
           case FieldType::UInt32:
-             os << *(uint32*)ptr;
+             os << *reinterpret_cast<uint32*>(ptr);
              ptr += sizeof(uint32);
              break;
 
           case FieldType::UInt64:
-             os << *(uint64*)ptr;
+             os << *reinterpret_cast<uint64*>(ptr);
              ptr += sizeof(uint64);
              break;
 
           case FieldType::Float:
-             os << *(float*)ptr;
+             os << *reinterpret_cast<float*>(ptr);
              ptr += sizeof(float);
              break;
 
           case FieldType::Bool:
-             os << ((*(uint32*)ptr) != 0 ? L"0" : L"1");
+             os << ((*reinterpret_cast<uint32*>(ptr)) != 0 ? L"0" : L"1");
              ptr += 4;
              break;
 
           case FieldType::StringTableOffset:
           {
-             uint32 ofsLower = *(uint32*)ptr;
+             uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             uint64 offset = *(uint32*)ptr;
+             // uint64 highBits = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
 
+             uint64 strOffset = 0;
              if (ofsLower > 0) {
-                offset = ofsLower;
+                strOffset = ofsLower;
              }
 
-             offset += mHeader.ofsEntries + 0x60;
+             strOffset += mHeader.ofsEntries + 0x60;
 
-             std::wstring str = L"";
-             if (offset < mContent.size()) {
-                str = (wchar_t*)&mContent[(uint32)offset];
+             std::wstring str;
+             if (strOffset < mContent.size()) {
+                str = reinterpret_cast<wchar_t*>(&mContent[static_cast<uint32>(strOffset)]);
              }
 
              str = escapeSql(str);
              os << L"\"" << str << L"\"";
           }
           break;
+          default:
+              break;
           }
        }
 
@@ -147,7 +153,7 @@ void DataTable::exportAsCsv(const std::wstring& filePath) {
 
     mStream->seek(mHeader.ofsEntries + 0x60);
 
-    std::vector<uint8> dataBuffer((uint32)mHeader.recordSize);
+    std::vector<uint8> dataBuffer(static_cast<uint32>(mHeader.recordSize));
 
     for (uint32 i = 0; i < mHeader.numEntries; ++i) {
        mStream->read(dataBuffer.data(), dataBuffer.size());
@@ -156,7 +162,7 @@ void DataTable::exportAsCsv(const std::wstring& filePath) {
        bool skip = false;
 
        for (uint32 j = 0; j < mFieldDescs.size(); ++j) {
-          if (skip == true && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
+          if (skip && (j > 0 && mFieldDescs[j - 1].type == FieldType::StringTableOffset) && mFieldDescs[j].type != FieldType::StringTableOffset) {
              ptr += 4;
           }
 
@@ -166,49 +172,52 @@ void DataTable::exportAsCsv(const std::wstring& filePath) {
 
           switch (mFieldDescs[j].type) {
           case FieldType::UInt32:
-             os << *(uint32*)ptr;
+             os << *reinterpret_cast<uint32*>(ptr);
              ptr += sizeof(uint32);
              break;
 
           case FieldType::UInt64:
-             os << *(uint64*)ptr;
+             os << *reinterpret_cast<uint64*>(ptr);
              ptr += sizeof(uint64);
              break;
 
           case FieldType::Float:
-             os << *(float*)ptr;
+             os << *reinterpret_cast<float*>(ptr);
              ptr += sizeof(float);
              break;
 
           case FieldType::Bool:
-             os << ((*(uint32*)ptr) != 0 ? L"0" : L"1");
+             os << ((*reinterpret_cast<uint32*>(ptr)) != 0 ? L"0" : L"1");
              ptr += 4;
              break;
 
           case FieldType::StringTableOffset:
           {
-             uint32 ofsLower = *(uint32*)ptr;
+             uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             uint64 offset = *(uint32*)ptr;
+             // uint64 highBits = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
 
+             uint64 strOffset = 0;
              if (ofsLower > 0) {
-                offset = ofsLower;
+                strOffset = ofsLower;
              }
 
-             offset += mHeader.ofsEntries + 0x60;
+             strOffset += mHeader.ofsEntries + 0x60;
 
-             std::wstring str = L"";
-             if (offset < mContent.size()) {
-                str = (wchar_t*)&mContent[(uint32)offset];
+             std::wstring str;
+             if (strOffset < mContent.size()) {
+                str = reinterpret_cast<wchar_t*>(&mContent[static_cast<uint32>(strOffset)]);
              }
 
              str = escapeJsonString(str);
              os << L"\"" << str << L"\"";
           }
           break;
+          default:
+              break;
           }
        }
 

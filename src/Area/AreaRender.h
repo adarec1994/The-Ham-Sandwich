@@ -1,6 +1,5 @@
 #pragma once
 #include <glad/glad.h>
-#include <glm/glm.hpp>
 
 class AreaRender
 {
@@ -11,5 +10,5 @@ public:
 	~AreaRender();
 
 	void init();
-	GLuint getProgram() const { return mShaderProgram; }
+	[[nodiscard]] GLuint getProgram() const { return mShaderProgram; }
 };
