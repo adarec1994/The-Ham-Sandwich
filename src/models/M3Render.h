@@ -5,6 +5,7 @@
 #include <glad/glad.h>
 #include <vector>
 #include <memory>
+#include <windows.h>
 
 class M3Render {
 public:

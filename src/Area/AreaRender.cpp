@@ -27,9 +27,6 @@ uniform mat4 model;
 
 out vec3 fragPos;
 out vec3 normal;
-out vec4 tangent;
-out vec2 texcoord;
-out vec2 splatUV;
 
 void main(void) {
     vec4 worldPos = model * vec4(position0, 1.0);
@@ -37,11 +34,6 @@ void main(void) {
 
     mat3 normalMatrix = mat3(model);
     normal = normalize(normalMatrix * normal0);
-    tangent = vec4(normalize(normalMatrix * tangent0.xyz), tangent0.w);
-
-    texcoord = texcoord0;
-
-    splatUV = clamp(texcoord, 0.0, 1.0);
 
     gl_Position = projection * view * worldPos;
 }
@@ -52,45 +44,12 @@ void main(void) {
 
 in vec3 fragPos;
 in vec3 normal;
-in vec4 tangent;
-in vec2 texcoord;
-in vec2 splatUV;
 
-uniform sampler2D textures[4];
-uniform sampler2D normalTextures[4];
-uniform sampler2D alphaTexture;
-uniform sampler2D colorTexture;
-
-uniform int hasColorMap;
-uniform vec4 texScale;
-uniform vec4 highlightColor;
 uniform vec4 baseColor;
-uniform vec3 camPosition;
 
 out vec4 FragColor;
 
 void main() {
-    vec4 blend = texture(alphaTexture, splatUV);
-
-    float total = blend.r + blend.g + blend.b + blend.a;
-    if (total > 0.001) {
-        blend /= total;
-    } else {
-        blend = vec4(1.0, 0.0, 0.0, 0.0);
-    }
-
-    vec4 col0 = texture(textures[0], texcoord * texScale.x);
-    vec4 col1 = texture(textures[1], texcoord * texScale.y);
-    vec4 col2 = texture(textures[2], texcoord * texScale.z);
-    vec4 col3 = texture(textures[3], texcoord * texScale.w);
-
-    vec4 albedo = col0 * blend.r + col1 * blend.g + col2 * blend.b + col3 * blend.a;
-
-    if (hasColorMap == 1) {
-        vec4 colorTint = texture(colorTexture, splatUV);
-        albedo.rgb *= colorTint.rgb * 2.0;
-    }
-
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
     vec3 N = normalize(normal);
     float NdotL = max(dot(N, lightDir), 0.0);
@@ -99,11 +58,7 @@ void main() {
     vec3 diffuse = vec3(0.7) * NdotL;
     vec3 lighting = ambient + diffuse;
 
-    vec4 finalColor = vec4(albedo.rgb * lighting, albedo.a);
-
-    finalColor *= baseColor * highlightColor;
-
-    FragColor = finalColor;
+    FragColor = vec4(lighting, 1.0) * baseColor;
 }
 )GLSL";
 
@@ -176,18 +131,10 @@ void main() {
     };
     if (modelLoc != -1) glUniformMatrix4fv(modelLoc, 1, GL_FALSE, identity);
 
-    GLint hlLoc = glGetUniformLocation(mShaderProgram, "highlightColor");
-    if (hlLoc != -1) glUniform4f(hlLoc, 1.0f, 1.0f, 1.0f, 1.0f);
-
     GLint colorLoc = glGetUniformLocation(mShaderProgram, "baseColor");
     if (colorLoc != -1) glUniform4f(colorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
-
-    GLint texScaleLoc = glGetUniformLocation(mShaderProgram, "texScale");
-    if (texScaleLoc != -1) glUniform4f(texScaleLoc, 8.0f, 8.0f, 8.0f, 8.0f);
 
     AreaChunkRender::geometryInit(mShaderProgram);
 
     glUseProgram(0);
-
-    std::cout << "Terrain shader initialized successfully.\n";
 }

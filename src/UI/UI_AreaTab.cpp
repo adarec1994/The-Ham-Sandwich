@@ -180,42 +180,6 @@ static bool HasAreaInSubtree(const IFileSystemEntryPtr& entry, const std::string
     return BuildAreaCacheForDir(entry, ql);
 }
 
-static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry)
-{
-    if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
-
-    // Reset reference position so first area renders at origin
-    ResetAreaReferencePosition();
-
-    gLoadedAreas.clear();
-    gSelectedChunk = nullptr;
-
-    for (const auto& child : folderEntry->getChildren())
-    {
-        if (!child || child->isDirectory()) continue;
-
-        const std::string childName = wstring_to_utf8(child->getEntryName());
-        if (!EndsWithNoCase(childName, ".area")) continue;
-
-        const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(child);
-        if (!fileEntry) continue;
-
-        const auto af = std::make_shared<AreaFile>(arc, fileEntry);
-        if (af->load())
-            gLoadedAreas.push_back(af);
-    }
-
-    if (!gLoadedAreas.empty())
-    {
-        state.currentArea = gLoadedAreas.back();
-        SnapCameraToLoaded(state);
-    }
-    else
-    {
-        state.currentArea.reset();
-    }
-}
-
 static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
 {
     if (!arc || !fileEntry) return;
@@ -307,8 +271,18 @@ static void RenderAreaTreeFiltered(AppState& state,
         ImGui::PushID(static_cast<const void*>(entry.get()));
 
         std::string loadLabel = std::string("Load ") + FormatFolderLabel(name);
-        if (ImGui::Button(loadLabel.c_str()))
-            LoadAreasInFolder(state, arc, entry);
+
+        // Disable button while loading
+        if (gIsLoadingAreas)
+        {
+            ImGui::BeginDisabled();
+            ImGui::Button(loadLabel.c_str());
+            ImGui::EndDisabled();
+        }
+        else if (ImGui::Button(loadLabel.c_str()))
+        {
+            StartLoadingAreasInFolder(state, arc, entry);
+        }
 
         if (!childFiles.empty())
         {

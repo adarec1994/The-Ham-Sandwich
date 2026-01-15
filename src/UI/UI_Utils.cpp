@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <codecvt>
 #include <locale>
+#include <windows.h>
 
 std::string wstring_to_utf8(const std::wstring& str)
 {

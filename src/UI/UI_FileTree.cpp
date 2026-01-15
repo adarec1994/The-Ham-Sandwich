@@ -2,6 +2,7 @@
 #include "UI_FileTree.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
+#include "UI_Tables.h"
 
 #include "../Archive.h"
 #include "../Area/AreaFile.h"  // For ResetAreaReferencePosition()
@@ -192,6 +193,11 @@ static void RenderEntryRecursive_Impl(
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
                                 LoadSingleM3(state, currentArc, fileEntry);
                         }
+                        else if (EndsWithNoCase(fname, ".tbl"))
+                        {
+                            if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
+                                UI_Tables::OpenTblFile(state, currentArc, fileEntry);
+                        }
                     }
                 }
             }
@@ -230,6 +236,11 @@ static void RenderEntryRecursive_Impl(
             {
                 if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
                     LoadSingleM3(state, currentArc, fileEntry);
+            }
+            else if (EndsWithNoCase(name, ".tbl"))
+            {
+                if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
+                    UI_Tables::OpenTblFile(state, currentArc, fileEntry);
             }
         }
     }

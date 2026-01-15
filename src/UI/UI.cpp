@@ -4,6 +4,7 @@
 #include "UI_FileTree.h"
 #include "UI_AreaTab.h"
 #include "UI_ModelTab.h"
+#include "UI_Tables.h"
 
 #include "../About/about.h"
 #include "../settings/Settings.h"
@@ -12,6 +13,8 @@
 #include "../tex/tex.h"
 
 #include <imgui.h>
+#include <algorithm>
+#include <cfloat>
 
 extern void PushSplashButtonColors();
 extern void PopSplashButtonColors();
@@ -20,8 +23,82 @@ extern unsigned int gAreaIconTexture;
 extern bool gCharacterIconLoaded;
 extern unsigned int gCharacterIconTexture;
 
+static void RenderLoadingOverlay()
+{
+    if (!gIsLoadingAreas) return;
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    // Semi-transparent overlay
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowBgAlpha(0.7f);
+
+    ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                     ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::Begin("##LoadingOverlay", nullptr, overlayFlags);
+    ImGui::End();
+
+    // Calculate dynamic window size based on content
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+
+    // Measure text width
+    char loadingText[512];
+    snprintf(loadingText, sizeof(loadingText), "Loading %s...", gLoadingAreasName.c_str());
+    float textWidth = ImGui::CalcTextSize(loadingText).x;
+
+    char countText[64];
+    snprintf(countText, sizeof(countText), "%d / %d areas", gLoadingAreasCurrent, gLoadingAreasTotal);
+    float countWidth = ImGui::CalcTextSize(countText).x;
+
+    float contentWidth = std::max(textWidth, countWidth);
+    float minWidth = 300.0f;
+    float maxWidth = viewport->Size.x * 0.8f;
+    float windowWidth = std::clamp(contentWidth + 60.0f, minWidth, maxWidth);
+
+    ImVec2 windowPos(
+        viewport->Pos.x + (viewport->Size.x - windowWidth) * 0.5f,
+        viewport->Pos.y + (viewport->Size.y - 120.0f) * 0.5f
+    );
+
+    ImGui::SetNextWindowPos(windowPos);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0), ImVec2(maxWidth, FLT_MAX));
+
+    ImGuiWindowFlags loadingFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+
+    if (ImGui::Begin("##LoadingWindow", nullptr, loadingFlags))
+    {
+        // Wrap text if too long
+        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+        ImGui::TextUnformatted(loadingText);
+        ImGui::PopTextWrapPos();
+
+        ImGui::Spacing();
+
+        float progress = gLoadingAreasTotal > 0
+            ? static_cast<float>(gLoadingAreasCurrent) / static_cast<float>(gLoadingAreasTotal)
+            : 0.0f;
+
+        ImGui::ProgressBar(progress, ImVec2(std::max(windowWidth - 40.0f, 260.0f), 20));
+
+        ImGui::Spacing();
+        ImGui::TextUnformatted(countText);
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(2);
+}
+
 void RenderUI(AppState& state)
 {
+    // Process any pending area loads
+    ProcessAreaLoading(state);
+
     if (!state.archivesLoaded)
     {
         PushSplashButtonColors();
@@ -212,7 +289,7 @@ void RenderUI(AppState& state)
             if (ImGui::Button("Models", ImVec2(strip_width, button_height)))
             {
                 if (state.active_tab_index == 2) state.sidebar_visible = !state.sidebar_visible;
-                else { state.active_tab_index = 2; state.sidebar_visible = true; }
+                else { state.active_tab_index == 2; state.sidebar_visible = true; }
             }
         }
         ImGui::PopStyleColor();
@@ -299,4 +376,9 @@ void RenderUI(AppState& state)
 
     if (state.show_models_window && state.m3Render)
         UI_Models::Draw(state);
+
+    UI_Tables::Draw(state);
+
+    // Render loading overlay last (on top of everything)
+    RenderLoadingOverlay();
 }

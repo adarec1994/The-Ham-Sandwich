@@ -30,7 +30,30 @@ if(NOT glad_POPULATED)
 endif()
 
 if(NOT TARGET glad)
-    add_library(glad STATIC "${glad_SOURCE_DIR}/src/glad.c")
+    add_library(glad STATIC "${glad_SOURCE_DIR}/src/glad.c"
+            src/Database/Tbl.cpp
+            src/Database/Tbl.h
+            src/Database/Definitions/Zonecompletion.h
+            src/Database/Definitions/Xpperlevel.h
+            src/Database/Definitions/Visualeffect.h
+            src/Database/Definitions/Worldzone.h
+            src/Database/Definitions/Worldwaterwake.h
+            src/Database/Definitions/Worldwatertype.h
+            src/Database/Definitions/Worldwaterlayer.h
+            src/Database/Definitions/Worldwaterfog.h
+            src/Database/Definitions/Worldwaterenvironment.h
+            src/Database/Definitions/Worldsocket.h
+            src/Database/Definitions/Worldsky.h
+            "src/Database/Definitions/Worldlocation2.h"
+            src/Database/Definitions/Worldlayer.h
+            src/Database/Definitions/Worldclutter.h
+            src/Database/Definitions/World.h
+            src/Database/Definitions/Wordfilteralt.h
+            src/Database/Definitions/Worldfilter.h
+            src/Database/Definitions/Wind.h
+            src/Database/Definitions/Watersurfaceeffect.h
+            src/Database/TblReader.h
+            src/Database/Definitions/WindSpawn.h)
     target_include_directories(glad PUBLIC "${glad_SOURCE_DIR}/include")
 endif()
 
@@ -145,6 +168,12 @@ add_executable(Wildstar_Studio_2
         src/UI/UI_AreaTab.h
         src/UI/UI_ModelTab.cpp
         src/UI/UI_ModelTab.h
+        src/Area/terraintexture.cpp
+        src/Area/terraintexture.h
+        src/Area/terrainshader.cpp
+        src/Area/terrainshader.h
+        src/UI/UI_Tables.cpp
+        src/UI/UI_Tables.h
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE

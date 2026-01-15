@@ -6,37 +6,12 @@
 #include <glm/glm.hpp>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
-#include "DataTable.h"
 
 typedef glm::mat4 Matrix;
 typedef glm::vec3 Vector3;
 typedef glm::vec4 Vector4;
 
 #pragma pack(push, 1)
-struct WorldLayerEntry
-{
-    uint32 id;
-    wchar_t* description;
-    float heightScale;
-    float heightOffset;
-    float parallaxScale;
-    float parallaxOffset;
-    float metersPerTexture;
-    wchar_t* colorMapPath;
-    wchar_t* normalMapPath;
-    uint32 averageColor;
-    uint32 projection;
-    uint32 materialType;
-    uint32 worldClutterId00;
-    uint32 worldClutterId01;
-    uint32 worldClutterId02;
-    uint32 worldClutterId03;
-    float specularPower;
-    float emissiveGlow;
-    float scrollSpeed00;
-    float scrollSpeed01;
-};
-
 struct AreaVertex
 {
     float x, y, z;
@@ -46,21 +21,64 @@ struct AreaVertex
 };
 #pragma pack(pop)
 
-// ChnkCell flags - from NexusForever ChnkCellFlags.cs
-// These are the FLAG BITS, not sequential values!
 namespace ChnkCellFlags
 {
-    constexpr uint32 HeightMap  = 0x00000001;  // Bit 0
-    constexpr uint32 ZoneBound  = 0x00010000;  // Bit 16
-    constexpr uint32 Zone       = 0x10000000;  // Bit 28
-
-    // Additional flags we care about for rendering (from dataSize array positions)
-    constexpr uint32 WorldLayerIDs  = 0x00000002;  // Bit 1
-    constexpr uint32 BlendMap       = 0x00000004;  // Bit 2
-    constexpr uint32 ColorMap       = 0x00000008;  // Bit 3
-    constexpr uint32 ColorMapDXT    = 0x00002000;  // Bit 13
-    constexpr uint32 BlendMapDXT    = 0x00020000;  // Bit 17
+    constexpr uint32 HeightMap       = 0x00000001;
+    constexpr uint32 WorldLayerIDs   = 0x00000002;
+    constexpr uint32 BlendMap        = 0x00000004;
+    constexpr uint32 ColorMap        = 0x00000008;
+    constexpr uint32 UnkMap          = 0x00000010;
+    constexpr uint32 Unk0x20         = 0x00000020;
+    constexpr uint32 SkyIDs          = 0x00000040;
+    constexpr uint32 SkyWeights      = 0x00000080;
+    constexpr uint32 ShadowMap       = 0x00000100;
+    constexpr uint32 LoDHeightMap    = 0x00000200;
+    constexpr uint32 LoDHeightRange  = 0x00000400;
+    constexpr uint32 Unk0x800        = 0x00000800;
+    constexpr uint32 Unk0x1000       = 0x00001000;
+    constexpr uint32 ColorMapDXT     = 0x00002000;
+    constexpr uint32 UnkMap0DXT      = 0x00004000;
+    constexpr uint32 Unk0x8000       = 0x00008000;
+    constexpr uint32 ZoneBound       = 0x00010000;
+    constexpr uint32 BlendMapDXT     = 0x00020000;
+    constexpr uint32 UnkMap1DXT      = 0x00040000;
+    constexpr uint32 UnkMap2DXT      = 0x00080000;
+    constexpr uint32 UnkMap3DXT      = 0x00100000;
+    constexpr uint32 Unk0x200000     = 0x00200000;
+    constexpr uint32 Unk0x400000     = 0x00400000;
+    constexpr uint32 Unk0x800000     = 0x00800000;
+    constexpr uint32 Unk0x1000000    = 0x01000000;
+    constexpr uint32 Unk0x2000000    = 0x02000000;
+    constexpr uint32 Unk0x4000000    = 0x04000000;
+    constexpr uint32 Unk0x8000000    = 0x08000000;
+    constexpr uint32 Zone            = 0x10000000;
+    constexpr uint32 Unk0x20000000   = 0x20000000;
+    constexpr uint32 Unk0x40000000   = 0x40000000;
+    constexpr uint32 UnkMap4DXT      = 0x80000000;
 }
+
+constexpr float UnitSize = 2.0f;
+
+struct SkyCorner
+{
+    uint32 worldSkyIDs[4] = {0};
+    uint8 worldSkyWeights[4] = {0};
+};
+
+struct WaterData
+{
+    std::vector<uint8> rawData;
+};
+
+struct PropData
+{
+    std::vector<uint32> uniqueIDs;
+};
+
+struct CurdData
+{
+    std::vector<uint8> rawData;
+};
 
 class AreaChunkRender
 {
@@ -96,25 +114,46 @@ private:
     glm::vec3 mMaxBounds;
 
     std::vector<AreaVertex> mVertices;
-    std::vector<AreaVertex> mFullVertices;
 
     uint32 mSplatTexture = 0;
     uint32 mColorMapTexture = 0;
     std::vector<uint32> mLayerTextures;
 
     uint32 mFlags = 0;
-    Vector4 mTexScales = Vector4(1.0f);
+    uint32 mZoneIds[4] = {0};
 
     uint32 mWorldLayerIDs[4] = {0};
-    uint32 mZoneIds[4] = {0};
+    std::vector<uint8> mBlendMap;
+    std::vector<uint8> mColorMap;
+    std::vector<uint16> mUnknownMap;
+    int32 mUnk0x20 = 0;
+    SkyCorner mSkyCorners[4];
+    std::vector<uint8> mShadowMap;
+    std::vector<uint16> mLodHeightMap;
+    uint16 mLodHeightRange[2] = {0};
+    std::vector<uint8> mZoneBounds;
+    std::vector<uint8> mBlendMapDXT;
+    std::vector<uint8> mColorMapDXT;
+    std::vector<uint8> mUnkMap1;
+
+    PropData mProps;
+    CurdData mCurd;
+    std::vector<WaterData> mWaters;
+    bool mHasWater = false;
+
+    unsigned int mBlendMapTexture = 0;
+    unsigned int mColorMapTextureGPU = 0;
+    unsigned int mLayerDiffuse[4] = {0, 0, 0, 0};
+    unsigned int mLayerNormal[4] = {0, 0, 0, 0};
+    float mLayerScale[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool mTexturesLoaded = false;
 
     void calcNormals();
     void calcTangentBitangent();
     void extendBuffer();
 
 public:
-    // Constructor takes raw cell data (flags are inside the data)
-    AreaChunkRender(const std::vector<uint8>& cellData, float baseX, float baseZ, ArchivePtr archive);
+    AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr archive);
     ~AreaChunkRender();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
@@ -123,19 +162,31 @@ public:
     [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
     [[nodiscard]] uint32 getFlags() const { return mFlags; }
 
-    // Flag checks using ChnkCellFlags bit positions
     [[nodiscard]] bool hasHeightmap() const { return (mFlags & ChnkCellFlags::HeightMap) != 0; }
-    [[nodiscard]] bool hasWorldLayerIDs() const { return (mFlags & ChnkCellFlags::WorldLayerIDs) != 0; }
-    [[nodiscard]] bool hasBlendMap() const { return (mFlags & ChnkCellFlags::BlendMap) != 0; }
-    [[nodiscard]] bool hasColorMap() const { return (mFlags & ChnkCellFlags::ColorMap) != 0; }
-    [[nodiscard]] bool hasColorMapDXT() const { return (mFlags & ChnkCellFlags::ColorMapDXT) != 0; }
     [[nodiscard]] bool hasZoneBounds() const { return (mFlags & ChnkCellFlags::ZoneBound) != 0; }
-    [[nodiscard]] bool hasBlendMapDXT() const { return (mFlags & ChnkCellFlags::BlendMapDXT) != 0; }
     [[nodiscard]] bool hasZoneIDs() const { return (mFlags & ChnkCellFlags::Zone) != 0; }
+    [[nodiscard]] bool hasWorldLayerIDs() const { return (mFlags & ChnkCellFlags::WorldLayerIDs) != 0; }
+    [[nodiscard]] bool hasBlendMap() const { return (mFlags & ChnkCellFlags::BlendMap) != 0 || (mFlags & ChnkCellFlags::BlendMapDXT) != 0; }
+    [[nodiscard]] bool hasColorMap() const { return (mFlags & ChnkCellFlags::ColorMap) != 0 || (mFlags & ChnkCellFlags::ColorMapDXT) != 0; }
+    [[nodiscard]] bool hasSkyData() const { return (mFlags & ChnkCellFlags::SkyIDs) != 0; }
+    [[nodiscard]] bool hasLodHeightMap() const { return (mFlags & ChnkCellFlags::LoDHeightMap) != 0; }
+    [[nodiscard]] bool hasShadowMap() const { return (mFlags & ChnkCellFlags::ShadowMap) != 0; }
+    [[nodiscard]] bool hasWater() const { return mHasWater; }
 
-    // Returns true if this chunk was fully initialized (has geometry ready to render)
+    [[nodiscard]] const uint32* getWorldLayerIDs() const { return mWorldLayerIDs; }
+    [[nodiscard]] const std::vector<uint8>& getBlendMap() const { return mBlendMap; }
+    [[nodiscard]] const std::vector<uint8>& getColorMap() const { return mColorMap; }
+    [[nodiscard]] const SkyCorner* getSkyCorners() const { return mSkyCorners; }
+    [[nodiscard]] const std::vector<uint16>& getLodHeightMap() const { return mLodHeightMap; }
+    [[nodiscard]] const uint16* getLodHeightRange() const { return mLodHeightRange; }
+    [[nodiscard]] const std::vector<uint8>& getShadowMap() const { return mShadowMap; }
+    [[nodiscard]] const PropData& getProps() const { return mProps; }
+    [[nodiscard]] const std::vector<WaterData>& getWaters() const { return mWaters; }
+
     [[nodiscard]] bool isFullyInitialized() const { return mVAO != 0; }
 
+    void loadTextures(const ArchivePtr& archive);
+    void bindTextures(unsigned int program) const;
     void render();
 
     static void geometryInit(uint32 program);
@@ -207,5 +258,4 @@ public:
 
 typedef std::shared_ptr<AreaFile> AreaFilePtr;
 
-// Call this when clearing loaded areas to reset reference tile position
 void ResetAreaReferencePosition();
