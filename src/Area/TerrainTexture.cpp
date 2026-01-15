@@ -4,7 +4,6 @@
 #include "../Database/Tbl.h"
 #include "../Database/TblReader.h"
 #include "../Database/Definitions/WorldLayer.h"
-#include <iostream>
 #include <cstring>
 #include <functional>
 #include <cwctype>
@@ -91,7 +90,6 @@ namespace TerrainTexture
         auto fileEntry = FindFileRecursive(root, L"worldlayer.tbl");
         if (!fileEntry)
         {
-            std::cerr << "WorldLayer.tbl not found in archive\n";
             mTableLoaded = true;
             return false;
         }
@@ -99,7 +97,6 @@ namespace TerrainTexture
         std::vector<uint8_t> data;
         if (!archive->getFileData(fileEntry, data))
         {
-            std::cerr << "Failed to read WorldLayer.tbl\n";
             mTableLoaded = true;
             return false;
         }
@@ -107,7 +104,6 @@ namespace TerrainTexture
         Tbl::Table<Database::Definitions::WorldLayer> tbl;
         if (!tbl.load(data.data(), data.size()))
         {
-            std::cerr << "Failed to parse WorldLayer.tbl\n";
             mTableLoaded = true;
             return false;
         }
@@ -124,7 +120,6 @@ namespace TerrainTexture
         }
 
         mTableLoaded = true;
-        std::cout << "Loaded WorldLayer.tbl with " << mLayerTable.size() << " entries\n";
         return true;
     }
 
@@ -220,7 +215,6 @@ namespace TerrainTexture
         const WorldLayerEntry* entry = GetLayerEntry(layerId);
         if (!entry)
         {
-            std::cerr << "WorldLayer entry not found for ID " << layerId << "\n";
             CachedTexture tex;
             uint8_t white[4] = {255, 255, 255, 255};
             tex.diffuse = UploadRGBATexture(white, 1, 1, false);
@@ -255,6 +249,12 @@ namespace TerrainTexture
             tex.diffuse = UploadRGBATexture(white, 1, 1, false);
             tex.width = 1;
             tex.height = 1;
+        }
+
+        if (tex.normal == 0)
+        {
+            uint8_t defaultNormal[4] = {128, 128, 255, 255};
+            tex.normal = UploadRGBATexture(defaultNormal, 1, 1, false);
         }
 
         tex.loaded = true;
@@ -431,6 +431,46 @@ namespace TerrainTexture
         return true;
     }
 
+    GLuint Manager::CreateBlendMapTexture(const uint8_t* data, int width, int height)
+    {
+        if (!data || width <= 0 || height <= 0) return 0;
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    }
+
+    GLuint Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
+    {
+        if (!data || width <= 0 || height <= 0) return 0;
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
+    }
+
     GLuint Manager::CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height)
     {
         if (!dxtData || dataSize == 0) return 0;
@@ -439,7 +479,16 @@ namespace TerrainTexture
         if (!DecompressDXT1(dxtData, width, height, rgba))
             return 0;
 
-        return UploadRGBATexture(rgba.data(), width, height, false);
+        for (size_t i = 0; i < rgba.size(); i += 4)
+        {
+            int r = rgba[i];
+            int g = rgba[i + 1];
+            int b = rgba[i + 2];
+            int sum = r + g + b;
+            rgba[i + 3] = static_cast<uint8_t>(std::max(0, 255 - sum));
+        }
+
+        return CreateBlendMapTexture(rgba.data(), width, height);
     }
 
     GLuint Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
@@ -450,7 +499,20 @@ namespace TerrainTexture
         if (!DecompressDXT5(dxtData, width, height, rgba))
             return 0;
 
-        return UploadRGBATexture(rgba.data(), width, height, false);
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return tex;
     }
 
     GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips)

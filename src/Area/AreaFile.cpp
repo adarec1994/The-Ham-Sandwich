@@ -3,8 +3,6 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <cmath>
-#include <iostream>
-#include <iomanip>
 #include <algorithm>
 #include <string>
 #include <memory>
@@ -49,6 +47,7 @@ static inline bool parseHexByte(const std::wstring& s, size_t pos, int& outByte)
 }
 
 static GLuint gFallbackWhite = 0;
+static GLuint gFallbackNormal = 0;
 static uint32 gLastTerrainProgram = 0;
 
 static void EnsureFallbackTextures() {
@@ -56,6 +55,14 @@ static void EnsureFallbackTextures() {
         uint8_t px[4] = { 255, 255, 255, 255 };
         glGenTextures(1, &gFallbackWhite);
         glBindTexture(GL_TEXTURE_2D, gFallbackWhite);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    }
+    if (gFallbackNormal == 0) {
+        uint8_t px[4] = { 128, 128, 255, 255 };
+        glGenTextures(1, &gFallbackNormal);
+        glBindTexture(GL_TEXTURE_2D, gFallbackNormal);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
@@ -267,31 +274,26 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
 
     texMgr.LoadWorldLayerTable(archive);
 
-    std::cout << "Chunk layer IDs: " << mWorldLayerIDs[0] << ", " << mWorldLayerIDs[1] << ", " << mWorldLayerIDs[2] << ", " << mWorldLayerIDs[3] << "\n";
-
     if (!mBlendMap.empty())
     {
-        std::cout << "  Creating blendmap from raw data (" << mBlendMap.size() << " bytes)\n";
-        mBlendMapTexture = TerrainTexture::UploadRGBATexture(
-            mBlendMap.data(), 65, 65, false);
+        mBlendMapTexture = texMgr.CreateBlendMapTexture(
+            mBlendMap.data(), 65, 65);
     }
     else if (!mBlendMapDXT.empty())
     {
-        std::cout << "  Creating blendmap from DXT1 (" << mBlendMapDXT.size() << " bytes)\n";
         mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(
             mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
     }
     else
     {
-        std::cout << "  No blendmap data, using default\n";
         uint8_t defaultBlend[4] = {255, 0, 0, 0};
-        mBlendMapTexture = TerrainTexture::UploadRGBATexture(defaultBlend, 1, 1, false);
+        mBlendMapTexture = texMgr.CreateBlendMapTexture(defaultBlend, 1, 1);
     }
 
     if (!mColorMap.empty())
     {
-        mColorMapTextureGPU = TerrainTexture::UploadRGBATexture(
-            mColorMap.data(), 65, 65, false);
+        mColorMapTextureGPU = texMgr.CreateColorMapTexture(
+            mColorMap.data(), 65, 65);
     }
     else if (!mColorMapDXT.empty())
     {
@@ -302,19 +304,34 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
     for (int i = 0; i < 4; ++i)
     {
         uint32_t layerId = mWorldLayerIDs[i];
-        if (layerId == 0) continue;
+        if (layerId == 0)
+        {
+            mLayerDiffuse[i] = gFallbackWhite;
+            mLayerNormal[i] = gFallbackNormal;
+            mLayerScale[i] = 4.0f;
+            continue;
+        }
 
         const auto* cached = texMgr.GetLayerTexture(archive, layerId);
         if (cached && cached->loaded)
         {
             mLayerDiffuse[i] = cached->diffuse;
-            mLayerNormal[i] = cached->normal;
+            mLayerNormal[i] = cached->normal ? cached->normal : gFallbackNormal;
+        }
+        else
+        {
+            mLayerDiffuse[i] = gFallbackWhite;
+            mLayerNormal[i] = gFallbackNormal;
         }
 
         const auto* layerEntry = texMgr.GetLayerEntry(layerId);
-        if (layerEntry)
+        if (layerEntry && layerEntry->scaleU > 0.0f)
         {
             mLayerScale[i] = layerEntry->scaleU;
+        }
+        else
+        {
+            mLayerScale[i] = 4.0f;
         }
     }
 
@@ -324,18 +341,18 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
 void AreaChunkRender::bindTextures(unsigned int program) const
 {
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, mBlendMapTexture ? mBlendMapTexture : 0);
+    glBindTexture(GL_TEXTURE_2D, mBlendMapTexture ? mBlendMapTexture : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "blendMap"), 0);
 
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, mColorMapTextureGPU ? mColorMapTextureGPU : 0);
+    glBindTexture(GL_TEXTURE_2D, mColorMapTextureGPU ? mColorMapTextureGPU : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "colorMap"), 1);
     glUniform1i(glGetUniformLocation(program, "hasColorMap"), mColorMapTextureGPU ? 1 : 0);
 
     for (int i = 0; i < 4; ++i)
     {
         glActiveTexture(GL_TEXTURE2 + i);
-        glBindTexture(GL_TEXTURE_2D, mLayerDiffuse[i] ? mLayerDiffuse[i] : 0);
+        glBindTexture(GL_TEXTURE_2D, mLayerDiffuse[i] ? mLayerDiffuse[i] : gFallbackWhite);
 
         const char* names[] = {"layer0", "layer1", "layer2", "layer3"};
         glUniform1i(glGetUniformLocation(program, names[i]), 2 + i);
@@ -344,7 +361,7 @@ void AreaChunkRender::bindTextures(unsigned int program) const
     for (int i = 0; i < 4; ++i)
     {
         glActiveTexture(GL_TEXTURE6 + i);
-        glBindTexture(GL_TEXTURE_2D, mLayerNormal[i] ? mLayerNormal[i] : 0);
+        glBindTexture(GL_TEXTURE_2D, mLayerNormal[i] ? mLayerNormal[i] : gFallbackNormal);
 
         const char* names[] = {"layer0Normal", "layer1Normal", "layer2Normal", "layer3Normal"};
         glUniform1i(glGetUniformLocation(program, names[i]), 6 + i);
@@ -673,8 +690,8 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
-            v.u = static_cast<float>(x) / 16.0f;
-            v.v = static_cast<float>(y) / 16.0f;
+            v.u = static_cast<float>(y) / 16.0f;
+            v.v = static_cast<float>(x) / 16.0f;
             v.nx = 0.0f;
             v.ny = 1.0f;
             v.nz = 0.0f;

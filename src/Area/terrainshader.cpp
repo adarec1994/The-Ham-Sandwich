@@ -1,5 +1,4 @@
 #include "TerrainShader.h"
-#include <iostream>
 
 namespace TerrainShader
 {
@@ -140,9 +139,6 @@ void main()
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success)
         {
-            char log[512];
-            glGetShaderInfoLog(shader, 512, nullptr, log);
-            std::cerr << "Terrain shader compile error:\n" << log << std::endl;
             glDeleteShader(shader);
             return 0;
         }
@@ -173,14 +169,10 @@ void main()
         glGetProgramiv(program, GL_LINK_STATUS, &success);
         if (!success)
         {
-            char log[512];
-            glGetProgramInfoLog(program, 512, nullptr, log);
-            std::cerr << "Terrain shader link error:\n" << log << std::endl;
             glDeleteProgram(program);
             return 0;
         }
 
-        std::cout << "Terrain shader compiled successfully\n";
         return program;
     }
 
