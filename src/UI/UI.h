@@ -2,12 +2,13 @@
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include "../tex/tex.h"
 #include "imgui.h"
+#include "../tex/tex.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
 #include <vector>
 #include <memory>
 #include <string>
@@ -15,10 +16,12 @@
 class Archive;
 class AreaFile;
 class AreaRender;
+class M3Render;
 
-typedef std::shared_ptr<Archive> ArchivePtr;
-typedef std::shared_ptr<AreaFile> AreaFilePtr;
-typedef std::shared_ptr<AreaRender> AreaRenderPtr;
+using ArchivePtr = std::shared_ptr<Archive>;
+using AreaFilePtr = std::shared_ptr<AreaFile>;
+using AreaRenderPtr = std::shared_ptr<AreaRender>;
+using M3RenderPtr = std::shared_ptr<M3Render>;
 
 struct Camera {
     glm::vec3 Position = glm::vec3(0.0f, 10.0f, 20.0f);
@@ -27,7 +30,7 @@ struct Camera {
     glm::vec3 Right    = glm::vec3(1.0f, 0.0f, 0.0f);
     glm::vec3 WorldUp  = glm::vec3(0.0f, 1.0f, 0.0f);
 
-    float Yaw   = -90.0f;
+    float Yaw = -90.0f;
     float Pitch = -20.0f;
     float MovementSpeed = 50.0f;
     float MouseSensitivity = 0.1f;
@@ -45,6 +48,7 @@ struct AppState {
     bool sidebar_visible = false;
     float sidebar_current_width = 0.0f;
     float contentWidth = 280.0f;
+
     std::shared_ptr<Tex::PreviewState> texPreview = std::make_shared<Tex::PreviewState>();
 
     bool archivesLoaded = false;
@@ -74,6 +78,9 @@ struct AppState {
 
     bool show_settings_window = false;
     bool show_about_window = false;
+
+    M3RenderPtr m3Render = nullptr;
+    bool show_models_window = false;
 
     Camera camera;
     Grid grid;

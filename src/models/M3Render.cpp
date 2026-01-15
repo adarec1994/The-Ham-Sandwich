@@ -1,0 +1,261 @@
+#include "M3Render.h"
+#include <glm/gtc/type_ptr.hpp>
+#include <codecvt>
+#include <locale>
+#include <algorithm>
+
+const char* m3VertexSrc = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoord;
+uniform mat4 model, view, projection;
+out vec3 Normal;
+out vec2 TexCoord;
+void main() {
+    gl_Position = projection * view * model * vec4(aPos, 1.0);
+    Normal = aNormal;
+    TexCoord = aTexCoord;
+}
+)";
+
+const char* m3FragSrc = R"(
+#version 330 core
+out vec4 FragColor;
+in vec3 Normal;
+in vec2 TexCoord;
+uniform sampler2D diffTexture;
+void main() {
+    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+    float diff = max(dot(normalize(Normal), lightDir), 0.3);
+    vec4 texColor = texture(diffTexture, TexCoord);
+    if(texColor.a < 0.1) discard;
+    FragColor = vec4(texColor.rgb * diff, 1.0);
+}
+)";
+
+static unsigned int CompileShader(GLenum type, const char* src) {
+    unsigned int s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    return s;
+}
+
+M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
+    if (!data.success) return;
+
+    submeshes = data.submeshes;
+    materials = data.materials;
+
+    materialSelectedVariant.assign(materials.size(), 0);
+    submeshVisible.assign(submeshes.size(), 1);
+    submeshVariantOverride.assign(submeshes.size(), -1);
+
+    loadTextures(data, arc);
+    fallbackWhiteTex = createFallbackWhite();
+
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
+
+    glBindVertexArray(VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, data.vertices.size() * sizeof(M3Vertex), data.vertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.indices.size() * sizeof(uint32_t), data.indices.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)0);
+
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)offsetof(M3Vertex, normal));
+
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)offsetof(M3Vertex, uv));
+
+    setupShader();
+}
+
+M3Render::~M3Render() {
+    if (VAO) glDeleteVertexArrays(1, &VAO);
+    if (VBO) glDeleteBuffers(1, &VBO);
+    if (EBO) glDeleteBuffers(1, &EBO);
+    if (shaderProgram) glDeleteProgram(shaderProgram);
+    for (unsigned int tid : glTextures) if (tid != 0) glDeleteTextures(1, &tid);
+    if (fallbackWhiteTex) glDeleteTextures(1, &fallbackWhiteTex);
+}
+
+void M3Render::setupShader() {
+    unsigned int v = CompileShader(GL_VERTEX_SHADER, m3VertexSrc);
+    unsigned int f = CompileShader(GL_FRAGMENT_SHADER, m3FragSrc);
+    shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, v);
+    glAttachShader(shaderProgram, f);
+    glLinkProgram(shaderProgram);
+    glDeleteShader(v);
+    glDeleteShader(f);
+}
+
+void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
+    glTextures.clear();
+    glTextures.reserve(data.textures.size());
+    for (const auto& path : data.textures) {
+        glTextures.push_back(loadTextureFromArchive(arc, path));
+    }
+}
+
+unsigned int M3Render::createFallbackWhite() {
+    unsigned int tid = 0;
+    glGenTextures(1, &tid);
+    glBindTexture(GL_TEXTURE_2D, tid);
+    uint32_t px = 0xFFFFFFFFu;
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    return tid;
+}
+
+unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
+    if (!arc || path.empty()) return 0;
+
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
+    std::wstring wp = conv.from_bytes(path);
+    if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
+
+    auto entry = arc->getByPath(wp);
+    if (!entry) {
+        std::replace(wp.begin(), wp.end(), L'/', L'\\');
+        entry = arc->getByPath(wp);
+    }
+    if (!entry) return 0;
+
+    std::vector<uint8_t> buffer;
+    arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
+    if (buffer.empty()) return 0;
+
+    Tex::File tf;
+    if (!tf.readFromMemory(buffer.data(), buffer.size())) return 0;
+
+    Tex::ImageRGBA img;
+    if (!tf.decodeLargestMipToRGBA(img)) return 0;
+
+    unsigned int tid = 0;
+    glGenTextures(1, &tid);
+    glBindTexture(GL_TEXTURE_2D, tid);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    return tid;
+}
+
+unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
+    if (materialId >= materials.size()) return fallbackWhiteTex;
+    const auto& m = materials[materialId];
+    if (m.variants.empty()) return fallbackWhiteTex;
+
+    int v = variant;
+    if (v < 0) v = 0;
+    if (v >= (int)m.variants.size()) v = (int)m.variants.size() - 1;
+
+    int idx = m.variants[v].textureIndexA;
+    if (idx >= 0 && idx < (int)glTextures.size()) {
+        unsigned int tid = glTextures[idx];
+        if (tid != 0) return tid;
+    }
+    return fallbackWhiteTex;
+}
+
+void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
+    if (!shaderProgram || !VAO) return;
+
+    glUseProgram(shaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+
+    glm::mat4 model = glm::mat4(1.0f);
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
+    glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
+
+    glBindVertexArray(VAO);
+
+    for (size_t i = 0; i < submeshes.size(); ++i) {
+        if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
+
+        const auto& sm = submeshes[i];
+
+        int variant = 0;
+        if (i < submeshVariantOverride.size() && submeshVariantOverride[i] >= 0) {
+            variant = submeshVariantOverride[i];
+        } else if (sm.materialID < materialSelectedVariant.size()) {
+            variant = materialSelectedVariant[sm.materialID];
+        }
+
+        unsigned int tid = resolveDiffuseTexture(sm.materialID, variant);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tid);
+
+        glDrawElementsBaseVertex(
+            GL_TRIANGLES,
+            sm.indexCount,
+            GL_UNSIGNED_INT,
+            (void*)(uintptr_t)(sm.startIndex * 4),
+            sm.startVertex
+        );
+    }
+}
+
+size_t M3Render::getSubmeshCount() const { return submeshes.size(); }
+const M3Submesh& M3Render::getSubmesh(size_t i) const { return submeshes[i]; }
+
+size_t M3Render::getMaterialCount() const { return materials.size(); }
+size_t M3Render::getMaterialVariantCount(size_t materialId) const {
+    if (materialId >= materials.size()) return 0;
+    return materials[materialId].variants.size();
+}
+
+int M3Render::getMaterialSelectedVariant(size_t materialId) const {
+    if (materialId >= materialSelectedVariant.size()) return 0;
+    return materialSelectedVariant[materialId];
+}
+
+void M3Render::setMaterialSelectedVariant(size_t materialId, int variant) {
+    if (materialId >= materialSelectedVariant.size()) return;
+    int maxV = (int)getMaterialVariantCount(materialId);
+    if (maxV <= 0) { materialSelectedVariant[materialId] = 0; return; }
+    if (variant < 0) variant = 0;
+    if (variant >= maxV) variant = maxV - 1;
+    materialSelectedVariant[materialId] = variant;
+}
+
+bool M3Render::getSubmeshVisible(size_t submeshId) const {
+    if (submeshId >= submeshVisible.size()) return true;
+    return submeshVisible[submeshId] != 0;
+}
+
+void M3Render::setSubmeshVisible(size_t submeshId, bool v) {
+    if (submeshId >= submeshVisible.size()) return;
+    submeshVisible[submeshId] = v ? 1 : 0;
+}
+
+int M3Render::getSubmeshVariantOverride(size_t submeshId) const {
+    if (submeshId >= submeshVariantOverride.size()) return -1;
+    return submeshVariantOverride[submeshId];
+}
+
+void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) {
+    if (submeshId >= submeshVariantOverride.size()) return;
+    submeshVariantOverride[submeshId] = variantOrMinus1;
+}

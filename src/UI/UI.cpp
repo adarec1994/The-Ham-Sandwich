@@ -4,8 +4,11 @@
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
 #include "../Area/AreaRender.h"
+#include "../models/UI_models.h"
 #include "splashscreen.h"
 #include "../tex/tex.h"
+#include "../models/M3Loader.h"
+#include "../models/M3Render.h"
 #include <limits>
 #include <string>
 #include <vector>
@@ -14,8 +17,10 @@
 #include <filesystem>
 #include <algorithm>
 #include <unordered_map>
+#include <map>
 #include <codecvt>
 #include <locale>
+#include <set>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -26,8 +31,11 @@ extern void PushSplashButtonColors();
 extern void PopSplashButtonColors();
 extern bool gAreaIconLoaded;
 extern unsigned int gAreaIconTexture;
+extern bool gCharacterIconLoaded;
+extern unsigned int gCharacterIconTexture;
 
 std::vector<AreaFilePtr> gLoadedAreas;
+std::shared_ptr<M3Render> gLoadedModel = nullptr;
 
 static AreaChunkRenderPtr gSelectedChunk = nullptr;
 static int gSelectedChunkIndex = -1;
@@ -78,6 +86,17 @@ static std::string ToLowerCopy(std::string s)
     return s;
 }
 
+static bool EndsWithM3W(const std::wstring& str) {
+    if (str.length() < 3) return false;
+    wchar_t last = str.back();
+    wchar_t second = str[str.length() - 2];
+    wchar_t third = str[str.length() - 3];
+
+    if (third != L'.') return false;
+    if (second != L'm' && second != L'M') return false;
+    if (last != L'3') return false;
+    return true;
+}
 
 static std::string GetExtLower(const std::string& name)
 {
@@ -296,6 +315,7 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gLoadedModel = nullptr;
 
     std::string name = wstring_to_utf8(fileEntry->getEntryName());
     std::cout << "Loading Area: " << name << std::endl;
@@ -312,6 +332,39 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
     {
         std::cout << "Failed to load Area." << std::endl;
         state.currentArea.reset();
+    }
+}
+
+static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
+{
+    if (!arc || !fileEntry) return;
+
+    gLoadedAreas.clear();
+    state.currentArea.reset();
+
+    state.m3Render = nullptr;
+    state.show_models_window = false;
+
+    std::string name = wstring_to_utf8(fileEntry->getEntryName());
+    std::cout << "Loading M3 Model: " << name << std::endl;
+
+    M3ModelData data = M3Loader::LoadFromFile(arc, fileEntry);
+    if (data.success)
+    {
+        state.m3Render = std::make_shared<M3Render>(data, arc);
+        state.show_models_window = true;
+
+        std::cout << "M3 Loaded. Vertices: " << data.vertices.size() << ", Indices: " << data.indices.size() << std::endl;
+
+        state.camera.Position = glm::vec3(0, 1.0f, 3.0f);
+        state.camera.Front = glm::vec3(0, 0, -1.0f);
+        state.camera.Up = glm::vec3(0, 1.0f, 0);
+    }
+    else
+    {
+        std::cout << "Failed to parse M3 Model." << std::endl;
+        state.m3Render = nullptr;
+        state.show_models_window = false;
     }
 }
 
@@ -345,63 +398,31 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
         100000.0f
     );
 
-    if (!state.areaRender)
+    if (gLoadedModel)
     {
-        std::cout << "ERROR: areaRender is null!\n";
-        return;
+        gLoadedModel->render(view, projection);
     }
-
-    const uint32_t prog = state.areaRender->getProgram();
-    if (prog == 0)
+    else if (!gLoadedAreas.empty() && state.areaRender)
     {
-        std::cout << "ERROR: shader program is 0!\n";
-        return;
-    }
-
-    glUseProgram(prog);
-
-    const GLint viewLoc = glGetUniformLocation(prog, "view");
-    const GLint projLoc = glGetUniformLocation(prog, "projection");
-
-    if (viewLoc != -1)
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-    if (projLoc != -1)
-        glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
-
-    static bool debuggedOnce = false;
-    if (!debuggedOnce && !gLoadedAreas.empty())
-    {
-        for (size_t i = 0; i < gLoadedAreas.size(); ++i)
+        const uint32_t prog = state.areaRender->getProgram();
+        if (prog != 0)
         {
-            if (const auto& area = gLoadedAreas[i])
-            {
-                std::cout << "Area " << i << ": chunks=" << area->getChunks().size()
-                          << " tileXY=(" << area->getTileX() << "," << area->getTileY() << ")\n";
+            glUseProgram(prog);
 
-                const auto& chunks = area->getChunks();
-                if (!chunks.empty() && chunks[0])
-                {
-                    const auto& c = chunks[0];
-                    std::cout << "  Chunk 0 bounds: ("
-                              << c->getMinBounds().x << "," << c->getMinBounds().y << "," << c->getMinBounds().z
-                              << ") to ("
-                              << c->getMaxBounds().x << "," << c->getMaxBounds().y << "," << c->getMaxBounds().z
-                              << ")\n";
-                }
-            }
-            else
+            const GLint viewLoc = glGetUniformLocation(prog, "view");
+            const GLint projLoc = glGetUniformLocation(prog, "projection");
+
+            if (viewLoc != -1)
+                glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
+            if (projLoc != -1)
+                glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
+
+            for (const auto& area : gLoadedAreas)
             {
-                std::cout << "Area " << i << ": NULL\n";
+                if (area)
+                    area->render(view, projection, prog, gSelectedChunk);
             }
         }
-
-        debuggedOnce = true;
-    }
-
-    for (const auto& area : gLoadedAreas)
-    {
-        if (area)
-            area->render(view, projection, prog, gSelectedChunk);
     }
 }
 
@@ -469,6 +490,11 @@ static void RenderEntryRecursive_Impl(
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
                                 Tex::OpenTexPreviewFromEntry(state, currentArc, fileEntry);
                         }
+                        else if (EndsWithNoCase(fname, ".m3"))
+                        {
+                            if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
+                                LoadSingleM3(state, currentArc, fileEntry);
+                        }
                     }
                 }
             }
@@ -503,6 +529,11 @@ static void RenderEntryRecursive_Impl(
                 if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
                     Tex::OpenTexPreviewFromEntry(state, currentArc, fileEntry);
             }
+            else if (EndsWithNoCase(name, ".m3"))
+            {
+                if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
+                    LoadSingleM3(state, currentArc, fileEntry);
+            }
         }
     }
 }
@@ -521,6 +552,15 @@ struct AreaFilterCache
 };
 
 static AreaFilterCache gAreaCache;
+
+struct MergedFolder {
+    std::string path;
+    std::vector<IFileSystemEntryPtr> entries;
+};
+
+std::vector<MergedFolder> gMergedM3Folders;
+std::vector<const Archive*> gMergedM3Archives;
+bool gMergedM3ListBuilt = false;
 
 static bool ContainsLowerFast(const std::string& hayLower, const std::string& needleLower)
 {
@@ -788,6 +828,71 @@ static void RenderAreaTreeFiltered(AppState& state,
     }
 }
 
+static void ScanM3FoldersRecursive(const IFileSystemEntryPtr& entry, std::map<std::string, std::vector<IFileSystemEntryPtr>>& outMap){
+    if (!entry || !entry->isDirectory()) return;
+
+    bool foundHere = false;
+    const auto& children = entry->getChildren();
+
+    for (const auto& child : children)
+    {
+        if (!child) continue;
+        if (!child->isDirectory())
+        {
+            if (EndsWithM3W(child->getEntryName()))
+            {
+                foundHere = true;
+                break;
+            }
+        }
+    }
+
+    if (foundHere)
+    {
+        std::string dirName = wstring_to_utf8(entry->getEntryName());
+        if (dirName.empty()) dirName = "/";
+        outMap[dirName].push_back(entry);
+    }
+
+    for (const auto& child : children)
+    {
+        if (child && child->isDirectory())
+        {
+            ScanM3FoldersRecursive(child, outMap);
+        }
+    }
+}
+
+static void EnsureMergedM3List(const AppState& state){
+    if (!AreArchivesSame(state.archives, gMergedM3Archives))
+    {
+        gMergedM3ListBuilt = false;
+        gMergedM3Archives.clear();
+        for (auto& a : state.archives) gMergedM3Archives.push_back(a.get());
+    }
+
+    if (gMergedM3ListBuilt) return;
+
+    gMergedM3Folders.clear();
+    std::map<std::string, std::vector<IFileSystemEntryPtr>> folderMap;
+
+    for (const auto& arc : state.archives)
+    {
+        if (auto root = arc->getRoot())
+        {
+            ScanM3FoldersRecursive(root, folderMap);
+        }
+    }
+
+    gMergedM3Folders.reserve(folderMap.size());
+    for (auto& kv : folderMap)
+    {
+        gMergedM3Folders.push_back({kv.first, std::move(kv.second)});
+    }
+
+    gMergedM3ListBuilt = true;
+}
+
 void RenderUI(AppState& state)
 {
     if (!state.archivesLoaded)
@@ -797,6 +902,8 @@ void RenderUI(AppState& state)
         PopSplashButtonColors();
         return;
     }
+
+    EnsureMergedM3List(state);
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGuiIO& io = ImGui::GetIO();
@@ -949,6 +1056,44 @@ void RenderUI(AppState& state)
             {
                 if (state.active_tab_index == 1) state.sidebar_visible = !state.sidebar_visible;
                 else { state.active_tab_index = 1; state.sidebar_visible = true; }
+            }
+        }
+
+        ImGui::PopStyleColor();
+
+        if (bool is_model_active = (state.sidebar_visible && state.active_tab_index == 2); is_model_active)
+        {
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                ImVec2(viewport->Pos.x, ImGui::GetCursorScreenPos().y + (button_height * 0.1f)),
+                ImVec2(viewport->Pos.x + 3, ImGui::GetCursorScreenPos().y + (button_height * 0.9f)),
+                IM_COL32(100, 149, 237, 255)
+            );
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+
+        if (gCharacterIconLoaded)
+        {
+            float icon_size = 48.0f;
+            float pad_x = (strip_width - icon_size) * 0.5f;
+            float pad_y = (button_height - icon_size) * 0.5f;
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(pad_x, pad_y));
+
+            if (ImGui::ImageButton("##ModelTab", reinterpret_cast<void*>(static_cast<intptr_t>(gCharacterIconTexture)), ImVec2(icon_size, icon_size),
+                                   ImVec2(0,0), ImVec2(1,1), ImVec4(0,0,0,0), ImVec4(0.6f, 0.6f, 0.6f, 1.0f)))
+            {
+                if (state.active_tab_index == 2) state.sidebar_visible = !state.sidebar_visible;
+                else { state.active_tab_index = 2; state.sidebar_visible = true; }
+            }
+
+            ImGui::PopStyleVar();
+        }
+        else
+        {
+            if (ImGui::Button("Models", ImVec2(strip_width, button_height)))
+            {
+                if (state.active_tab_index == 2) state.sidebar_visible = !state.sidebar_visible;
+                else { state.active_tab_index = 2; state.sidebar_visible = true; }
             }
         }
 
@@ -1126,6 +1271,154 @@ void RenderUI(AppState& state)
                     state.contentWidth = calculated_width;
                 }
             }
+            else if (state.active_tab_index == 2)
+            {
+                ImGui::Text("MODELS");
+                ImGui::Separator();
+                ImGui::Dummy(ImVec2(0, 10));
+
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+                static char modelBuf[128] = "";
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputTextWithHint("##ModelSearch", "Search models...", modelBuf, 128);
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+
+                ImGui::Dummy(ImVec2(0, 10));
+
+                std::string modelQuery(modelBuf);
+
+                if (ImGui::BeginChild("ModelTree", ImVec2(0, 0), false))
+                {
+                    float calculated_width = 280.0f;
+                    std::string queryLower = ToLowerCopy(modelQuery);
+
+                    std::vector<MergedFolder*> visibleFolders;
+                    visibleFolders.reserve(gMergedM3Folders.size());
+
+                    for (auto& mf : gMergedM3Folders)
+                    {
+                        bool matchFolder = true;
+                        std::string pathLower = ToLowerCopy(mf.path);
+                        if (!queryLower.empty() && pathLower.find(queryLower) == std::string::npos)
+                        {
+                            matchFolder = false;
+                        }
+
+                        if (!matchFolder && !queryLower.empty())
+                        {
+                            bool childMatch = false;
+                            for (const auto& entry : mf.entries)
+                            {
+                                for (const auto& child : entry->getChildren())
+                                {
+                                    if (!child || child->isDirectory()) continue;
+
+                                    if (!EndsWithM3W(child->getEntryName())) continue;
+
+                                    std::string cName = wstring_to_utf8(child->getEntryName());
+                                    if (ToLowerCopy(cName).find(queryLower) != std::string::npos)
+                                    {
+                                        childMatch = true;
+                                        break;
+                                    }
+                                }
+                                if (childMatch) break;
+                            }
+                            if (!childMatch) continue;
+                        }
+                        visibleFolders.push_back(&mf);
+                    }
+
+                    ImGuiListClipper folderClipper;
+                    folderClipper.Begin(static_cast<int>(visibleFolders.size()));
+
+                    while (folderClipper.Step())
+                    {
+                        for (int i = folderClipper.DisplayStart; i < folderClipper.DisplayEnd; i++)
+                        {
+                            MergedFolder* mf = visibleFolders[i];
+                            float text_w = ImGui::CalcTextSize(mf->path.c_str()).x;
+                            float current_w = text_w + 50.0f;
+                            if (current_w > calculated_width) calculated_width = current_w;
+
+                            if (ImGui::TreeNode(mf->path.c_str()))
+                            {
+                                std::vector<std::string> fileNames;
+                                for (const auto& entry : mf->entries)
+                                {
+                                    for (const auto& child : entry->getChildren())
+                                    {
+                                        if (!child || child->isDirectory()) continue;
+
+                                        if (!EndsWithM3W(child->getEntryName())) continue;
+
+                                        std::string cName = wstring_to_utf8(child->getEntryName());
+
+                                        if (!queryLower.empty())
+                                        {
+                                            std::string pathLower = ToLowerCopy(mf->path);
+                                            bool folderMatched = (pathLower.find(queryLower) != std::string::npos);
+                                            if (!folderMatched && ToLowerCopy(cName).find(queryLower) == std::string::npos)
+                                                continue;
+                                        }
+                                        fileNames.push_back(cName);
+                                    }
+                                }
+                                std::sort(fileNames.begin(), fileNames.end());
+                                auto last = std::unique(fileNames.begin(), fileNames.end());
+                                fileNames.erase(last, fileNames.end());
+
+                                ImGuiListClipper fileClipper;
+                                fileClipper.Begin(static_cast<int>(fileNames.size()));
+                                while (fileClipper.Step())
+                                {
+                                    for (int j = fileClipper.DisplayStart; j < fileClipper.DisplayEnd; j++)
+                                    {
+                                        const std::string& fName = fileNames[j];
+                                        float c_text_w = ImGui::CalcTextSize(fName.c_str()).x;
+                                        float c_current_w = c_text_w + 50.0f + ImGui::GetStyle().IndentSpacing;
+                                        if (c_current_w > calculated_width) calculated_width = c_current_w;
+
+                                        if (ImGui::Selectable(fName.c_str()))
+                                        {
+                                            for (const auto& entry : mf->entries)
+                                            {
+                                                bool found = false;
+                                                for (const auto& child : entry->getChildren())
+                                                {
+                                                    if (!child || child->isDirectory()) continue;
+                                                    std::string cName = wstring_to_utf8(child->getEntryName());
+                                                    if (cName == fName)
+                                                    {
+                                                        if (auto fileEntry = std::dynamic_pointer_cast<FileEntry>(child))
+                                                        {
+                                                            ArchivePtr validArc = nullptr;
+                                                            if (!state.archives.empty()) validArc = state.archives[0];
+
+                                                            LoadSingleM3(state, validArc, fileEntry);
+                                                            found = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if (found) break;
+                                            }
+                                        }
+                                    }
+                                }
+                                fileClipper.End();
+                                ImGui::TreePop();
+                            }
+                        }
+                    }
+                    folderClipper.End();
+
+                    ImGui::EndChild();
+                    state.contentWidth = calculated_width;
+                }
+            }
         }
         ImGui::End();
     }
@@ -1137,4 +1430,10 @@ void RenderUI(AppState& state)
     {
         Tex::RenderTexPreviewWindow(*state.texPreview);
     }
+
+    if (state.show_models_window && state.m3Render)
+    {
+        UI_Models::Draw(state);
+    }
+
 }

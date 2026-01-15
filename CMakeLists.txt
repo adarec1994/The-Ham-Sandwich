@@ -124,6 +124,13 @@ add_executable(Wildstar_Studio_2
         src/Area/DataTable.h
         src/UI/camera.cpp
         src/UI/design.cpp
+        src/models/M3Common.h
+        src/models/M3Loader.cpp
+        src/models/M3Loader.h
+        src/models/M3Render.cpp
+        src/models/M3Render.h
+        src/models/UI_Models.cpp
+        src/models/UI_Models.h
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE

@@ -8,8 +8,12 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include "stb_image.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+
+bool gCharacterIconLoaded = false;
+unsigned int gCharacterIconTexture = 0;
 
 int main()
 {
@@ -32,6 +36,34 @@ int main()
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
         std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
+    }
+
+    // Load Character Icon
+    {
+        int w, h, nrChannels;
+        unsigned char* data = stbi_load("icons/Character.png", &w, &h, &nrChannels, 0);
+        if (data)
+        {
+            glGenTextures(1, &gCharacterIconTexture);
+            glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
+
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+            GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+            glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, format, GL_UNSIGNED_BYTE, data);
+            glGenerateMipmap(GL_TEXTURE_2D);
+
+            gCharacterIconLoaded = true;
+            stbi_image_free(data);
+            std::cout << "Loaded Character.png" << std::endl;
+        }
+        else
+        {
+            std::cout << "Failed to load icons/Character.png" << std::endl;
+        }
     }
 
     IMGUI_CHECKVERSION();
