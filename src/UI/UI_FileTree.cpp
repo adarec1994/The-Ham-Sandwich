@@ -4,7 +4,7 @@
 #include "UI_Utils.h"
 
 #include "../Archive.h"
-#include "../Area/AreaFile.h"
+#include "../Area/AreaFile.h"  // For ResetAreaReferencePosition()
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../tex/tex.h"
@@ -21,6 +21,9 @@ extern void SnapCameraToLoaded(AppState& state);
 static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry)
 {
     if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
+
+    // Reset reference position so first area renders at origin
+    ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
@@ -63,6 +66,9 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
 static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
 {
     if (!arc || !fileEntry) return;
+
+    // Reset reference position so this area renders at origin
+    ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;

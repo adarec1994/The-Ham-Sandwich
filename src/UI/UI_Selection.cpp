@@ -45,7 +45,7 @@ void CheckChunkSelection(AppState& state)
         glm::radians(45.0f),
         static_cast<float>(display_w) / static_cast<float>(display_h),
         0.1f,
-        20000.0f
+        100000.0f
     );
 
     const float mouseX = io.MousePos.x;

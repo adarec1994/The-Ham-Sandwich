@@ -46,6 +46,22 @@ struct AreaVertex
 };
 #pragma pack(pop)
 
+// ChnkCell flags - from NexusForever ChnkCellFlags.cs
+// These are the FLAG BITS, not sequential values!
+namespace ChnkCellFlags
+{
+    constexpr uint32 HeightMap  = 0x00000001;  // Bit 0
+    constexpr uint32 ZoneBound  = 0x00010000;  // Bit 16
+    constexpr uint32 Zone       = 0x10000000;  // Bit 28
+
+    // Additional flags we care about for rendering (from dataSize array positions)
+    constexpr uint32 WorldLayerIDs  = 0x00000002;  // Bit 1
+    constexpr uint32 BlendMap       = 0x00000004;  // Bit 2
+    constexpr uint32 ColorMap       = 0x00000008;  // Bit 3
+    constexpr uint32 ColorMapDXT    = 0x00002000;  // Bit 13
+    constexpr uint32 BlendMapDXT    = 0x00020000;  // Bit 17
+}
+
 class AreaChunkRender
 {
 public:
@@ -60,6 +76,7 @@ public:
         uint32 camPosition = 0;
         uint32 model = 0;
         uint32 highlightColor = 0;
+        uint32 baseColor = 0;
     };
 
 private:
@@ -85,10 +102,10 @@ private:
     uint32 mColorMapTexture = 0;
     std::vector<uint32> mLayerTextures;
 
-    std::vector<uint32> mBlendValues;
     uint32 mFlags = 0;
     Vector4 mTexScales = Vector4(1.0f);
 
+    uint32 mWorldLayerIDs[4] = {0};
     uint32 mZoneIds[4] = {0};
 
     void calcNormals();
@@ -96,7 +113,8 @@ private:
     void extendBuffer();
 
 public:
-    AreaChunkRender(uint32 flags, const std::vector<uint8>& payload, float baseX, float baseZ, ArchivePtr archive);
+    // Constructor takes raw cell data (flags are inside the data)
+    AreaChunkRender(const std::vector<uint8>& cellData, float baseX, float baseZ, ArchivePtr archive);
     ~AreaChunkRender();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
@@ -105,12 +123,18 @@ public:
     [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
     [[nodiscard]] uint32 getFlags() const { return mFlags; }
 
-    [[nodiscard]] bool hasHeightmap() const { return (mFlags & 1) != 0; }
-    [[nodiscard]] bool hasTextureIds() const { return (mFlags & 2) != 0; }
-    [[nodiscard]] bool hasBlendValues() const { return (mFlags & 4) != 0; }
-    [[nodiscard]] bool hasColorMap() const { return (mFlags & 8) != 0; }
-    [[nodiscard]] bool hasUnk1() const { return (mFlags & 0x40) != 0 || (mFlags & 0x80) != 0; }
-    [[nodiscard]] bool hasShadowMap() const { return (mFlags & 0x100) != 0; }
+    // Flag checks using ChnkCellFlags bit positions
+    [[nodiscard]] bool hasHeightmap() const { return (mFlags & ChnkCellFlags::HeightMap) != 0; }
+    [[nodiscard]] bool hasWorldLayerIDs() const { return (mFlags & ChnkCellFlags::WorldLayerIDs) != 0; }
+    [[nodiscard]] bool hasBlendMap() const { return (mFlags & ChnkCellFlags::BlendMap) != 0; }
+    [[nodiscard]] bool hasColorMap() const { return (mFlags & ChnkCellFlags::ColorMap) != 0; }
+    [[nodiscard]] bool hasColorMapDXT() const { return (mFlags & ChnkCellFlags::ColorMapDXT) != 0; }
+    [[nodiscard]] bool hasZoneBounds() const { return (mFlags & ChnkCellFlags::ZoneBound) != 0; }
+    [[nodiscard]] bool hasBlendMapDXT() const { return (mFlags & ChnkCellFlags::BlendMapDXT) != 0; }
+    [[nodiscard]] bool hasZoneIDs() const { return (mFlags & ChnkCellFlags::Zone) != 0; }
+
+    // Returns true if this chunk was fully initialized (has geometry ready to render)
+    [[nodiscard]] bool isFullyInitialized() const { return mVAO != 0; }
 
     void render();
 
@@ -182,3 +206,6 @@ public:
 };
 
 typedef std::shared_ptr<AreaFile> AreaFilePtr;
+
+// Call this when clearing loaded areas to reset reference tile position
+void ResetAreaReferencePosition();

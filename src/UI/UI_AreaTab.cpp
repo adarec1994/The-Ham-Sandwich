@@ -4,6 +4,7 @@
 #include "UI_Utils.h"
 
 #include "../Archive.h"
+#include "../Area/AreaFile.h"  // For ResetAreaReferencePosition()
 #include "../tex/tex.h"
 
 #include <unordered_map>
@@ -183,6 +184,9 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
 {
     if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
 
+    // Reset reference position so first area renders at origin
+    ResetAreaReferencePosition();
+
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
 
@@ -215,6 +219,9 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
 static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
 {
     if (!arc || !fileEntry) return;
+
+    // Reset reference position so this area renders at origin
+    ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
