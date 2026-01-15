@@ -33,27 +33,48 @@ if(NOT TARGET glad)
     add_library(glad STATIC "${glad_SOURCE_DIR}/src/glad.c"
             src/Database/Tbl.cpp
             src/Database/Tbl.h
-            src/Database/Definitions/Zonecompletion.h
-            src/Database/Definitions/Xpperlevel.h
-            src/Database/Definitions/Visualeffect.h
-            src/Database/Definitions/Worldzone.h
-            src/Database/Definitions/Worldwaterwake.h
-            src/Database/Definitions/Worldwatertype.h
-            src/Database/Definitions/Worldwaterlayer.h
-            src/Database/Definitions/Worldwaterfog.h
-            src/Database/Definitions/Worldwaterenvironment.h
-            src/Database/Definitions/Worldsocket.h
-            src/Database/Definitions/Worldsky.h
-            "src/Database/Definitions/Worldlocation2.h"
-            src/Database/Definitions/Worldlayer.h
-            src/Database/Definitions/Worldclutter.h
+            src/Database/Definitions/ZoneCompletion.h
+            src/Database/Definitions/XpPerLevel.h
+            src/Database/Definitions/VisualEffect.h
+            src/Database/Definitions/WorldZone.h
+            src/Database/Definitions/WorldWaterWake.h
+            src/Database/Definitions/WorldWaterType.h
+            src/Database/Definitions/WorldWaterLayer.h
+            src/Database/Definitions/WorldWaterFog.h
+            src/Database/Definitions/WorldWaterEnvironment.h
+            src/Database/Definitions/WorldSocket.h
+            src/Database/Definitions/WorldSky.h
+            "src/Database/Definitions/WorldLocation2.h"
+            src/Database/Definitions/WorldLayer.h
+            src/Database/Definitions/WorldClutter.h
             src/Database/Definitions/World.h
-            src/Database/Definitions/Wordfilteralt.h
-            src/Database/Definitions/Worldfilter.h
+            src/Database/Definitions/WordFilterAlt.h
+            src/Database/Definitions/WorldFilter.h
             src/Database/Definitions/Wind.h
-            src/Database/Definitions/Watersurfaceeffect.h
+            src/Database/Definitions/WaterSurfaceEffect.h
             src/Database/TblReader.h
-            src/Database/Definitions/WindSpawn.h)
+            src/Database/Definitions/WindSpawn.h
+            src/Database/Definitions/TradeSkillBonus.h
+            src/Database/Definitions/TradeSkillCatalyst.h
+            src/Database/Definitions/TradeSkillCatalystOrdering.h
+            src/Database/Definitions/TradeSkillHarvestingInfo.h
+            src/Database/Definitions/TradeSkillMaterial.h
+            src/Database/Definitions/TradeSkillMaterialCategory.h
+            src/Database/Definitions/TradeSkillProficiency.h
+            src/Database/Definitions/TradeSkillSchematic2.h
+            src/Database/Definitions/TradeSkillTalentTier.h
+            src/Database/Definitions/TradeSkillTier.h
+            src/Database/Definitions/Tutorial.h
+            src/Database/Definitions/TutorialAnchor.h
+            src/Database/Definitions/TutorialLayout.h
+            src/Database/Definitions/TutorialPage.h
+            src/Database/Definitions/UnitProperty2.h
+            src/Database/Definitions/UnitRace.h
+            src/Database/Definitions/UnitVehicle.h
+            src/Database/Definitions/VeteranTier.h
+            src/Database/Definitions/VirtualItem.h
+            src/Database/Definitions/Vital.h
+    )
     target_include_directories(glad PUBLIC "${glad_SOURCE_DIR}/include")
 endif()
 
@@ -168,8 +189,8 @@ add_executable(Wildstar_Studio_2
         src/UI/UI_AreaTab.h
         src/UI/UI_ModelTab.cpp
         src/UI/UI_ModelTab.h
-        src/Area/terraintexture.cpp
-        src/Area/terraintexture.h
+        src/Area/TerrainTexture.cpp
+        src/Area/TerrainTexture.h
         src/Area/terrainshader.cpp
         src/Area/terrainshader.h
         src/UI/UI_Tables.cpp
