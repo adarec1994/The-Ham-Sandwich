@@ -54,16 +54,16 @@ if(NOT TARGET glad)
             src/Database/Definitions/WaterSurfaceEffect.h
             src/Database/TblReader.h
             src/Database/Definitions/WindSpawn.h
-            src/Database/Definitions/TradeSkillBonus.h
-            src/Database/Definitions/TradeSkillCatalyst.h
-            src/Database/Definitions/TradeSkillCatalystOrdering.h
-            src/Database/Definitions/TradeSkillHarvestingInfo.h
-            src/Database/Definitions/TradeSkillMaterial.h
-            src/Database/Definitions/TradeSkillMaterialCategory.h
-            src/Database/Definitions/TradeSkillProficiency.h
-            src/Database/Definitions/TradeSkillSchematic2.h
-            src/Database/Definitions/TradeSkillTalentTier.h
-            src/Database/Definitions/TradeSkillTier.h
+            src/Database/Definitions/TradeskillBonus.h
+            src/Database/Definitions/TradeskillCatalyst.h
+            src/Database/Definitions/TradeskillCatalystOrdering.h
+            src/Database/Definitions/TradeskillHarvestingInfo.h
+            src/Database/Definitions/TradeskillMaterial.h
+            src/Database/Definitions/TradeskillMaterialCategory.h
+            src/Database/Definitions/TradeskillProficiency.h
+            src/Database/Definitions/TradeskillSchematic2.h
+            src/Database/Definitions/TradeskillTalentTier.h
+            src/Database/Definitions/TradeskillTier.h
             src/Database/Definitions/Tutorial.h
             src/Database/Definitions/TutorialAnchor.h
             src/Database/Definitions/TutorialLayout.h
@@ -74,6 +74,68 @@ if(NOT TARGET glad)
             src/Database/Definitions/VeteranTier.h
             src/Database/Definitions/VirtualItem.h
             src/Database/Definitions/Vital.h
+            src/Database/Definitions/SpellLevel.h
+            src/Database/Definitions/SpellPhase.h
+            src/Database/Definitions/Spline2.h
+            src/Database/Definitions/Spline2Node.h
+            src/Database/Definitions/StoreDisplayInfo.h
+            src/Database/Definitions/StoreKeyword.h
+            src/Database/Definitions/StoreLink.h
+            src/Database/Definitions/StoryPanel.h
+            src/Database/Definitions/TargetGroup.h
+            src/Database/Definitions/TargetMarker.h
+            src/Database/Definitions/TaxiNode.h
+            src/Database/Definitions/TaxiRoute.h
+            src/Database/Definitions/TelegraphDamage.h
+            src/Database/Definitions/TicketCategory.h
+            src/Database/Definitions/TicketSubCategory.h
+            src/Database/Definitions/TrackingSlot.h
+            src/Database/Definitions/TradeSkill.h
+            src/Database/Definitions/TradeSkillAchievementLayout.h
+            src/Database/Definitions/TradeSkillAchievementAward.h
+            src/Database/Definitions/TradeskillAchievementReward.h
+            src/Database/Definitions/TradeskillAdditive.h
+            src/Database/Definitions/Spell4Thresholds.h
+            src/Database/Definitions/Spell4TierRequirements.h
+            src/Database/Definitions/Spell4ValidTargets.h
+            src/Database/Definitions/Spell4Visual.h
+            src/Database/Definitions/Spell4VisualGroup.h
+            src/Database/Definitions/SpellCooldown.h
+            src/Database/Definitions/SpellEffectType.h
+            src/Database/Definitions/Spell4GroupList.h
+            src/Database/Definitions/Spell4HitResults.h
+            src/Database/Definitions/Spell4Modification.h
+            src/Database/Definitions/Spell4Prerequisites.h
+            src/Database/Definitions/Spell4Reagent.h
+            src/Database/Definitions/Spell4Runner.h
+            src/Database/Definitions/Spell4ServiceTokenCost.h
+            src/Database/Definitions/Spell4SpellTypes.h
+            src/Database/Definitions/Spell4StackGroup.h
+            src/Database/Definitions/Spell4Tag.h
+            src/Database/Definitions/Spell4TargetAngle.h
+            src/Database/Definitions/Spell4TargetMechanics.h
+            src/Database/Definitions/Spell4Telegraph.h
+            src/Database/TblRecords.h
+            src/Database/Definitions/Spell4.h
+            src/Database/Definitions/SoundImpactEvents.h
+            src/Database/Definitions/SoundMusicSet.h
+            src/Database/Definitions/SoundParameter.h
+            src/Database/Definitions/SoundReplace.h
+            src/Database/Definitions/SoundReplaceDescription.h
+            src/Database/Definitions/SoundStates.h
+            src/Database/Definitions/SoundSwitch.h
+            src/Database/Definitions/SoundUIContext.h
+            src/Database/Definitions/SoundZoneKit.h
+            src/Database/Definitions/RewardTrackRewards.h
+            src/Database/Definitions/Salvage.h
+            src/Database/Definitions/SalvageException.h
+            src/Database/Definitions/SkyCloudSet.h
+            src/Database/Definitions/SoundBank.h
+            src/Database/Definitions/SoundCombatLoop.h
+            src/Database/Definitions/SoundContext.h
+            src/Database/Definitions/SoundDirectionalAmbience.h
+            src/Database/Definitions/SoundEnvironment.h
+            src/Database/Definitions/SoundEvent.h
     )
     target_include_directories(glad PUBLIC "${glad_SOURCE_DIR}/include")
 endif()
