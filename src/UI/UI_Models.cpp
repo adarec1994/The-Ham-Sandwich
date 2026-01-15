@@ -1,7 +1,7 @@
-#include "UI_models.h"
+#include "UI_Models.h"
 #include "imgui.h"
-#include "M3Render.h"
-#include "../UI/UI.h"
+#include "../models/M3Render.h"
+#include "UI.h"
 
 namespace UI_Models
 {

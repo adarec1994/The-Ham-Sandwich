@@ -129,8 +129,22 @@ add_executable(Wildstar_Studio_2
         src/models/M3Loader.h
         src/models/M3Render.cpp
         src/models/M3Render.h
-        src/models/UI_Models.cpp
-        src/models/UI_Models.h
+        src/UI/UI_Models.cpp
+        src/UI/UI_Models.h
+        src/UI/UI_Globals.cpp
+        src/UI/UI_Globals.h
+        src/UI/UI_Utils.cpp
+        src/UI/UI_Utils.h
+        src/UI/UI_Selection.cpp
+        src/UI/UI_Selection.h
+        src/UI/UI_RenderWorld.cpp
+        src/UI/UI_RenderWorld.h
+        src/UI/UI_FileTree.cpp
+        src/UI/UI_FileTree.h
+        src/UI/UI_AreaTab.cpp
+        src/UI/UI_AreaTab.h
+        src/UI/UI_ModelTab.cpp
+        src/UI/UI_ModelTab.h
 )
 
 target_include_directories(Wildstar_Studio_2 PRIVATE

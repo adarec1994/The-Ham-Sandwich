@@ -73,7 +73,7 @@ void SnapCameraToLoaded(AppState& state)
     float distance = radius * 1.5f;
     state.camera.Position = center - (state.camera.Front * distance);
 
-    state.camera.MovementSpeed = std::max(50.0f, radius * 0.5f);
+    state.camera.MovementSpeed = std::max(5.0f, radius * 0.15f);
 
     std::cout << "Camera snapped to terrain:\n";
     std::cout << "  World Min: (" << combinedMin.x << ", " << combinedMin.y << ", " << combinedMin.z << ")\n";
