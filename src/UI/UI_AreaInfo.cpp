@@ -6,6 +6,7 @@
 #include <ImGuiFileDialog.h>
 #include <glad/glad.h>
 #include <filesystem>
+#include <fstream>
 #include <cstring>
 #include <thread>
 #include <atomic>
@@ -39,7 +40,6 @@ namespace UI_AreaInfo
 
     static float sWindowBottomY = 50.0f;
 
-    // Heightmap display state
     static bool sShowHeightmapWindow = false;
     static GLuint sHeightmapTexture = 0;
     static int sHeightmapWidth = 0;
@@ -64,10 +64,33 @@ namespace UI_AreaInfo
         for (const auto& area : gLoadedAreas)
         {
             if (!area) continue;
-            minTileX = std::min(minTileX, area->getTileX());
-            maxTileX = std::max(maxTileX, area->getTileX());
-            minTileY = std::min(minTileY, area->getTileY());
-            maxTileY = std::max(maxTileY, area->getTileY());
+
+            const auto& chunks = area->getChunks();
+            bool hasVerts = false;
+            for (const auto& chunk : chunks)
+            {
+                if (chunk && !chunk->getVertices().empty())
+                {
+                    hasVerts = true;
+                    break;
+                }
+            }
+
+            if (hasVerts)
+            {
+                minTileX = std::min(minTileX, area->getTileX());
+                maxTileX = std::max(maxTileX, area->getTileX());
+                minTileY = std::min(minTileY, area->getTileY());
+                maxTileY = std::max(maxTileY, area->getTileY());
+            }
+        }
+
+        if (minTileX > maxTileX || minTileY > maxTileY)
+        {
+            sHeightmapData.clear();
+            sHeightmapWidth = 0;
+            sHeightmapHeight = 0;
+            return;
         }
 
         int tilesWide = maxTileX - minTileX + 1;
@@ -75,14 +98,13 @@ namespace UI_AreaInfo
         int totalWidth = tilesWide * AREA_SIZE;
         int totalHeight = tilesHigh * AREA_SIZE;
 
-        if (totalWidth > 4096 || totalHeight > 4096)
+        constexpr int MAX_DIM = 4096;
+        float scale = 1.0f;
+        if (totalWidth > MAX_DIM || totalHeight > MAX_DIM)
         {
-            tilesWide = 1;
-            tilesHigh = 1;
-            totalWidth = AREA_SIZE;
-            totalHeight = AREA_SIZE;
-            minTileX = gLoadedAreas[0]->getTileX();
-            minTileY = gLoadedAreas[0]->getTileY();
+            scale = static_cast<float>(MAX_DIM) / std::max(totalWidth, totalHeight);
+            totalWidth = static_cast<int>(totalWidth * scale);
+            totalHeight = static_cast<int>(totalHeight * scale);
         }
 
         std::vector<float> heights(totalWidth * totalHeight, -100000.0f);
@@ -95,36 +117,49 @@ namespace UI_AreaInfo
 
             int areaTileX = area->getTileX() - minTileX;
             int areaTileY = area->getTileY() - minTileY;
+
             if (areaTileX < 0 || areaTileX >= tilesWide || areaTileY < 0 || areaTileY >= tilesHigh)
                 continue;
 
             const auto& chunks = area->getChunks();
 
-            for (int chunkIdx = 0; chunkIdx < static_cast<int>(chunks.size()); chunkIdx++)
+            for (size_t chunkIdx = 0; chunkIdx < chunks.size(); chunkIdx++)
             {
                 const auto& chunk = chunks[chunkIdx];
-                if (!chunk || !chunk->hasHeightmap()) continue;
+                if (!chunk) continue;
 
                 const auto& verts = chunk->getVertices();
                 if (verts.empty()) continue;
 
-                for (const auto& v : verts)
+                int chunkX = chunkIdx % 16;
+                int chunkY = chunkIdx / 16;
+
+                for (int vy = 0; vy < 17; vy++)
                 {
-                    int pixelX = static_cast<int>(v.x / 2.0f);
-                    int pixelZ = static_cast<int>(v.z / 2.0f);
-
-                    if (pixelX < 0 || pixelX >= AREA_SIZE || pixelZ < 0 || pixelZ >= AREA_SIZE)
-                        continue;
-
-                    int imgX = areaTileX * AREA_SIZE + pixelX;
-                    int imgY = (tilesHigh - 1 - areaTileY) * AREA_SIZE + (AREA_SIZE - 1 - pixelZ);
-
-                    if (imgX >= 0 && imgX < totalWidth && imgY >= 0 && imgY < totalHeight)
+                    for (int vx = 0; vx < 17; vx++)
                     {
-                        int idx = imgY * totalWidth + imgX;
-                        heights[idx] = v.y;
-                        minHeight = std::min(minHeight, v.y);
-                        maxHeight = std::max(maxHeight, v.y);
+                        int vertIdx = vy * 17 + vx;
+                        if (vertIdx >= static_cast<int>(verts.size())) continue;
+
+                        float h = verts[vertIdx].y;
+
+                        int pixelX = chunkY * 16 + vx;
+                        int pixelY = chunkX * 16 + vy;
+
+                        if (pixelX >= AREA_SIZE) pixelX = AREA_SIZE - 1;
+                        if (pixelY >= AREA_SIZE) pixelY = AREA_SIZE - 1;
+
+                        int imgX = static_cast<int>((areaTileX * AREA_SIZE + pixelX) * scale);
+                        int imgY = static_cast<int>((areaTileY * AREA_SIZE + pixelY) * scale);
+                        imgY = totalHeight - 1 - imgY;
+
+                        if (imgX >= 0 && imgX < totalWidth && imgY >= 0 && imgY < totalHeight)
+                        {
+                            int idx = imgY * totalWidth + imgX;
+                            heights[idx] = h;
+                            minHeight = std::min(minHeight, h);
+                            maxHeight = std::max(maxHeight, h);
+                        }
                     }
                 }
             }
@@ -173,8 +208,46 @@ namespace UI_AreaInfo
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, totalWidth, totalHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, sHeightmapData.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sHeightmapWidth, sHeightmapHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, sHeightmapData.data());
         glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    static std::string GetHeightmapFilename()
+    {
+        if (gLoadedAreas.empty()) return "heightmap";
+
+        const auto& path = gLoadedAreas[0]->getPath();
+        if (path.empty()) return "heightmap";
+
+        size_t lastSlash = path.find_last_of(L"/\\");
+        std::wstring filename = (lastSlash != std::wstring::npos) ? path.substr(lastSlash + 1) : path;
+
+        size_t ext = filename.rfind(L".area");
+        if (ext != std::wstring::npos)
+            filename = filename.substr(0, ext);
+
+        if (gLoadedAreas.size() > 1)
+        {
+            size_t dot = filename.rfind(L'.');
+            if (dot != std::wstring::npos && dot >= 2)
+            {
+                bool isHex = true;
+                for (size_t i = dot + 1; i < filename.size() && isHex; i++)
+                {
+                    wchar_t c = filename[i];
+                    if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F')))
+                        isHex = false;
+                }
+                if (isHex)
+                    filename = filename.substr(0, dot);
+            }
+        }
+
+        std::string result;
+        for (wchar_t c : filename)
+            result += (c < 128) ? static_cast<char>(c) : '_';
+
+        return result.empty() ? "heightmap" : result;
     }
 
     static void ExportHeightmapPNG(const std::string& path)
@@ -188,18 +261,160 @@ namespace UI_AreaInfo
 
         std::string fullPath = path;
         if (fullPath.find(".png") == std::string::npos && fullPath.find(".PNG") == std::string::npos)
-        {
-            fullPath += "/heightmap.png";
-        }
+            fullPath += ".png";
 
         if (stbi_write_png(fullPath.c_str(), sHeightmapWidth, sHeightmapHeight, 4, sHeightmapData.data(), sHeightmapWidth * 4))
-        {
             sHeightmapExportMessage = "Saved: " + fullPath;
-        }
         else
-        {
             sHeightmapExportMessage = "Failed to save heightmap";
+        sHeightmapExportTimer = 4.0f;
+    }
+
+    static void ExportHeightmapJPEG(const std::string& path)
+    {
+        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
+        {
+            sHeightmapExportMessage = "No heightmap data to export";
+            sHeightmapExportTimer = 3.0f;
+            return;
         }
+
+        std::string fullPath = path;
+        if (fullPath.find(".jpg") == std::string::npos && fullPath.find(".JPG") == std::string::npos &&
+            fullPath.find(".jpeg") == std::string::npos && fullPath.find(".JPEG") == std::string::npos)
+            fullPath += ".jpg";
+
+        std::vector<uint8_t> rgb(sHeightmapWidth * sHeightmapHeight * 3);
+        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
+        {
+            rgb[i * 3 + 0] = sHeightmapData[i * 4 + 0];
+            rgb[i * 3 + 1] = sHeightmapData[i * 4 + 1];
+            rgb[i * 3 + 2] = sHeightmapData[i * 4 + 2];
+        }
+
+        if (stbi_write_jpg(fullPath.c_str(), sHeightmapWidth, sHeightmapHeight, 3, rgb.data(), 95))
+            sHeightmapExportMessage = "Saved: " + fullPath;
+        else
+            sHeightmapExportMessage = "Failed to save heightmap";
+        sHeightmapExportTimer = 4.0f;
+    }
+
+    static void ExportHeightmapTIFF(const std::string& path)
+    {
+        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
+        {
+            sHeightmapExportMessage = "No heightmap data to export";
+            sHeightmapExportTimer = 3.0f;
+            return;
+        }
+
+        std::string fullPath = path;
+        if (fullPath.find(".tif") == std::string::npos && fullPath.find(".TIF") == std::string::npos)
+            fullPath += ".tif";
+
+        std::vector<uint16_t> heightData16(sHeightmapWidth * sHeightmapHeight);
+        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
+            heightData16[i] = static_cast<uint16_t>(sHeightmapData[i * 4] * 257);
+
+        std::ofstream out(fullPath, std::ios::binary);
+        if (!out)
+        {
+            sHeightmapExportMessage = "Failed to create file";
+            sHeightmapExportTimer = 3.0f;
+            return;
+        }
+
+        uint16_t byteOrder = 0x4949;
+        uint16_t magic = 42;
+        uint32_t ifdOffset = 8;
+        out.write(reinterpret_cast<char*>(&byteOrder), 2);
+        out.write(reinterpret_cast<char*>(&magic), 2);
+        out.write(reinterpret_cast<char*>(&ifdOffset), 4);
+
+        uint16_t numEntries = 8;
+        out.write(reinterpret_cast<char*>(&numEntries), 2);
+
+        auto writeTag = [&](uint16_t tag, uint16_t type, uint32_t count, uint32_t value) {
+            out.write(reinterpret_cast<char*>(&tag), 2);
+            out.write(reinterpret_cast<char*>(&type), 2);
+            out.write(reinterpret_cast<char*>(&count), 4);
+            out.write(reinterpret_cast<char*>(&value), 4);
+        };
+
+        uint32_t stripOffset = 8 + 2 + (12 * numEntries) + 4;
+        uint32_t stripBytes = sHeightmapWidth * sHeightmapHeight * 2;
+
+        writeTag(256, 3, 1, sHeightmapWidth);
+        writeTag(257, 3, 1, sHeightmapHeight);
+        writeTag(258, 3, 1, 16);
+        writeTag(259, 3, 1, 1);
+        writeTag(262, 3, 1, 1);
+        writeTag(273, 4, 1, stripOffset);
+        writeTag(278, 3, 1, sHeightmapHeight);
+        writeTag(279, 4, 1, stripBytes);
+
+        uint32_t nextIFD = 0;
+        out.write(reinterpret_cast<char*>(&nextIFD), 4);
+
+        out.write(reinterpret_cast<char*>(heightData16.data()), stripBytes);
+        out.close();
+
+        sHeightmapExportMessage = "Saved: " + fullPath;
+        sHeightmapExportTimer = 4.0f;
+    }
+
+    static void ExportHeightmapDDS(const std::string& path)
+    {
+        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
+        {
+            sHeightmapExportMessage = "No heightmap data to export";
+            sHeightmapExportTimer = 3.0f;
+            return;
+        }
+
+        std::string fullPath = path;
+        if (fullPath.find(".dds") == std::string::npos && fullPath.find(".DDS") == std::string::npos)
+            fullPath += ".dds";
+
+        std::vector<uint16_t> heightData16(sHeightmapWidth * sHeightmapHeight);
+        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
+            heightData16[i] = static_cast<uint16_t>(sHeightmapData[i * 4] * 257);
+
+        std::ofstream out(fullPath, std::ios::binary);
+        if (!out)
+        {
+            sHeightmapExportMessage = "Failed to create file";
+            sHeightmapExportTimer = 3.0f;
+            return;
+        }
+
+        uint32_t magic = 0x20534444;
+        out.write(reinterpret_cast<char*>(&magic), 4);
+
+        uint8_t header[124] = {0};
+        *reinterpret_cast<uint32_t*>(&header[0]) = 124;
+        *reinterpret_cast<uint32_t*>(&header[4]) = 0x1 | 0x2 | 0x4 | 0x1000;
+        *reinterpret_cast<uint32_t*>(&header[8]) = sHeightmapHeight;
+        *reinterpret_cast<uint32_t*>(&header[12]) = sHeightmapWidth;
+        *reinterpret_cast<uint32_t*>(&header[16]) = sHeightmapWidth * 2;
+
+        uint8_t* pf = &header[72];
+        *reinterpret_cast<uint32_t*>(&pf[0]) = 32;
+        *reinterpret_cast<uint32_t*>(&pf[4]) = 0x20000;
+        *reinterpret_cast<uint32_t*>(&pf[8]) = 0;
+        *reinterpret_cast<uint32_t*>(&pf[12]) = 16;
+        *reinterpret_cast<uint32_t*>(&pf[16]) = 0xFFFF;
+        *reinterpret_cast<uint32_t*>(&pf[20]) = 0;
+        *reinterpret_cast<uint32_t*>(&pf[24]) = 0;
+        *reinterpret_cast<uint32_t*>(&pf[28]) = 0;
+
+        *reinterpret_cast<uint32_t*>(&header[104]) = 0x1000;
+
+        out.write(reinterpret_cast<char*>(header), 124);
+        out.write(reinterpret_cast<char*>(heightData16.data()), sHeightmapWidth * sHeightmapHeight * 2);
+        out.close();
+
+        sHeightmapExportMessage = "Saved: " + fullPath;
         sHeightmapExportTimer = 4.0f;
     }
 
@@ -214,14 +429,12 @@ namespace UI_AreaInfo
             if (sHeightmapTexture != 0 && sHeightmapWidth > 0)
             {
                 ImGui::Text("Resolution: %dx%d", sHeightmapWidth, sHeightmapHeight);
-                ImGui::Text("Height Range: %.2f to %.2f", sHeightmapMin, sHeightmapMax);
                 ImGui::Spacing();
 
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 float imageSize = std::min(avail.x, avail.y - 80);
                 imageSize = std::max(imageSize, 128.0f);
 
-                // Maintain aspect ratio
                 float aspectRatio = static_cast<float>(sHeightmapWidth) / static_cast<float>(sHeightmapHeight);
                 float displayW = imageSize;
                 float displayH = imageSize;
@@ -236,23 +449,42 @@ namespace UI_AreaInfo
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Export as PNG...", ImVec2(150, 30)))
+                std::string suggestedName = GetHeightmapFilename();
+
+                if (ImGui::Button("PNG", ImVec2(60, 30)))
                 {
                     IGFD::FileDialogConfig config;
                     config.path = ".";
+                    config.fileName = suggestedName + ".png";
                     config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "HeightmapExportDialog",
-                        "Save Heightmap PNG",
-                        ".png",
-                        config
-                    );
+                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportPNG", "Save Heightmap PNG", ".png", config);
                 }
-
                 ImGui::SameLine();
-                if (ImGui::Button("Refresh", ImVec2(80, 30)))
+                if (ImGui::Button("JPEG", ImVec2(60, 30)))
                 {
-                    GenerateHeightmapTexture();
+                    IGFD::FileDialogConfig config;
+                    config.path = ".";
+                    config.fileName = suggestedName + ".jpg";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportJPEG", "Save Heightmap JPEG", ".jpg", config);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("TIFF", ImVec2(60, 30)))
+                {
+                    IGFD::FileDialogConfig config;
+                    config.path = ".";
+                    config.fileName = suggestedName + ".tif";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportTIFF", "Save Heightmap TIFF", ".tif", config);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("DDS", ImVec2(60, 30)))
+                {
+                    IGFD::FileDialogConfig config;
+                    config.path = ".";
+                    config.fileName = suggestedName + ".dds";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportDDS", "Save Heightmap DDS", ".dds", config);
                 }
 
                 if (sHeightmapExportTimer > 0.0f)
@@ -275,13 +507,31 @@ namespace UI_AreaInfo
         }
         ImGui::End();
 
-        if (ImGuiFileDialog::Instance()->Display("HeightmapExportDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        if (ImGuiFileDialog::Instance()->Display("HeightmapExportPNG", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk())
-            {
-                std::string savePath = ImGuiFileDialog::Instance()->GetFilePathName();
-                ExportHeightmapPNG(savePath);
-            }
+                ExportHeightmapPNG(ImGuiFileDialog::Instance()->GetFilePathName());
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("HeightmapExportJPEG", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+                ExportHeightmapJPEG(ImGuiFileDialog::Instance()->GetFilePathName());
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("HeightmapExportTIFF", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+                ExportHeightmapTIFF(ImGuiFileDialog::Instance()->GetFilePathName());
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("HeightmapExportDDS", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+                ExportHeightmapDDS(ImGuiFileDialog::Instance()->GetFilePathName());
             ImGuiFileDialog::Instance()->Close();
         }
     }
