@@ -33,6 +33,8 @@ namespace UI_AreaInfo
     static std::string sPendingExportPath;
     static ArchivePtr sPendingArchive;
 
+    static float sWindowBottomY = 50.0f;
+
     void Reset()
     {
         sShowWindow = true;
@@ -46,8 +48,16 @@ namespace UI_AreaInfo
 
     void Draw(AppState& state)
     {
-        if (gLoadedAreas.empty()) return;
-        if (!sShowWindow) return;
+        if (gLoadedAreas.empty())
+        {
+            sWindowBottomY = 50.0f;
+            return;
+        }
+        if (!sShowWindow)
+        {
+            sWindowBottomY = 50.0f;
+            return;
+        }
 
         if (ImGuiFileDialog::Instance()->Display("ExportFolderDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
@@ -139,10 +149,10 @@ namespace UI_AreaInfo
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-        ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 320.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, 50.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_Always);
 
-        ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize;
+        ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
 
         if (ImGui::Begin("Area Info", &sShowWindow, flags))
         {
@@ -253,7 +263,7 @@ namespace UI_AreaInfo
                     ImGui::Spacing();
                     ImGui::Separator();
                     ImGui::Spacing();
-                    
+
                     if (sLastExportPath.empty())
                     {
                         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sLastExportMessage.c_str());
@@ -262,7 +272,7 @@ namespace UI_AreaInfo
                     {
                         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sLastExportMessage.c_str());
                     }
-                    
+
                     sExportResultTimer -= ImGui::GetIO().DeltaTime;
                     if (sExportResultTimer <= 0.0f)
                     {
@@ -274,7 +284,14 @@ namespace UI_AreaInfo
             {
                 ImGui::Text("No area loaded");
             }
+
+            sWindowBottomY = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y;
         }
         ImGui::End();
+    }
+
+    float GetWindowBottomY()
+    {
+        return sWindowBottomY;
     }
 }

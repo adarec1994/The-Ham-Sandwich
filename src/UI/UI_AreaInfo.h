@@ -6,4 +6,5 @@ namespace UI_AreaInfo
 {
     void Draw(AppState& state);
     void Reset();
+    float GetWindowBottomY();
 }

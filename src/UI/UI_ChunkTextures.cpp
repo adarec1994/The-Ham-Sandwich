@@ -1,5 +1,6 @@
 #include "UI_ChunkTextures.h"
 #include "UI_Globals.h"
+#include "UI_AreaInfo.h"
 #include "../Area/AreaFile.h"
 #include "../Area/TerrainTexture.h"
 #include "../Archive.h"
@@ -7,6 +8,7 @@
 #include <imgui.h>
 #include <glad/glad.h>
 #include <vector>
+#include <algorithm>
 
 namespace UI_ChunkTextures
 {
@@ -16,13 +18,11 @@ namespace UI_ChunkTextures
         int width = 0;
         int height = 0;
         std::string name;
-        bool showUV = false;
         bool ownsTexture = false;
     };
 
     static std::vector<ChunkTexturePreview> sPreviews;
     static AreaChunkRenderPtr sLastChunk = nullptr;
-    static GLuint sUVTexture = 0;
     static bool sWindowOpen = true;
 
     static GLuint CreateTexture(const std::vector<uint8_t>& data, int w, int h)
@@ -41,33 +41,6 @@ namespace UI_ChunkTextures
         return tex;
     }
 
-    static GLuint CreateUVTexture(int w, int h)
-    {
-        std::vector<uint8_t> data(w * h * 4);
-        for (int y = 0; y < h; y++)
-        {
-            for (int x = 0; x < w; x++)
-            {
-                int idx = (y * w + x) * 4;
-                float u = static_cast<float>(x) / (w - 1);
-                float v = static_cast<float>(y) / (h - 1);
-
-                data[idx + 0] = static_cast<uint8_t>(u * 255);
-                data[idx + 1] = static_cast<uint8_t>(v * 255);
-                data[idx + 2] = 0;
-                data[idx + 3] = 255;
-
-                if ((x % 16 == 0) || (y % 16 == 0))
-                {
-                    data[idx + 0] = 255;
-                    data[idx + 1] = 255;
-                    data[idx + 2] = 255;
-                }
-            }
-        }
-        return CreateTexture(data, w, h);
-    }
-
     static void ClearPreviews()
     {
         for (auto& p : sPreviews)
@@ -76,12 +49,6 @@ namespace UI_ChunkTextures
                 glDeleteTextures(1, &p.textureID);
         }
         sPreviews.clear();
-
-        if (sUVTexture != 0)
-        {
-            glDeleteTextures(1, &sUVTexture);
-            sUVTexture = 0;
-        }
     }
 
     static void LoadChunkTextures(const AreaChunkRenderPtr& chunk, const ArchivePtr& archive)
@@ -146,8 +113,6 @@ namespace UI_ChunkTextures
                 sPreviews.push_back(p);
             }
         }
-
-        sUVTexture = CreateUVTexture(256, 256);
     }
 
     void Reset()
@@ -156,6 +121,12 @@ namespace UI_ChunkTextures
         sLastChunk = nullptr;
         sWindowOpen = true;
     }
+
+    static GLuint sPreviewTexture = 0;
+    static int sPreviewWidth = 0;
+    static int sPreviewHeight = 0;
+    static std::string sPreviewName;
+    static bool sShowPreview = false;
 
     void Draw(AppState& state)
     {
@@ -179,26 +150,20 @@ namespace UI_ChunkTextures
             LoadChunkTextures(gSelectedChunk, archive);
             sLastChunk = gSelectedChunk;
         }
-        
-        ImGui::SetNextWindowSize(ImVec2(350, 500), ImGuiCond_FirstUseEver);
-        
+
         std::string title = "Chunk " + std::to_string(gSelectedChunkIndex) + "###ChunkTex";
-        
-        if (ImGui::Begin(title.c_str(), &sWindowOpen))
+
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        float topY = UI_AreaInfo::GetWindowBottomY() + 10.0f;
+        float maxHeight = viewport->Size.y - topY - 20.0f;
+
+        ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, topY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(200, 100), ImVec2(300, maxHeight));
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove;
+
+        if (ImGui::Begin(title.c_str(), &sWindowOpen, flags))
         {
-            ImGui::Text("Chunk Index: %d", gSelectedChunkIndex);
-            ImGui::Text("Area: %s", gSelectedChunkAreaName.c_str());
-            
-            glm::vec3 minB = gSelectedChunk->getMinBounds();
-            glm::vec3 maxB = gSelectedChunk->getMaxBounds();
-            ImGui::Text("Min: (%.1f, %.1f, %.1f)", minB.x, minB.y, minB.z);
-            ImGui::Text("Max: (%.1f, %.1f, %.1f)", maxB.x, maxB.y, maxB.z);
-            
-            const uint32_t* layers = gSelectedChunk->getWorldLayerIDs();
-            ImGui::Text("Layers: %u, %u, %u, %u", layers[0], layers[1], layers[2], layers[3]);
-            
-            ImGui::Separator();
-            
             if (sPreviews.empty())
             {
                 ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "No textures available");
@@ -206,61 +171,54 @@ namespace UI_ChunkTextures
             else
             {
                 float previewSize = 128.0f;
-                
+
                 for (size_t i = 0; i < sPreviews.size(); i++)
                 {
                     auto& p = sPreviews[i];
                     if (p.textureID == 0) continue;
-                    
+
                     ImGui::PushID(static_cast<int>(i));
-                    
+
                     if (ImGui::CollapsingHeader(p.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
                     {
                         ImGui::Text("Size: %dx%d", p.width, p.height);
-                        
-                        ImGui::Checkbox("Show UV", &p.showUV);
-                        
-                        ImVec2 pos = ImGui::GetCursorScreenPos();
-                        ImGui::Image((ImTextureID)(intptr_t)p.textureID, ImVec2(previewSize, previewSize));
-                        
-                        if (p.showUV && sUVTexture != 0)
+
+                        if (ImGui::ImageButton("##tex", (ImTextureID)(intptr_t)p.textureID, ImVec2(previewSize, previewSize)))
                         {
-                            ImGui::GetWindowDrawList()->AddImage(
-                                (ImTextureID)(intptr_t)sUVTexture,
-                                pos,
-                                ImVec2(pos.x + previewSize, pos.y + previewSize),
-                                ImVec2(0, 0), ImVec2(1, 1),
-                                IM_COL32(255, 255, 255, 128)
-                            );
-                        }
-                        
-                        if (ImGui::IsItemHovered())
-                        {
-                            ImVec2 mouse = ImGui::GetMousePos();
-                            float u = (mouse.x - pos.x) / previewSize;
-                            float v = (mouse.y - pos.y) / previewSize;
-                            if (u >= 0 && u <= 1 && v >= 0 && v <= 1)
-                            {
-                                ImGui::BeginTooltip();
-                                ImGui::Text("UV: (%.3f, %.3f)", u, v);
-                                ImGui::Text("Pixel: (%d, %d)", (int)(u * p.width), (int)(v * p.height));
-                                ImGui::EndTooltip();
-                            }
+                            sPreviewTexture = p.textureID;
+                            sPreviewWidth = p.width;
+                            sPreviewHeight = p.height;
+                            sPreviewName = p.name;
+                            sShowPreview = true;
                         }
                     }
-                    
+
                     ImGui::PopID();
                 }
             }
-            
-            ImGui::Separator();
-            
-            if (ImGui::Button("Deselect", ImVec2(-1, 0)))
-            {
-                gSelectedChunk = nullptr;
-                gSelectedChunkIndex = -1;
-            }
         }
         ImGui::End();
+
+        if (sShowPreview && sPreviewTexture != 0)
+        {
+            ImGui::SetNextWindowSize(ImVec2(0, 0), ImGuiCond_Always);
+
+            if (ImGui::Begin(sPreviewName.c_str(), &sShowPreview, ImGuiWindowFlags_AlwaysAutoResize))
+            {
+                ImGui::Text("Size: %dx%d", sPreviewWidth, sPreviewHeight);
+
+                float maxSize = 512.0f;
+                float scale = 1.0f;
+                int maxDim = sPreviewWidth > sPreviewHeight ? sPreviewWidth : sPreviewHeight;
+                if (maxDim > maxSize)
+                    scale = maxSize / static_cast<float>(maxDim);
+
+                float displayW = sPreviewWidth * scale;
+                float displayH = sPreviewHeight * scale;
+
+                ImGui::Image((ImTextureID)(intptr_t)sPreviewTexture, ImVec2(displayW, displayH));
+            }
+            ImGui::End();
+        }
     }
 }

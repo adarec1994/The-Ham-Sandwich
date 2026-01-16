@@ -136,49 +136,6 @@ void RenderUI(AppState& state)
         ImGui::Text("Camera Speed: %.1f", state.camera.MovementSpeed);
     ImGui::End();
 
-    if (gSelectedChunk)
-    {
-        ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 250.0f, 80.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(240, 0));
-
-        if (ImGui::Begin("Chunk Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-        {
-            ImGui::Text("Index: %d", gSelectedChunkIndex);
-            if (!gSelectedChunkAreaName.empty())
-                ImGui::Text("%s", gSelectedChunkAreaName.c_str());
-
-            ImGui::Separator();
-
-            glm::vec3 minB = gSelectedChunk->getMinBounds();
-            glm::vec3 maxB = gSelectedChunk->getMaxBounds();
-
-            glm::vec3 worldOffset(0.0f);
-            if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
-                worldOffset = gLoadedAreas[gSelectedAreaIndex]->getWorldOffset();
-
-            glm::vec3 worldMin = minB + worldOffset;
-            glm::vec3 worldMax = maxB + worldOffset;
-
-            ImGui::Text("Local Min: (%.1f, %.1f, %.1f)", minB.x, minB.y, minB.z);
-            ImGui::Text("Local Max: (%.1f, %.1f, %.1f)", maxB.x, maxB.y, maxB.z);
-            ImGui::Text("World Min: (%.1f, %.1f, %.1f)", worldMin.x, worldMin.y, worldMin.z);
-            ImGui::Text("World Max: (%.1f, %.1f, %.1f)", worldMax.x, worldMax.y, worldMax.z);
-
-            ImGui::Separator();
-            ImGui::Text("Flags: 0x%X", gSelectedChunk->getFlags());
-            ImGui::Text("Avg Height: %.2f", gSelectedChunk->getAverageHeight());
-            ImGui::Text("Max Height: %.2f", gSelectedChunk->getMaxHeight());
-
-            ImGui::Separator();
-            if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
-            {
-                if (ImGui::Button("Rotate Area 90"))
-                    gLoadedAreas[gSelectedAreaIndex]->rotate90();
-            }
-        }
-        ImGui::End();
-    }
-
     float strip_width = 70.0f;
 
     ImGui::SetNextWindowPos(viewport->Pos);
