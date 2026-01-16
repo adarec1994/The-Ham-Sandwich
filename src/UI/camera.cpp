@@ -2,7 +2,6 @@
 #include "../Area/AreaFile.h"
 #include <vector>
 #include <cmath>
-#include <iostream>
 #include <limits>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -14,12 +13,7 @@ extern void CheckChunkSelection(AppState& state);
 
 void SnapCameraToLoaded(AppState& state)
 {
-    std::cout << "\n=== SnapCameraToLoaded ===\n";
-
-    if (gLoadedAreas.empty()) {
-        std::cout << "No areas loaded\n";
-        return;
-    }
+    if (gLoadedAreas.empty()) return;
 
     glm::vec3 targetMin(std::numeric_limits<float>::max());
     glm::vec3 targetMax(std::numeric_limits<float>::lowest());
@@ -29,30 +23,19 @@ void SnapCameraToLoaded(AppState& state)
     {
         if (!area) continue;
 
-        int validChunkCount = 0;
         for (const auto& chunk : area->getChunks())
         {
             if (chunk && chunk->isFullyInitialized())
             {
-                validChunkCount++;
                 targetMin = glm::min(targetMin, chunk->getMinBounds() + area->getWorldOffset());
                 targetMax = glm::max(targetMax, chunk->getMaxBounds() + area->getWorldOffset());
                 found = true;
             }
         }
-
-        if (validChunkCount > 0)
-        {
-            std::cout << "Area tile(" << area->getTileX() << "," << area->getTileY() << ")"
-                      << " has " << validChunkCount << " valid chunks\n";
-        }
     }
 
     if (!found)
     {
-        std::cout << "WARNING: No fully initialized chunks found in any area!\n";
-        std::cout << "Using default position at origin\n";
-
         state.camera.Position = glm::vec3(256.0f, 500.0f, 256.0f);
         state.camera.Yaw = -90.0f;
         state.camera.Pitch = -45.0f;
@@ -71,10 +54,6 @@ void SnapCameraToLoaded(AppState& state)
     glm::vec3 center = (targetMin + targetMax) * 0.5f;
     glm::vec3 size = targetMax - targetMin;
     float maxExtent = std::max({size.x, size.y, size.z});
-
-    std::cout << "Rendered geometry bounds: (" << targetMin.x << "," << targetMin.y << "," << targetMin.z
-              << ") to (" << targetMax.x << "," << targetMax.y << "," << targetMax.z << ")\n";
-    std::cout << "Center: (" << center.x << "," << center.y << "," << center.z << ")\n";
 
     float height = std::max(200.0f, maxExtent * 0.5f);
     float distance = std::max(300.0f, maxExtent * 0.75f);
@@ -97,10 +76,6 @@ void SnapCameraToLoaded(AppState& state)
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
     state.camera.MovementSpeed = std::max(50.0f, maxExtent * 0.25f);
-
-    std::cout << "Camera position: (" << state.camera.Position.x << ","
-              << state.camera.Position.y << "," << state.camera.Position.z << ")\n";
-    std::cout << "Movement speed: " << state.camera.MovementSpeed << "\n";
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)

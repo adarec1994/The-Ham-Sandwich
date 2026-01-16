@@ -51,6 +51,9 @@ namespace TerrainTexture
         // Get raw RGBA data for export (doesn't use GPU)
         bool GetLayerTextureData(const ArchivePtr& archive, uint32_t layerId, RawTextureData& outData);
 
+        // Load raw texture data from a path (for export, no GPU)
+        bool LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData);
+
         GLuint CreateBlendMapTexture(const uint8_t* data, int width, int height);
         GLuint CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height);
         GLuint CreateColorMapTexture(const uint8_t* data, int width, int height);
@@ -64,7 +67,6 @@ namespace TerrainTexture
         ~Manager();
 
         bool LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH);
-        bool LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData);
 
         std::unordered_map<uint32_t, WorldLayerEntry> mLayerTable;
         std::unordered_map<uint32_t, CachedTexture> mTextureCache;
@@ -85,4 +87,4 @@ namespace TerrainTexture
     };
 
     GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips = true);
-}
+}   
