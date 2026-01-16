@@ -30,7 +30,6 @@ namespace TerrainTexture
         float scaleV = 1.0f;
     };
 
-    // Raw texture data for export (no GPU upload)
     struct RawTextureData
     {
         std::vector<uint8_t> rgba;
@@ -48,10 +47,8 @@ namespace TerrainTexture
         const CachedTexture* GetLayerTexture(const ArchivePtr& archive, uint32_t layerId);
         const WorldLayerEntry* GetLayerEntry(uint32_t layerId) const;
 
-        // Get raw RGBA data for export (doesn't use GPU)
         bool GetLayerTextureData(const ArchivePtr& archive, uint32_t layerId, RawTextureData& outData);
 
-        // Load raw texture data from a path (for export, no GPU)
         bool LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData);
 
         GLuint CreateBlendMapTexture(const uint8_t* data, int width, int height);
@@ -87,4 +84,4 @@ namespace TerrainTexture
     };
 
     GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips = true);
-}   
+}

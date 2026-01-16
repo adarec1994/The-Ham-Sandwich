@@ -1,6 +1,7 @@
 #include "UI_AreaInfo.h"
 #include "UI_Globals.h"
 #include "../export/FBXExport.h"
+#include "../export/TerrainExport.h"
 #include "../Area/AreaFile.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
@@ -24,6 +25,7 @@ namespace UI_AreaInfo
     static float sExportResultTimer = 0.0f;
 
     static FBXExport::ExportSettings sExportSettings;
+    static TerrainExport::ExportSettings sTerrainSettings;
 
     static std::atomic<bool> sExporting{false};
     static std::atomic<float> sExportProgress{0.0f};
@@ -32,9 +34,11 @@ namespace UI_AreaInfo
     static std::string sExportStatusText;
     static std::mutex sExportMutex;
     static FBXExport::ExportResult sExportResult;
+    static TerrainExport::ExportResult sTerrainResult;
     static bool sExportComplete = false;
 
     static bool sPendingExport = false;
+    static bool sPendingTerrainExport = false;
     static std::string sPendingExportPath;
     static ArchivePtr sPendingArchive;
 
@@ -64,7 +68,6 @@ namespace UI_AreaInfo
         for (const auto& area : gLoadedAreas)
         {
             if (!area) continue;
-
             const auto& chunks = area->getChunks();
             bool hasVerts = false;
             for (const auto& chunk : chunks)
@@ -75,7 +78,6 @@ namespace UI_AreaInfo
                     break;
                 }
             }
-
             if (hasVerts)
             {
                 minTileX = std::min(minTileX, area->getTileX());
@@ -114,20 +116,16 @@ namespace UI_AreaInfo
         for (const auto& area : gLoadedAreas)
         {
             if (!area) continue;
-
             int areaTileX = area->getTileX() - minTileX;
             int areaTileY = area->getTileY() - minTileY;
-
             if (areaTileX < 0 || areaTileX >= tilesWide || areaTileY < 0 || areaTileY >= tilesHigh)
                 continue;
 
             const auto& chunks = area->getChunks();
-
             for (size_t chunkIdx = 0; chunkIdx < chunks.size(); chunkIdx++)
             {
                 const auto& chunk = chunks[chunkIdx];
                 if (!chunk) continue;
-
                 const auto& verts = chunk->getVertices();
                 if (verts.empty()) continue;
 
@@ -140,12 +138,10 @@ namespace UI_AreaInfo
                     {
                         int vertIdx = vy * 17 + vx;
                         if (vertIdx >= static_cast<int>(verts.size())) continue;
-
                         float h = verts[vertIdx].y;
 
                         int pixelX = chunkY * 16 + vx;
                         int pixelY = chunkX * 16 + vy;
-
                         if (pixelX >= AREA_SIZE) pixelX = AREA_SIZE - 1;
                         if (pixelY >= AREA_SIZE) pixelY = AREA_SIZE - 1;
 
@@ -199,9 +195,7 @@ namespace UI_AreaInfo
         }
 
         if (sHeightmapTexture == 0)
-        {
             glGenTextures(1, &sHeightmapTexture);
-        }
 
         glBindTexture(GL_TEXTURE_2D, sHeightmapTexture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -214,324 +208,101 @@ namespace UI_AreaInfo
 
     static std::string GetHeightmapFilename()
     {
-        if (gLoadedAreas.empty()) return "heightmap";
-
-        const auto& path = gLoadedAreas[0]->getPath();
-        if (path.empty()) return "heightmap";
-
-        size_t lastSlash = path.find_last_of(L"/\\");
-        std::wstring filename = (lastSlash != std::wstring::npos) ? path.substr(lastSlash + 1) : path;
-
-        size_t ext = filename.rfind(L".area");
-        if (ext != std::wstring::npos)
-            filename = filename.substr(0, ext);
-
-        if (gLoadedAreas.size() > 1)
+        if (gLoadedAreas.empty() || !gLoadedAreas[0]) return "heightmap.png";
+        std::wstring wpath = gLoadedAreas[0]->getPath();
+        std::string path;
+        for (wchar_t c : wpath) path += (c < 128) ? static_cast<char>(c) : '_';
+        size_t lastSlash = path.rfind('/');
+        if (lastSlash == std::string::npos) lastSlash = path.rfind('\\');
+        std::string filename = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+        size_t ext = filename.rfind('.');
+        if (ext != std::string::npos) filename = filename.substr(0, ext);
+        if (filename.size() > 5)
         {
-            size_t dot = filename.rfind(L'.');
-            if (dot != std::wstring::npos && dot >= 2)
-            {
-                bool isHex = true;
-                for (size_t i = dot + 1; i < filename.size() && isHex; i++)
-                {
-                    wchar_t c = filename[i];
-                    if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F')))
-                        isHex = false;
-                }
-                if (isHex)
-                    filename = filename.substr(0, dot);
-            }
+            size_t dot = filename.rfind('.');
+            if (dot != std::string::npos) filename = filename.substr(0, dot);
         }
-
-        std::string result;
-        for (wchar_t c : filename)
-            result += (c < 128) ? static_cast<char>(c) : '_';
-
-        return result.empty() ? "heightmap" : result;
-    }
-
-    static void ExportHeightmapPNG(const std::string& path)
-    {
-        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
-        {
-            sHeightmapExportMessage = "No heightmap data to export";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        std::string fullPath = path;
-        if (fullPath.find(".png") == std::string::npos && fullPath.find(".PNG") == std::string::npos)
-            fullPath += ".png";
-
-        if (stbi_write_png(fullPath.c_str(), sHeightmapWidth, sHeightmapHeight, 4, sHeightmapData.data(), sHeightmapWidth * 4))
-            sHeightmapExportMessage = "Saved: " + fullPath;
-        else
-            sHeightmapExportMessage = "Failed to save heightmap";
-        sHeightmapExportTimer = 4.0f;
-    }
-
-    static void ExportHeightmapJPEG(const std::string& path)
-    {
-        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
-        {
-            sHeightmapExportMessage = "No heightmap data to export";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        std::string fullPath = path;
-        if (fullPath.find(".jpg") == std::string::npos && fullPath.find(".JPG") == std::string::npos &&
-            fullPath.find(".jpeg") == std::string::npos && fullPath.find(".JPEG") == std::string::npos)
-            fullPath += ".jpg";
-
-        std::vector<uint8_t> rgb(sHeightmapWidth * sHeightmapHeight * 3);
-        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
-        {
-            rgb[i * 3 + 0] = sHeightmapData[i * 4 + 0];
-            rgb[i * 3 + 1] = sHeightmapData[i * 4 + 1];
-            rgb[i * 3 + 2] = sHeightmapData[i * 4 + 2];
-        }
-
-        if (stbi_write_jpg(fullPath.c_str(), sHeightmapWidth, sHeightmapHeight, 3, rgb.data(), 95))
-            sHeightmapExportMessage = "Saved: " + fullPath;
-        else
-            sHeightmapExportMessage = "Failed to save heightmap";
-        sHeightmapExportTimer = 4.0f;
-    }
-
-    static void ExportHeightmapTIFF(const std::string& path)
-    {
-        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
-        {
-            sHeightmapExportMessage = "No heightmap data to export";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        std::string fullPath = path;
-        if (fullPath.find(".tif") == std::string::npos && fullPath.find(".TIF") == std::string::npos)
-            fullPath += ".tif";
-
-        std::vector<uint16_t> heightData16(sHeightmapWidth * sHeightmapHeight);
-        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
-            heightData16[i] = static_cast<uint16_t>(sHeightmapData[i * 4] * 257);
-
-        std::ofstream out(fullPath, std::ios::binary);
-        if (!out)
-        {
-            sHeightmapExportMessage = "Failed to create file";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        uint16_t byteOrder = 0x4949;
-        uint16_t magic = 42;
-        uint32_t ifdOffset = 8;
-        out.write(reinterpret_cast<char*>(&byteOrder), 2);
-        out.write(reinterpret_cast<char*>(&magic), 2);
-        out.write(reinterpret_cast<char*>(&ifdOffset), 4);
-
-        uint16_t numEntries = 8;
-        out.write(reinterpret_cast<char*>(&numEntries), 2);
-
-        auto writeTag = [&](uint16_t tag, uint16_t type, uint32_t count, uint32_t value) {
-            out.write(reinterpret_cast<char*>(&tag), 2);
-            out.write(reinterpret_cast<char*>(&type), 2);
-            out.write(reinterpret_cast<char*>(&count), 4);
-            out.write(reinterpret_cast<char*>(&value), 4);
-        };
-
-        uint32_t stripOffset = 8 + 2 + (12 * numEntries) + 4;
-        uint32_t stripBytes = sHeightmapWidth * sHeightmapHeight * 2;
-
-        writeTag(256, 3, 1, sHeightmapWidth);
-        writeTag(257, 3, 1, sHeightmapHeight);
-        writeTag(258, 3, 1, 16);
-        writeTag(259, 3, 1, 1);
-        writeTag(262, 3, 1, 1);
-        writeTag(273, 4, 1, stripOffset);
-        writeTag(278, 3, 1, sHeightmapHeight);
-        writeTag(279, 4, 1, stripBytes);
-
-        uint32_t nextIFD = 0;
-        out.write(reinterpret_cast<char*>(&nextIFD), 4);
-
-        out.write(reinterpret_cast<char*>(heightData16.data()), stripBytes);
-        out.close();
-
-        sHeightmapExportMessage = "Saved: " + fullPath;
-        sHeightmapExportTimer = 4.0f;
-    }
-
-    static void ExportHeightmapDDS(const std::string& path)
-    {
-        if (sHeightmapData.empty() || sHeightmapWidth == 0 || sHeightmapHeight == 0)
-        {
-            sHeightmapExportMessage = "No heightmap data to export";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        std::string fullPath = path;
-        if (fullPath.find(".dds") == std::string::npos && fullPath.find(".DDS") == std::string::npos)
-            fullPath += ".dds";
-
-        std::vector<uint16_t> heightData16(sHeightmapWidth * sHeightmapHeight);
-        for (int i = 0; i < sHeightmapWidth * sHeightmapHeight; i++)
-            heightData16[i] = static_cast<uint16_t>(sHeightmapData[i * 4] * 257);
-
-        std::ofstream out(fullPath, std::ios::binary);
-        if (!out)
-        {
-            sHeightmapExportMessage = "Failed to create file";
-            sHeightmapExportTimer = 3.0f;
-            return;
-        }
-
-        uint32_t magic = 0x20534444;
-        out.write(reinterpret_cast<char*>(&magic), 4);
-
-        uint8_t header[124] = {0};
-        *reinterpret_cast<uint32_t*>(&header[0]) = 124;
-        *reinterpret_cast<uint32_t*>(&header[4]) = 0x1 | 0x2 | 0x4 | 0x1000;
-        *reinterpret_cast<uint32_t*>(&header[8]) = sHeightmapHeight;
-        *reinterpret_cast<uint32_t*>(&header[12]) = sHeightmapWidth;
-        *reinterpret_cast<uint32_t*>(&header[16]) = sHeightmapWidth * 2;
-
-        uint8_t* pf = &header[72];
-        *reinterpret_cast<uint32_t*>(&pf[0]) = 32;
-        *reinterpret_cast<uint32_t*>(&pf[4]) = 0x20000;
-        *reinterpret_cast<uint32_t*>(&pf[8]) = 0;
-        *reinterpret_cast<uint32_t*>(&pf[12]) = 16;
-        *reinterpret_cast<uint32_t*>(&pf[16]) = 0xFFFF;
-        *reinterpret_cast<uint32_t*>(&pf[20]) = 0;
-        *reinterpret_cast<uint32_t*>(&pf[24]) = 0;
-        *reinterpret_cast<uint32_t*>(&pf[28]) = 0;
-
-        *reinterpret_cast<uint32_t*>(&header[104]) = 0x1000;
-
-        out.write(reinterpret_cast<char*>(header), 124);
-        out.write(reinterpret_cast<char*>(heightData16.data()), sHeightmapWidth * sHeightmapHeight * 2);
-        out.close();
-
-        sHeightmapExportMessage = "Saved: " + fullPath;
-        sHeightmapExportTimer = 4.0f;
+        return filename + "_heightmap.png";
     }
 
     static void DrawHeightmapWindow()
     {
         if (!sShowHeightmapWindow) return;
 
-        ImGui::SetNextWindowSize(ImVec2(540, 620), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(500, 550), ImGuiCond_FirstUseEver);
 
-        if (ImGui::Begin("Heightmap View", &sShowHeightmapWindow))
+        if (ImGui::Begin("Heightmap Preview", &sShowHeightmapWindow))
         {
-            if (sHeightmapTexture != 0 && sHeightmapWidth > 0)
+            if (sHeightmapTexture != 0 && sHeightmapWidth > 0 && sHeightmapHeight > 0)
             {
-                ImGui::Text("Resolution: %dx%d", sHeightmapWidth, sHeightmapHeight);
-                ImGui::Spacing();
+                ImGui::Text("Size: %d x %d", sHeightmapWidth, sHeightmapHeight);
+                ImGui::Text("Height Range: %.2f to %.2f", sHeightmapMin, sHeightmapMax);
+                ImGui::Separator();
 
                 ImVec2 avail = ImGui::GetContentRegionAvail();
-                float imageSize = std::min(avail.x, avail.y - 80);
-                imageSize = std::max(imageSize, 128.0f);
+                avail.y -= 40;
 
-                float aspectRatio = static_cast<float>(sHeightmapWidth) / static_cast<float>(sHeightmapHeight);
-                float displayW = imageSize;
-                float displayH = imageSize;
-                if (aspectRatio > 1.0f)
-                    displayH = imageSize / aspectRatio;
+                float imgAspect = static_cast<float>(sHeightmapWidth) / static_cast<float>(sHeightmapHeight);
+                float availAspect = avail.x / avail.y;
+
+                ImVec2 imgSize;
+                if (imgAspect > availAspect)
+                {
+                    imgSize.x = avail.x;
+                    imgSize.y = avail.x / imgAspect;
+                }
                 else
-                    displayW = imageSize * aspectRatio;
+                {
+                    imgSize.y = avail.y;
+                    imgSize.x = avail.y * imgAspect;
+                }
 
-                ImGui::Image((ImTextureID)(intptr_t)sHeightmapTexture, ImVec2(displayW, displayH));
+                ImGui::Image((ImTextureID)(intptr_t)sHeightmapTexture, imgSize);
 
-                ImGui::Spacing();
                 ImGui::Separator();
-                ImGui::Spacing();
 
-                std::string suggestedName = GetHeightmapFilename();
-
-                if (ImGui::Button("PNG", ImVec2(60, 30)))
+                if (ImGui::Button("Save Heightmap...", ImVec2(150, 0)))
                 {
                     IGFD::FileDialogConfig config;
                     config.path = ".";
-                    config.fileName = suggestedName + ".png";
-                    config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportPNG", "Save Heightmap PNG", ".png", config);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("JPEG", ImVec2(60, 30)))
-                {
-                    IGFD::FileDialogConfig config;
-                    config.path = ".";
-                    config.fileName = suggestedName + ".jpg";
-                    config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportJPEG", "Save Heightmap JPEG", ".jpg", config);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("TIFF", ImVec2(60, 30)))
-                {
-                    IGFD::FileDialogConfig config;
-                    config.path = ".";
-                    config.fileName = suggestedName + ".tif";
-                    config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportTIFF", "Save Heightmap TIFF", ".tif", config);
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("DDS", ImVec2(60, 30)))
-                {
-                    IGFD::FileDialogConfig config;
-                    config.path = ".";
-                    config.fileName = suggestedName + ".dds";
-                    config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog("HeightmapExportDDS", "Save Heightmap DDS", ".dds", config);
+                    config.fileName = GetHeightmapFilename();
+                    config.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite;
+                    ImGuiFileDialog::Instance()->OpenDialog("SaveHeightmapDialog", "Save Heightmap As", ".png", config);
                 }
 
                 if (sHeightmapExportTimer > 0.0f)
                 {
-                    ImGui::Spacing();
-                    bool success = sHeightmapExportMessage.find("Saved") != std::string::npos;
-                    ImVec4 color = success ? ImVec4(0.3f, 1.0f, 0.3f, 1.0f) : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-                    ImGui::TextColored(color, "%s", sHeightmapExportMessage.c_str());
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sHeightmapExportMessage.c_str());
                     sHeightmapExportTimer -= ImGui::GetIO().DeltaTime;
                 }
             }
             else
             {
-                ImGui::Text("No heightmap generated");
-                if (ImGui::Button("Generate", ImVec2(100, 30)))
-                {
-                    GenerateHeightmapTexture();
-                }
+                ImGui::Text("No heightmap data available");
             }
         }
         ImGui::End();
 
-        if (ImGuiFileDialog::Instance()->Display("HeightmapExportPNG", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        if (ImGuiFileDialog::Instance()->Display("SaveHeightmapDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk())
-                ExportHeightmapPNG(ImGuiFileDialog::Instance()->GetFilePathName());
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("HeightmapExportJPEG", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-                ExportHeightmapJPEG(ImGuiFileDialog::Instance()->GetFilePathName());
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("HeightmapExportTIFF", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-                ExportHeightmapTIFF(ImGuiFileDialog::Instance()->GetFilePathName());
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("HeightmapExportDDS", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-                ExportHeightmapDDS(ImGuiFileDialog::Instance()->GetFilePathName());
+            {
+                std::string filepath = ImGuiFileDialog::Instance()->GetFilePathName();
+                if (!sHeightmapData.empty() && sHeightmapWidth > 0 && sHeightmapHeight > 0)
+                {
+                    if (stbi_write_png(filepath.c_str(), sHeightmapWidth, sHeightmapHeight, 4, sHeightmapData.data(), sHeightmapWidth * 4))
+                    {
+                        sHeightmapExportMessage = "Saved!";
+                        sHeightmapExportTimer = 3.0f;
+                    }
+                    else
+                    {
+                        sHeightmapExportMessage = "Failed to save!";
+                        sHeightmapExportTimer = 3.0f;
+                    }
+                }
+            }
             ImGuiFileDialog::Instance()->Close();
         }
     }
@@ -539,24 +310,21 @@ namespace UI_AreaInfo
     void Reset()
     {
         sShowWindow = true;
-        sExporting = false;
-        sExportProgress = 0.0f;
+        sLastExportPath.clear();
         sLastExportMessage.clear();
         sShowExportResult = false;
+        sExportResultTimer = 0.0f;
+        sExporting = false;
+        sExportProgress = 0.0f;
+        sExportCurrentChunk = 0;
+        sExportTotalChunks = 0;
+        sExportStatusText.clear();
         sExportComplete = false;
         sPendingExport = false;
-
+        sPendingTerrainExport = false;
+        sPendingExportPath.clear();
         sShowHeightmapWindow = false;
-        if (sHeightmapTexture != 0)
-        {
-            glDeleteTextures(1, &sHeightmapTexture);
-            sHeightmapTexture = 0;
-        }
-        sHeightmapData.clear();
-        sHeightmapWidth = 0;
-        sHeightmapHeight = 0;
-        sHeightmapExportMessage.clear();
-        sHeightmapExportTimer = 0.0f;
+        sWindowBottomY = 50.0f;
     }
 
     void Draw(AppState& state)
@@ -574,6 +342,7 @@ namespace UI_AreaInfo
             return;
         }
 
+        // FBX Export Dialog
         if (ImGuiFileDialog::Instance()->Display("ExportFolderDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk())
@@ -584,6 +353,18 @@ namespace UI_AreaInfo
             ImGuiFileDialog::Instance()->Close();
         }
 
+        // Terrain Export Dialog
+        if (ImGuiFileDialog::Instance()->Display("ExportTerrainDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                sPendingExportPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                sPendingTerrainExport = true;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Handle FBX Export
         if (sPendingExport && !sExporting)
         {
             sPendingExport = false;
@@ -597,47 +378,75 @@ namespace UI_AreaInfo
 
             int totalChunks = 0;
             for (const auto& area : gLoadedAreas)
-            {
-                if (area)
-                {
-                    for (const auto& chunk : area->getChunks())
-                    {
-                        if (chunk && chunk->isFullyInitialized())
-                            totalChunks++;
-                    }
-                }
-            }
+                if (area) for (const auto& chunk : area->getChunks())
+                    if (chunk && chunk->isFullyInitialized()) totalChunks++;
             sExportTotalChunks = totalChunks;
 
             {
                 std::lock_guard<std::mutex> lock(sExportMutex);
-                sExportStatusText = "Starting export...";
+                sExportStatusText = "Starting FBX export...";
             }
 
             std::thread([&state]() {
                 ArchivePtr archive = nullptr;
-                if (!state.archives.empty())
-                    archive = state.archives[0];
+                if (!state.archives.empty()) archive = state.archives[0];
 
                 sExportResult = FBXExport::ExportAreasToFBX(
-                    gLoadedAreas,
-                    archive,
-                    sExportSettings,
+                    gLoadedAreas, archive, sExportSettings,
                     [](int current, int total, const std::string& status) {
                         sExportCurrentChunk = current;
                         sExportTotalChunks = total;
                         sExportProgress = (total > 0) ? static_cast<float>(current) / static_cast<float>(total) : 0.0f;
-
                         std::lock_guard<std::mutex> lock(sExportMutex);
                         sExportStatusText = status;
                     }
                 );
-
                 sExportProgress = 1.0f;
                 sExportComplete = true;
             }).detach();
         }
 
+        // Handle Terrain Export
+        if (sPendingTerrainExport && !sExporting)
+        {
+            sPendingTerrainExport = false;
+            sExporting = true;
+            sExportProgress = 0.0f;
+            sExportCurrentChunk = 0;
+            sExportComplete = false;
+            sShowExportResult = false;
+
+            sTerrainSettings.outputPath = sPendingExportPath;
+            sTerrainSettings.scale = sExportSettings.scale;
+
+            int totalChunks = 0;
+            for (const auto& area : gLoadedAreas)
+                if (area) for (const auto& chunk : area->getChunks())
+                    if (chunk && chunk->isFullyInitialized()) totalChunks++;
+            sExportTotalChunks = totalChunks;
+
+            {
+                std::lock_guard<std::mutex> lock(sExportMutex);
+                sExportStatusText = "Starting terrain export...";
+            }
+
+            std::thread([]() {
+                sTerrainResult = TerrainExport::ExportAreasToTerrain(
+                    gLoadedAreas, sTerrainSettings,
+                    [](int current, int total, const std::string& status) {
+                        sExportCurrentChunk = current;
+                        sExportTotalChunks = total;
+                        sExportProgress = (total > 0) ? static_cast<float>(current) / static_cast<float>(total) : 0.0f;
+                        std::lock_guard<std::mutex> lock(sExportMutex);
+                        sExportStatusText = status;
+                    }
+                );
+                sExportProgress = 1.0f;
+                sExportComplete = true;
+            }).detach();
+        }
+
+        // Handle export completion
         if (sExportComplete && sExporting)
         {
             sExporting = false;
@@ -645,28 +454,49 @@ namespace UI_AreaInfo
             sShowExportResult = true;
             sExportResultTimer = 8.0f;
 
-            if (sExportResult.success)
+            bool useTerrain = !sTerrainResult.outputFile.empty();
+
+            if (useTerrain)
             {
-                sLastExportMessage = "Export successful!\n";
-                sLastExportMessage += "File: " + sExportResult.outputFile + "\n";
-                sLastExportMessage += "Vertices: " + std::to_string(sExportResult.vertexCount) + "\n";
-                sLastExportMessage += "Triangles: " + std::to_string(sExportResult.triangleCount) + "\n";
-                sLastExportMessage += "Chunks: " + std::to_string(sExportResult.chunkCount) + "\n";
-                sLastExportMessage += "Textures: " + std::to_string(sExportResult.textureCount);
-                sLastExportPath = sExportResult.outputFile;
+                if (sTerrainResult.success)
+                {
+                    sLastExportMessage = "Terrain Export successful!\n";
+                    sLastExportMessage += "File: " + sTerrainResult.outputFile + "\n";
+                    sLastExportMessage += "Chunks: " + std::to_string(sTerrainResult.chunkCount) + "\n";
+                    sLastExportMessage += "Layers: " + std::to_string(sTerrainResult.textureCount);
+                    sLastExportPath = sTerrainResult.outputFile;
+                }
+                else
+                {
+                    sLastExportMessage = "Terrain Export failed: " + sTerrainResult.errorMessage;
+                    sLastExportPath.clear();
+                }
+                sTerrainResult = TerrainExport::ExportResult();
             }
             else
             {
-                sLastExportMessage = "Export failed: " + sExportResult.errorMessage;
-                sLastExportPath.clear();
+                if (sExportResult.success)
+                {
+                    sLastExportMessage = "FBX Export successful!\n";
+                    sLastExportMessage += "File: " + sExportResult.outputFile + "\n";
+                    sLastExportMessage += "Vertices: " + std::to_string(sExportResult.vertexCount) + "\n";
+                    sLastExportMessage += "Triangles: " + std::to_string(sExportResult.triangleCount) + "\n";
+                    sLastExportMessage += "Chunks: " + std::to_string(sExportResult.chunkCount) + "\n";
+                    sLastExportMessage += "Textures: " + std::to_string(sExportResult.textureCount);
+                    sLastExportPath = sExportResult.outputFile;
+                }
+                else
+                {
+                    sLastExportMessage = "FBX Export failed: " + sExportResult.errorMessage;
+                    sLastExportPath.clear();
+                }
+                sExportResult = FBXExport::ExportResult();
             }
         }
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
-
         ImGui::SetNextWindowPos(ImVec2(viewport->Size.x - 10.0f, 50.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
         ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_Always);
-
         ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
 
         if (ImGui::Begin("Area Info", &sShowWindow, flags))
@@ -677,7 +507,6 @@ namespace UI_AreaInfo
             {
                 ImGui::Text("Loaded Areas: %zu", gLoadedAreas.size());
                 ImGui::Separator();
-
                 ImGui::Text("Tile: %d, %d", area->getTileX(), area->getTileY());
 
                 glm::vec3 minB = area->getMinBounds();
@@ -697,9 +526,7 @@ namespace UI_AreaInfo
 
                 int validChunks = 0;
                 for (const auto& c : area->getChunks())
-                {
                     if (c && c->isFullyInitialized()) validChunks++;
-                }
 
                 ImGui::Spacing();
                 ImGui::Text("Chunks: %d / 256", validChunks);
@@ -723,12 +550,9 @@ namespace UI_AreaInfo
                 ImGui::Text("Export Settings");
                 ImGui::Spacing();
 
-                if (sExporting)
-                    ImGui::BeginDisabled();
+                if (sExporting) ImGui::BeginDisabled();
 
                 ImGui::Checkbox("Export Textures", &sExportSettings.exportTextures);
-                ImGui::Checkbox("Export Normals", &sExportSettings.exportNormals);
-                ImGui::Checkbox("Export UVs", &sExportSettings.exportUVs);
 
                 ImGui::Spacing();
                 ImGui::Text("Scale:");
@@ -738,8 +562,7 @@ namespace UI_AreaInfo
                 if (sExportSettings.scale < 0.01f) sExportSettings.scale = 0.01f;
                 if (sExportSettings.scale > 100.0f) sExportSettings.scale = 100.0f;
 
-                if (sExporting)
-                    ImGui::EndDisabled();
+                if (sExporting) ImGui::EndDisabled();
 
                 ImGui::Spacing();
                 ImGui::Separator();
@@ -760,26 +583,32 @@ namespace UI_AreaInfo
                     int total = sExportTotalChunks.load();
 
                     char progressText[64];
-                    snprintf(progressText, sizeof(progressText), "%d / %d chunks", current, total);
+                    snprintf(progressText, sizeof(progressText), "%d / %d", current, total);
 
                     ImGui::ProgressBar(progress, ImVec2(ImGui::GetContentRegionAvail().x, 20), progressText);
-
                     ImGui::Spacing();
                     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Exporting...");
                 }
                 else
                 {
-                    if (ImGui::Button("Export to FBX...", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
+                    // Terrain export (primary - for Blender)
+                    if (ImGui::Button("Export for Blender (.wsterrain)", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
                     {
                         IGFD::FileDialogConfig config;
                         config.path = ".";
                         config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ExportFolderDialog",
-                            "Select Export Folder",
-                            nullptr,
-                            config
-                        );
+                        ImGuiFileDialog::Instance()->OpenDialog("ExportTerrainDialog", "Select Export Folder", nullptr, config);
+                    }
+
+                    ImGui::Spacing();
+
+                    // FBX export (secondary)
+                    if (ImGui::Button("Export to FBX (baked)", ImVec2(ImGui::GetContentRegionAvail().x, 24)))
+                    {
+                        IGFD::FileDialogConfig config;
+                        config.path = ".";
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog("ExportFolderDialog", "Select Export Folder", nullptr, config);
                     }
                 }
 
@@ -790,19 +619,13 @@ namespace UI_AreaInfo
                     ImGui::Spacing();
 
                     if (sLastExportPath.empty())
-                    {
                         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sLastExportMessage.c_str());
-                    }
                     else
-                    {
                         ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sLastExportMessage.c_str());
-                    }
 
                     sExportResultTimer -= ImGui::GetIO().DeltaTime;
                     if (sExportResultTimer <= 0.0f)
-                    {
                         sShowExportResult = false;
-                    }
                 }
             }
             else

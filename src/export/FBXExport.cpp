@@ -5,19 +5,13 @@
 #include "../tex/tex.h"
 #include <glm/glm.hpp>
 #include <fstream>
-#include <sstream>
-#include <iomanip>
-#include <ctime>
 #include <filesystem>
 #include <set>
+#include <unordered_map>
 #include <cwctype>
 #include <charconv>
-#include <array>
 #include <algorithm>
-#include <functional>
-#include <thread>
 #include <mutex>
-#include <atomic>
 
 #ifndef STB_IMAGE_WRITE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -56,15 +50,11 @@ namespace FBXExport
     static std::string ExtractAreaName(const std::wstring& path)
     {
         if (path.empty()) return "terrain";
-
         size_t lastSlash = path.rfind(L'/');
         if (lastSlash == std::wstring::npos) lastSlash = path.rfind(L'\\');
-
         std::wstring filename = (lastSlash != std::wstring::npos) ? path.substr(lastSlash + 1) : path;
-
         size_t areaExt = filename.rfind(L".area");
         if (areaExt != std::wstring::npos) filename = filename.substr(0, areaExt);
-
         if (filename.size() >= 5)
         {
             size_t lastDot = filename.rfind(L'.');
@@ -79,7 +69,6 @@ namespace FBXExport
                 if (isHex) filename = filename.substr(0, lastDot);
             }
         }
-
         std::string result = WideToNarrow(filename);
         return result.empty() ? "terrain" : SanitizeFilename(result);
     }
@@ -95,8 +84,11 @@ namespace FBXExport
         int64_t modelUID;
         int64_t materialUID;
         glm::vec3 offset;
-        std::string diffuseFilename;
-        std::string normalFilename;
+        uint32_t layerIds[4] = {0, 0, 0, 0};
+        float layerScales[4] = {4.0f, 4.0f, 4.0f, 4.0f};
+        std::string blendMapFile;
+        std::string colorMapFile;
+        bool hasColorMap = false;
     };
 
     struct TextureData
@@ -112,181 +104,21 @@ namespace FBXExport
     {
         int64_t uid;
         std::string name;
-        int64_t diffuseTextureUID = 0;
-        int64_t normalTextureUID = 0;
+        std::vector<int64_t> textureUIDs;
     };
 
-    struct CachedLayerTexture
+    struct LayerTextureInfo
     {
-        std::vector<uint8_t> rgba;
-        int width = 0;
-        int height = 0;
+        std::string diffuseFile;
+        std::string normalFile;
         float scale = 4.0f;
-        bool valid = false;
+        bool exported = false;
     };
 
-    class ExportTextureCache
+    static bool ExportBlendMap(const AreaChunkRenderPtr& chunk, const std::string& path)
     {
-    public:
-        static ExportTextureCache& Instance()
-        {
-            static ExportTextureCache instance;
-            return instance;
-        }
-
-        void Clear()
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            mDiffuseCache.clear();
-            mNormalCache.clear();
-        }
-
-        void PreloadLayers(const std::vector<AreaFilePtr>& areas, ProgressCallback progress)
-        {
-            ArchivePtr archive;
-            for (const auto& area : areas)
-            {
-                if (area && area->getArchive()) { archive = area->getArchive(); break; }
-            }
-            if (!archive) return;
-
-            std::set<uint32_t> uniqueLayerIds;
-            for (const auto& area : areas)
-            {
-                if (!area) continue;
-                for (const auto& chunk : area->getChunks())
-                {
-                    if (!chunk || !chunk->isFullyInitialized()) continue;
-                    const uint32_t* ids = chunk->getWorldLayerIDs();
-                    for (int i = 0; i < 4; i++)
-                        if (ids[i] != 0) uniqueLayerIds.insert(ids[i]);
-                }
-            }
-
-            auto& texMgr = TerrainTexture::Manager::Instance();
-            texMgr.LoadWorldLayerTable(archive);
-
-            int total = static_cast<int>(uniqueLayerIds.size());
-            int current = 0;
-
-            for (uint32_t layerId : uniqueLayerIds)
-            {
-                if (progress) progress(current, total, "Loading textures...");
-                LoadLayer(archive, layerId);
-                current++;
-            }
-        }
-
-        const CachedLayerTexture* GetDiffuse(uint32_t layerId)
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            auto it = mDiffuseCache.find(layerId);
-            return (it != mDiffuseCache.end() && it->second.valid) ? &it->second : nullptr;
-        }
-
-        const CachedLayerTexture* GetNormal(uint32_t layerId)
-        {
-            std::lock_guard<std::mutex> lock(mMutex);
-            auto it = mNormalCache.find(layerId);
-            return (it != mNormalCache.end() && it->second.valid) ? &it->second : nullptr;
-        }
-
-    private:
-        void LoadLayer(const ArchivePtr& archive, uint32_t layerId)
-        {
-            if (layerId == 0) return;
-
-            {
-                std::lock_guard<std::mutex> lock(mMutex);
-                if (mDiffuseCache.count(layerId)) return;
-            }
-
-            auto& texMgr = TerrainTexture::Manager::Instance();
-            const auto* entry = texMgr.GetLayerEntry(layerId);
-            if (!entry) return;
-
-            float scale = (entry->scaleU > 0.0f) ? entry->scaleU : 4.0f;
-
-            CachedLayerTexture diffuse, normal;
-            diffuse.scale = scale;
-            normal.scale = scale;
-
-            TerrainTexture::RawTextureData rawData;
-            if (!entry->diffusePath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->diffusePath, rawData))
-            {
-                diffuse.rgba = std::move(rawData.rgba);
-                diffuse.width = rawData.width;
-                diffuse.height = rawData.height;
-                diffuse.valid = true;
-            }
-
-            if (!entry->normalPath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->normalPath, rawData))
-            {
-                normal.rgba = std::move(rawData.rgba);
-                normal.width = rawData.width;
-                normal.height = rawData.height;
-                normal.valid = true;
-            }
-
-            std::lock_guard<std::mutex> lock(mMutex);
-            mDiffuseCache[layerId] = std::move(diffuse);
-            mNormalCache[layerId] = std::move(normal);
-        }
-
-        std::unordered_map<uint32_t, CachedLayerTexture> mDiffuseCache;
-        std::unordered_map<uint32_t, CachedLayerTexture> mNormalCache;
-        std::mutex mMutex;
-    };
-
-    static inline glm::vec4 SampleTexture(const CachedLayerTexture& tex, float u, float v)
-    {
-        if (!tex.valid || tex.rgba.empty())
-            return glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
-
-        u = u - std::floor(u);
-        v = v - std::floor(v);
-
-        int x = static_cast<int>(u * (tex.width - 1));
-        int y = static_cast<int>(v * (tex.height - 1));
-        int idx = (y * tex.width + x) * 4;
-
-        return glm::vec4(
-            tex.rgba[idx] / 255.0f,
-            tex.rgba[idx + 1] / 255.0f,
-            tex.rgba[idx + 2] / 255.0f,
-            tex.rgba[idx + 3] / 255.0f
-        );
-    }
-
-    static inline glm::vec4 SampleBlendMap(const std::vector<uint8_t>& rgba, int size, float u, float v)
-    {
-        int x = std::clamp(static_cast<int>(u * (size - 1)), 0, size - 1);
-        int y = std::clamp(static_cast<int>(v * (size - 1)), 0, size - 1);
-        int idx = (y * size + x) * 4;
-
-        return glm::vec4(
-            rgba[idx] / 255.0f,
-            rgba[idx + 1] / 255.0f,
-            rgba[idx + 2] / 255.0f,
-            rgba[idx + 3] / 255.0f
-        );
-    }
-
-    static bool BakeChunkTextures(
-        const AreaChunkRenderPtr& chunk,
-        const ArchivePtr& archive,
-        const std::string& diffusePath,
-        const std::string& normalPath,
-        int textureSize)
-    {
-        if (!chunk) return false;
-
-        auto& cache = ExportTextureCache::Instance();
-        const uint32_t* layerIds = chunk->getWorldLayerIDs();
-        const float* layerScales = chunk->getLayerScales();
-
-        std::vector<uint8_t> blendRGBA;
         constexpr int blendSize = 65;
+        std::vector<uint8_t> blendRGBA;
 
         const auto& blendMap = chunk->getBlendMap();
         const auto& blendMapDXT = chunk->getBlendMapDXT();
@@ -298,18 +130,11 @@ namespace FBXExport
         else if (!blendMapDXT.empty())
         {
             if (!Tex::File::decodeDXT1(blendMapDXT.data(), blendSize, blendSize, blendRGBA))
+                return false;
+            for (size_t i = 0; i < blendRGBA.size(); i += 4)
             {
-                blendRGBA.resize(blendSize * blendSize * 4);
-                std::fill(blendRGBA.begin(), blendRGBA.end(), 0);
-                for (int i = 0; i < blendSize * blendSize; i++) blendRGBA[i * 4] = 255;
-            }
-            else
-            {
-                for (size_t i = 0; i < blendRGBA.size(); i += 4)
-                {
-                    int sum = blendRGBA[i] + blendRGBA[i + 1] + blendRGBA[i + 2];
-                    blendRGBA[i + 3] = static_cast<uint8_t>(std::max(0, 255 - sum));
-                }
+                int sum = blendRGBA[i] + blendRGBA[i + 1] + blendRGBA[i + 2];
+                blendRGBA[i + 3] = static_cast<uint8_t>(std::max(0, 255 - sum));
             }
         }
         else
@@ -318,109 +143,61 @@ namespace FBXExport
             for (int i = 0; i < blendSize * blendSize; i++) blendRGBA[i * 4] = 255;
         }
 
+        return stbi_write_png(path.c_str(), blendSize, blendSize, 4, blendRGBA.data(), blendSize * 4) != 0;
+    }
+
+    static bool ExportColorMap(const AreaChunkRenderPtr& chunk, const std::string& path)
+    {
+        constexpr int mapSize = 65;
         std::vector<uint8_t> colorRGBA;
-        bool hasColorMap = false;
+
         const auto& colorMap = chunk->getColorMap();
         const auto& colorMapDXT = chunk->getColorMapDXT();
 
         if (!colorMap.empty())
         {
             colorRGBA = colorMap;
-            hasColorMap = true;
         }
         else if (!colorMapDXT.empty())
         {
-            if (Tex::File::decodeDXT5(colorMapDXT.data(), blendSize, blendSize, colorRGBA))
-                hasColorMap = true;
+            if (!Tex::File::decodeDXT5(colorMapDXT.data(), mapSize, mapSize, colorRGBA))
+                return false;
         }
-
-        const CachedLayerTexture* diffuseTex[4];
-        const CachedLayerTexture* normalTex[4];
-        float texScales[4];
-
-        for (int i = 0; i < 4; i++)
+        else
         {
-            diffuseTex[i] = (layerIds[i] != 0) ? cache.GetDiffuse(layerIds[i]) : nullptr;
-            normalTex[i] = (layerIds[i] != 0) ? cache.GetNormal(layerIds[i]) : nullptr;
-
-            if (diffuseTex[i] && diffuseTex[i]->valid)
-                texScales[i] = 32.0f / diffuseTex[i]->scale;
-            else
-                texScales[i] = (layerScales[i] > 0.0f) ? (32.0f / layerScales[i]) : 8.0f;
+            return false;
         }
 
-        std::vector<uint8_t> diffuseOut(textureSize * textureSize * 4);
-        std::vector<uint8_t> normalOut(textureSize * textureSize * 4);
+        return stbi_write_png(path.c_str(), mapSize, mapSize, 4, colorRGBA.data(), mapSize * 4) != 0;
+    }
 
-        const float invSize = 1.0f / static_cast<float>(textureSize - 1);
+    static bool ExportLayerTexture(const ArchivePtr& archive, uint32_t layerId,
+                                    const std::string& diffusePath, const std::string& normalPath,
+                                    float& outScale)
+    {
+        auto& texMgr = TerrainTexture::Manager::Instance();
+        texMgr.LoadWorldLayerTable(archive);
 
-        for (int py = 0; py < textureSize; py++)
+        const auto* entry = texMgr.GetLayerEntry(layerId);
+        if (!entry) return false;
+
+        outScale = (entry->scaleU > 0.0f) ? entry->scaleU : 4.0f;
+
+        bool success = false;
+        TerrainTexture::RawTextureData rawData;
+
+        if (!entry->diffusePath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->diffusePath, rawData))
         {
-            float v = py * invSize;
-            for (int px = 0; px < textureSize; px++)
-            {
-                float u = px * invSize;
-
-                glm::vec4 blend = SampleBlendMap(blendRGBA, blendSize, u, v);
-                float blendSum = blend.r + blend.g + blend.b + blend.a;
-                if (blendSum > 0.001f) blend /= blendSum;
-                else blend = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
-
-                glm::vec4 diffuse(0.0f);
-                glm::vec3 normal(0.0f);
-
-                for (int i = 0; i < 4; i++)
-                {
-                    float weight = blend[i];
-                    if (weight < 0.001f) continue;
-
-                    float layerU = u * texScales[i];
-                    float layerV = v * texScales[i];
-
-                    if (diffuseTex[i] && diffuseTex[i]->valid)
-                        diffuse += SampleTexture(*diffuseTex[i], layerU, layerV) * weight;
-                    else
-                        diffuse += glm::vec4(0.5f, 0.5f, 0.5f, 1.0f) * weight;
-
-                    if (normalTex[i] && normalTex[i]->valid)
-                    {
-                        glm::vec4 ns = SampleTexture(*normalTex[i], layerU, layerV);
-                        normal += glm::vec3(ns.r * 2.0f - 1.0f, ns.g * 2.0f - 1.0f, ns.b * 2.0f - 1.0f) * weight;
-                    }
-                    else
-                    {
-                        normal += glm::vec3(0.0f, 0.0f, 1.0f) * weight;
-                    }
-                }
-
-                if (hasColorMap)
-                {
-                    glm::vec4 tint = SampleBlendMap(colorRGBA, blendSize, u, v);
-                    diffuse.r *= tint.r * 2.0f;
-                    diffuse.g *= tint.g * 2.0f;
-                    diffuse.b *= tint.b * 2.0f;
-                }
-
-                normal = glm::normalize(normal);
-                normal = normal * 0.5f + 0.5f;
-
-                int outIdx = (py * textureSize + px) * 4;
-                diffuseOut[outIdx + 0] = static_cast<uint8_t>(std::clamp(diffuse.r * 255.0f, 0.0f, 255.0f));
-                diffuseOut[outIdx + 1] = static_cast<uint8_t>(std::clamp(diffuse.g * 255.0f, 0.0f, 255.0f));
-                diffuseOut[outIdx + 2] = static_cast<uint8_t>(std::clamp(diffuse.b * 255.0f, 0.0f, 255.0f));
-                diffuseOut[outIdx + 3] = 255;
-
-                normalOut[outIdx + 0] = static_cast<uint8_t>(std::clamp(normal.x * 255.0f, 0.0f, 255.0f));
-                normalOut[outIdx + 1] = static_cast<uint8_t>(std::clamp(normal.y * 255.0f, 0.0f, 255.0f));
-                normalOut[outIdx + 2] = static_cast<uint8_t>(std::clamp(normal.z * 255.0f, 0.0f, 255.0f));
-                normalOut[outIdx + 3] = 255;
-            }
+            stbi_write_png(diffusePath.c_str(), rawData.width, rawData.height, 4, rawData.rgba.data(), rawData.width * 4);
+            success = true;
         }
 
-        bool diffuseOk = stbi_write_png(diffusePath.c_str(), textureSize, textureSize, 4, diffuseOut.data(), textureSize * 4) != 0;
-        bool normalOk = stbi_write_png(normalPath.c_str(), textureSize, textureSize, 4, normalOut.data(), textureSize * 4) != 0;
+        if (!entry->normalPath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->normalPath, rawData))
+        {
+            stbi_write_png(normalPath.c_str(), rawData.width, rawData.height, 4, rawData.rgba.data(), rawData.width * 4);
+        }
 
-        return diffuseOk && normalOk;
+        return success;
     }
 
     static void CollectMeshData(const AreaFilePtr& area, const ExportSettings& settings,
@@ -466,6 +243,14 @@ namespace FBXExport
             mesh.materialUID = GenerateUID();
             mesh.offset = worldOffset;
 
+            const uint32_t* ids = chunk->getWorldLayerIDs();
+            const float* scales = chunk->getLayerScales();
+            for (int i = 0; i < 4; i++)
+            {
+                mesh.layerIds[i] = ids[i];
+                mesh.layerScales[i] = (scales[i] > 0.0f) ? scales[i] : 4.0f;
+            }
+
             mesh.vertices.reserve(verts.size() * 3);
             mesh.normals.reserve(verts.size() * 3);
             mesh.uvs.reserve(verts.size() * 2);
@@ -475,11 +260,9 @@ namespace FBXExport
                 mesh.vertices.push_back((v.x + worldOffset.x) * settings.scale);
                 mesh.vertices.push_back(v.y * settings.scale);
                 mesh.vertices.push_back((v.z + worldOffset.z) * settings.scale);
-
                 mesh.normals.push_back(v.nx);
                 mesh.normals.push_back(v.ny);
                 mesh.normals.push_back(v.nz);
-
                 mesh.uvs.push_back(v.u);
                 mesh.uvs.push_back(1.0f - v.v);
             }
@@ -496,7 +279,9 @@ namespace FBXExport
     static void WriteHeader(std::ofstream& out)
     {
         out << "; FBX 7.4.0 project file\n";
-        out << "; Exported by WildStar Tools\n\n";
+        out << "; WildStar Terrain - Layer-based export for Blender\n";
+        out << "; Material names encode: Chunk_N_L{layer0}_{layer1}_{layer2}_{layer3}\n";
+        out << "; Scales in material properties, blend/color maps per chunk\n\n";
         out << "FBXHeaderExtension:  {\n";
         out << "\tFBXHeaderVersion: 1003\n";
         out << "\tFBXVersion: 7400\n";
@@ -537,7 +322,6 @@ namespace FBXExport
     static void WriteGeometry(std::ofstream& out, const MeshData& mesh)
     {
         out << "\tGeometry: " << mesh.geometryUID << ", \"Geometry::" << mesh.name << "\", \"Mesh\" {\n";
-
         out << "\t\tVertices: *" << mesh.vertices.size() << " {\n\t\t\ta: ";
         for (size_t i = 0; i < mesh.vertices.size(); i++)
         {
@@ -594,7 +378,6 @@ namespace FBXExport
         out << "\t\t\tLayerElement: { Type: \"LayerElementUV\", TypedIndex: 0 }\n";
         out << "\t\t\tLayerElement: { Type: \"LayerElementMaterial\", TypedIndex: 0 }\n";
         out << "\t\t}\n";
-
         out << "\t}\n";
     }
 
@@ -610,13 +393,22 @@ namespace FBXExport
         out << "\t}\n";
     }
 
-    static void WriteMaterial(std::ofstream& out, const MaterialData& mat)
+    static void WriteMaterial(std::ofstream& out, const MaterialData& mat, const MeshData& mesh)
     {
         out << "\tMaterial: " << mat.uid << ", \"Material::" << mat.name << "\", \"\" {\n";
         out << "\t\tVersion: 102\n";
         out << "\t\tShadingModel: \"phong\"\n";
         out << "\t\tProperties70:  {\n";
         out << "\t\t\tP: \"DiffuseColor\", \"Color\", \"\", \"A\",1,1,1\n";
+        out << "\t\t\tP: \"Layer0Scale\", \"double\", \"Number\", \"\"," << mesh.layerScales[0] << "\n";
+        out << "\t\t\tP: \"Layer1Scale\", \"double\", \"Number\", \"\"," << mesh.layerScales[1] << "\n";
+        out << "\t\t\tP: \"Layer2Scale\", \"double\", \"Number\", \"\"," << mesh.layerScales[2] << "\n";
+        out << "\t\t\tP: \"Layer3Scale\", \"double\", \"Number\", \"\"," << mesh.layerScales[3] << "\n";
+        out << "\t\t\tP: \"Layer0ID\", \"int\", \"Integer\", \"\"," << mesh.layerIds[0] << "\n";
+        out << "\t\t\tP: \"Layer1ID\", \"int\", \"Integer\", \"\"," << mesh.layerIds[1] << "\n";
+        out << "\t\t\tP: \"Layer2ID\", \"int\", \"Integer\", \"\"," << mesh.layerIds[2] << "\n";
+        out << "\t\t\tP: \"Layer3ID\", \"int\", \"Integer\", \"\"," << mesh.layerIds[3] << "\n";
+        out << "\t\t\tP: \"HasColorMap\", \"bool\", \"Bool\", \"\"," << (mesh.hasColorMap ? 1 : 0) << "\n";
         out << "\t\t}\n";
         out << "\t}\n";
     }
@@ -655,18 +447,25 @@ namespace FBXExport
             out << "\tC: \"OO\"," << mesh.materialUID << "," << mesh.modelUID << "\n";
         }
 
-        for (size_t i = 0; i < materials.size(); i++)
-        {
-            if (materials[i].diffuseTextureUID != 0)
-                out << "\tC: \"OP\"," << materials[i].diffuseTextureUID << "," << materials[i].uid << ", \"DiffuseColor\"\n";
-            if (materials[i].normalTextureUID != 0)
-                out << "\tC: \"OP\"," << materials[i].normalTextureUID << "," << materials[i].uid << ", \"NormalMap\"\n";
-        }
-
         for (const auto& tex : textures)
             out << "\tC: \"OO\"," << tex.videoUID << "," << tex.textureUID << "\n";
 
         out << "}\n";
+    }
+
+    static void WriteLayerInfo(const std::string& path,
+                               const std::unordered_map<uint32_t, LayerTextureInfo>& layers)
+    {
+        std::ofstream out(path);
+        out << "# WildStar Terrain Layer Info\n";
+        out << "# LayerID,DiffuseFile,NormalFile,Scale\n";
+        for (const auto& [id, info] : layers)
+        {
+            if (info.exported)
+            {
+                out << id << "," << info.diffuseFile << "," << info.normalFile << "," << info.scale << "\n";
+            }
+        }
     }
 
     ExportResult ExportAreaToFBX(const AreaFilePtr& area, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
@@ -684,6 +483,8 @@ namespace FBXExport
         if (outputDir.empty()) { result.errorMessage = "No output path specified"; return result; }
 
         std::filesystem::create_directories(outputDir);
+        std::string texturesDir = outputDir + "/textures";
+        std::filesystem::create_directories(texturesDir);
 
         std::string baseName = (!areas.empty() && areas[0]) ? ExtractAreaName(areas[0]->getPath()) : "terrain";
         if (areas.size() > 1) baseName += "_combined";
@@ -693,16 +494,9 @@ namespace FBXExport
         std::vector<MeshData> meshes;
         std::vector<MaterialData> materials;
         std::vector<TextureData> textures;
+        std::unordered_map<uint32_t, LayerTextureInfo> layerTextures;
 
         int totalVerts = 0, totalTris = 0;
-
-        if (settings.exportTextures)
-        {
-            auto& cache = ExportTextureCache::Instance();
-            cache.Clear();
-            if (progress) progress(0, 1, "Loading textures...");
-            cache.PreloadLayers(areas, progress);
-        }
 
         if (progress) progress(0, 1, "Collecting mesh data...");
         for (const auto& area : areas)
@@ -712,39 +506,110 @@ namespace FBXExport
 
         if (meshes.empty()) { result.errorMessage = "No valid chunks found"; return result; }
 
+        std::set<uint32_t> uniqueLayerIds;
+        for (const auto& mesh : meshes)
+        {
+            for (int i = 0; i < 4; i++)
+                if (mesh.layerIds[i] != 0) uniqueLayerIds.insert(mesh.layerIds[i]);
+        }
+
         if (settings.exportTextures)
         {
-            std::string texturesDir = outputDir + "/textures";
-            std::filesystem::create_directories(texturesDir);
-
-            int meshIdx = 0;
-            int totalChunks = static_cast<int>(meshes.size());
-
+            ArchivePtr effectiveArchive;
             for (const auto& area : areas)
             {
-                if (!area) continue;
-                const auto& chunks = area->getChunks();
+                if (area && area->getArchive()) { effectiveArchive = area->getArchive(); break; }
+            }
 
-                for (const auto& chunk : chunks)
+            if (effectiveArchive)
+            {
+                int total = static_cast<int>(uniqueLayerIds.size());
+                int current = 0;
+
+                for (uint32_t layerId : uniqueLayerIds)
                 {
-                    if (!chunk || !chunk->isFullyInitialized()) continue;
-                    if (meshIdx >= static_cast<int>(meshes.size())) break;
+                    if (progress) progress(current, total, "Exporting layer textures...");
 
-                    if (progress) progress(meshIdx, totalChunks, "Baking textures...");
+                    std::string diffuseFile = "layer_" + std::to_string(layerId) + "_diffuse.png";
+                    std::string normalFile = "layer_" + std::to_string(layerId) + "_normal.png";
 
-                    std::string diffuseFile = "chunk_" + std::to_string(meshIdx) + "_diffuse.png";
-                    std::string normalFile = "chunk_" + std::to_string(meshIdx) + "_normal.png";
+                    LayerTextureInfo info;
+                    info.diffuseFile = diffuseFile;
+                    info.normalFile = normalFile;
 
-                    if (BakeChunkTextures(chunk, area->getArchive(),
-                                          texturesDir + "/" + diffuseFile,
-                                          texturesDir + "/" + normalFile, 512))
+                    if (ExportLayerTexture(effectiveArchive, layerId,
+                                           texturesDir + "/" + diffuseFile,
+                                           texturesDir + "/" + normalFile,
+                                           info.scale))
                     {
-                        meshes[meshIdx].diffuseFilename = "textures/" + diffuseFile;
-                        meshes[meshIdx].normalFilename = "textures/" + normalFile;
-                        result.textureCount += 2;
+                        info.exported = true;
+                        result.textureCount++;
+
+                        TextureData tex;
+                        tex.textureUID = GenerateUID();
+                        tex.videoUID = GenerateUID();
+                        tex.name = "Layer_" + std::to_string(layerId) + "_Diffuse";
+                        tex.filename = tex.relativeFilename = "textures/" + diffuseFile;
+                        textures.push_back(tex);
+
+                        tex.textureUID = GenerateUID();
+                        tex.videoUID = GenerateUID();
+                        tex.name = "Layer_" + std::to_string(layerId) + "_Normal";
+                        tex.filename = tex.relativeFilename = "textures/" + normalFile;
+                        textures.push_back(tex);
                     }
-                    meshIdx++;
+
+                    layerTextures[layerId] = info;
+                    current++;
                 }
+
+                int meshIdx = 0;
+                int totalMeshes = static_cast<int>(meshes.size());
+
+                for (const auto& area : areas)
+                {
+                    if (!area) continue;
+                    const auto& chunks = area->getChunks();
+
+                    for (const auto& chunk : chunks)
+                    {
+                        if (!chunk || !chunk->isFullyInitialized()) continue;
+                        if (meshIdx >= static_cast<int>(meshes.size())) break;
+
+                        if (progress) progress(meshIdx, totalMeshes, "Exporting blend maps...");
+
+                        std::string blendFile = "chunk_" + std::to_string(meshIdx) + "_blend.png";
+                        if (ExportBlendMap(chunk, texturesDir + "/" + blendFile))
+                        {
+                            meshes[meshIdx].blendMapFile = "textures/" + blendFile;
+
+                            TextureData tex;
+                            tex.textureUID = GenerateUID();
+                            tex.videoUID = GenerateUID();
+                            tex.name = "Chunk_" + std::to_string(meshIdx) + "_Blend";
+                            tex.filename = tex.relativeFilename = "textures/" + blendFile;
+                            textures.push_back(tex);
+                        }
+
+                        std::string colorFile = "chunk_" + std::to_string(meshIdx) + "_color.png";
+                        if (ExportColorMap(chunk, texturesDir + "/" + colorFile))
+                        {
+                            meshes[meshIdx].colorMapFile = "textures/" + colorFile;
+                            meshes[meshIdx].hasColorMap = true;
+
+                            TextureData tex;
+                            tex.textureUID = GenerateUID();
+                            tex.videoUID = GenerateUID();
+                            tex.name = "Chunk_" + std::to_string(meshIdx) + "_Color";
+                            tex.filename = tex.relativeFilename = "textures/" + colorFile;
+                            textures.push_back(tex);
+                        }
+
+                        meshIdx++;
+                    }
+                }
+
+                WriteLayerInfo(outputDir + "/layers.csv", layerTextures);
             }
         }
 
@@ -754,30 +619,11 @@ namespace FBXExport
         {
             MaterialData mat;
             mat.uid = meshes[i].materialUID;
-            mat.name = meshes[i].name + "_Material";
-
-            if (!meshes[i].diffuseFilename.empty())
-            {
-                TextureData tex;
-                tex.textureUID = GenerateUID();
-                tex.videoUID = GenerateUID();
-                tex.name = meshes[i].name + "_Diffuse";
-                tex.filename = tex.relativeFilename = meshes[i].diffuseFilename;
-                mat.diffuseTextureUID = tex.textureUID;
-                textures.push_back(tex);
-            }
-
-            if (!meshes[i].normalFilename.empty())
-            {
-                TextureData tex;
-                tex.textureUID = GenerateUID();
-                tex.videoUID = GenerateUID();
-                tex.name = meshes[i].name + "_Normal";
-                tex.filename = tex.relativeFilename = meshes[i].normalFilename;
-                mat.normalTextureUID = tex.textureUID;
-                textures.push_back(tex);
-            }
-
+            mat.name = meshes[i].name + "_L" +
+                       std::to_string(meshes[i].layerIds[0]) + "_" +
+                       std::to_string(meshes[i].layerIds[1]) + "_" +
+                       std::to_string(meshes[i].layerIds[2]) + "_" +
+                       std::to_string(meshes[i].layerIds[3]);
             materials.push_back(mat);
         }
 
@@ -795,14 +641,12 @@ namespace FBXExport
         out << "Objects:  {\n";
         for (const auto& mesh : meshes) WriteGeometry(out, mesh);
         for (const auto& mesh : meshes) WriteModel(out, mesh);
-        for (const auto& mat : materials) WriteMaterial(out, mat);
+        for (size_t i = 0; i < materials.size(); i++) WriteMaterial(out, materials[i], meshes[i]);
         for (const auto& tex : textures) { WriteTexture(out, tex); WriteVideo(out, tex); }
         out << "}\n\n";
 
         WriteConnections(out, meshes, materials, textures);
         out.close();
-
-        ExportTextureCache::Instance().Clear();
 
         result.success = true;
         result.outputFile = fbxPath;

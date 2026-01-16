@@ -264,6 +264,10 @@ add_executable(The_Ham_Sandwich
         src/Database/Definitions/SoundEvent.h
         src/UI/UI_ChunkTextures.cpp
         src/UI/UI_ChunkTextures.h
+        src/export/GLBExport.cpp
+        src/export/GLBExport.h
+        src/export/TerrainExport.cpp
+        src/export/TerrainExport.h
 )
 
 target_include_directories(The_Ham_Sandwich PRIVATE
