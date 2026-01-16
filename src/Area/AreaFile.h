@@ -175,13 +175,19 @@ public:
 
     [[nodiscard]] const uint32* getWorldLayerIDs() const { return mWorldLayerIDs; }
     [[nodiscard]] const std::vector<uint8>& getBlendMap() const { return mBlendMap; }
+    [[nodiscard]] const std::vector<uint8>& getBlendMapDXT() const { return mBlendMapDXT; }
     [[nodiscard]] const std::vector<uint8>& getColorMap() const { return mColorMap; }
+    [[nodiscard]] const std::vector<uint8>& getColorMapDXT() const { return mColorMapDXT; }
     [[nodiscard]] const SkyCorner* getSkyCorners() const { return mSkyCorners; }
     [[nodiscard]] const std::vector<uint16>& getLodHeightMap() const { return mLodHeightMap; }
     [[nodiscard]] const uint16* getLodHeightRange() const { return mLodHeightRange; }
     [[nodiscard]] const std::vector<uint8>& getShadowMap() const { return mShadowMap; }
     [[nodiscard]] const PropData& getProps() const { return mProps; }
     [[nodiscard]] const std::vector<WaterData>& getWaters() const { return mWaters; }
+
+    [[nodiscard]] const std::vector<AreaVertex>& getVertices() const { return mVertices; }
+    [[nodiscard]] static const std::vector<uint32>& getIndices() { return indices; }
+    [[nodiscard]] const float* getLayerScales() const { return mLayerScale; }
 
     [[nodiscard]] bool isFullyInitialized() const { return mVAO != 0; }
 
@@ -244,6 +250,8 @@ public:
     [[nodiscard]] glm::vec3 getWorldMinBounds() const { return mMinBounds + mWorldOffset; }
     [[nodiscard]] glm::vec3 getWorldMaxBounds() const { return mMaxBounds + mWorldOffset; }
     [[nodiscard]] glm::vec3 getWorldOffset() const { return mWorldOffset; }
+
+    [[nodiscard]] ArchivePtr getArchive() const { return mArchive; }
 
     static constexpr int WORLD_GRID_ORIGIN = 64;
     static const float GRID_SIZE;

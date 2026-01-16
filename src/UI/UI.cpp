@@ -4,6 +4,9 @@
 #include "UI_AreaTab.h"
 #include "UI_ModelTab.h"
 #include "UI_Tables.h"
+#include "UI_AreaInfo.h"
+#include "UI_RenderWorld.h"
+#include "UI_ChunkTextures.h"
 
 #include "../About/about.h"
 #include "../settings/Settings.h"
@@ -92,6 +95,7 @@ static void RenderLoadingOverlay()
 void RenderUI(AppState& state)
 {
     ProcessAreaLoading(state);
+    HandleChunkPicking(state);
 
     if (!state.archivesLoaded)
     {
@@ -148,8 +152,17 @@ void RenderUI(AppState& state)
             glm::vec3 minB = gSelectedChunk->getMinBounds();
             glm::vec3 maxB = gSelectedChunk->getMaxBounds();
 
-            ImGui::Text("Bounds Min: (%.1f, %.1f, %.1f)", minB.x, minB.y, minB.z);
-            ImGui::Text("Bounds Max: (%.1f, %.1f, %.1f)", maxB.x, maxB.y, maxB.z);
+            glm::vec3 worldOffset(0.0f);
+            if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
+                worldOffset = gLoadedAreas[gSelectedAreaIndex]->getWorldOffset();
+
+            glm::vec3 worldMin = minB + worldOffset;
+            glm::vec3 worldMax = maxB + worldOffset;
+
+            ImGui::Text("Local Min: (%.1f, %.1f, %.1f)", minB.x, minB.y, minB.z);
+            ImGui::Text("Local Max: (%.1f, %.1f, %.1f)", maxB.x, maxB.y, maxB.z);
+            ImGui::Text("World Min: (%.1f, %.1f, %.1f)", worldMin.x, worldMin.y, worldMin.z);
+            ImGui::Text("World Max: (%.1f, %.1f, %.1f)", worldMax.x, worldMax.y, worldMax.z);
 
             ImGui::Separator();
             ImGui::Text("Flags: 0x%X", gSelectedChunk->getFlags());
@@ -372,6 +385,10 @@ void RenderUI(AppState& state)
         UI_Models::Draw(state);
 
     UI_Tables::Draw(state);
+
+    UI_AreaInfo::Draw(state);
+
+    UI_ChunkTextures::Draw(state);
 
     RenderLoadingOverlay();
 }
