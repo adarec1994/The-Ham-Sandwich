@@ -78,11 +78,12 @@ namespace Tex
         bool readFromMemory(const uint8_t* data, size_t size);
         bool decodeLargestMipToRGBA(ImageRGBA& out) const;
 
-    private:
-        static std::vector<int> calculateDXTSizes(int mipLevels, int width, int height, int blockSize);
         static bool decodeDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeDXT3(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeDXT5(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
+
+    private:
+        static std::vector<int> calculateDXTSizes(int mipLevels, int width, int height, int blockSize);
         static bool decodeArgb16(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeGrayscale(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeGarbage(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);

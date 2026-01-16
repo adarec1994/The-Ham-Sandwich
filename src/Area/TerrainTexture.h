@@ -38,12 +38,12 @@ namespace TerrainTexture
         bool LoadWorldLayerTable(const ArchivePtr& archive);
         const CachedTexture* GetLayerTexture(const ArchivePtr& archive, uint32_t layerId);
         const WorldLayerEntry* GetLayerEntry(uint32_t layerId) const;
+
         GLuint CreateBlendMapTexture(const uint8_t* data, int width, int height);
         GLuint CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height);
         GLuint CreateColorMapTexture(const uint8_t* data, int width, int height);
         GLuint CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height);
-        static bool DecompressDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
-        static bool DecompressDXT5(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
+
         void ClearCache();
         bool IsTableLoaded() const { return mTableLoaded; }
 
@@ -55,6 +55,19 @@ namespace TerrainTexture
 
         std::unordered_map<uint32_t, WorldLayerEntry> mLayerTable;
         std::unordered_map<uint32_t, CachedTexture> mTextureCache;
+
+        struct PathCachedTexture
+        {
+            GLuint texture = 0;
+            int width = 0;
+            int height = 0;
+        };
+        std::unordered_map<std::string, PathCachedTexture> mPathTextureCache;
+
+        GLuint mFallbackWhite = 0;
+        GLuint mFallbackNormal = 0;
+        void EnsureFallbackTextures();
+
         bool mTableLoaded = false;
     };
 

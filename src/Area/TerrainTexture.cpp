@@ -25,12 +25,55 @@ namespace TerrainTexture
 
     void Manager::ClearCache()
     {
-        for (auto& [id, tex] : mTextureCache)
+        for (auto& [path, tex] : mPathTextureCache)
         {
-            if (tex.diffuse != 0) glDeleteTextures(1, &tex.diffuse);
-            if (tex.normal != 0) glDeleteTextures(1, &tex.normal);
+            if (tex.texture != 0) glDeleteTextures(1, &tex.texture);
         }
+        mPathTextureCache.clear();
         mTextureCache.clear();
+
+        if (mFallbackWhite != 0)
+        {
+            glDeleteTextures(1, &mFallbackWhite);
+            mFallbackWhite = 0;
+        }
+        if (mFallbackNormal != 0)
+        {
+            glDeleteTextures(1, &mFallbackNormal);
+            mFallbackNormal = 0;
+        }
+    }
+
+    static std::wstring ToLowerW(const std::wstring& s)
+    {
+        std::wstring result;
+        result.reserve(s.size());
+        for (wchar_t c : s)
+            result += static_cast<wchar_t>(std::towlower(c));
+        return result;
+    }
+
+    static FileEntryPtr FindFileRecursive(const IFileSystemEntryPtr& entry, const std::wstring& targetLower)
+    {
+        if (!entry) return nullptr;
+
+        if (!entry->isDirectory())
+        {
+            std::wstring name = entry->getEntryName();
+            std::wstring nameLower = ToLowerW(name);
+            if (nameLower.find(targetLower) != std::wstring::npos)
+            {
+                return std::dynamic_pointer_cast<FileEntry>(entry);
+            }
+            return nullptr;
+        }
+
+        for (const auto& child : entry->getChildren())
+        {
+            auto result = FindFileRecursive(child, targetLower);
+            if (result) return result;
+        }
+        return nullptr;
     }
 
     static std::string WideToNarrow(const std::wstring& wide)
@@ -52,7 +95,10 @@ namespace TerrainTexture
         if (mTableLoaded) return true;
         if (!archive) return false;
 
-        auto fileEntry = archive->findFileCached("db/worldlayer.tbl");
+        auto root = archive->getRoot();
+        if (!root) return false;
+
+        auto fileEntry = FindFileRecursive(root, L"worldlayer.tbl");
         if (!fileEntry)
         {
             mTableLoaded = true;
@@ -96,34 +142,125 @@ namespace TerrainTexture
         return nullptr;
     }
 
+    static FileEntryPtr FindFileByPath(const IFileSystemEntryPtr& root, const std::wstring& wpath)
+    {
+        if (!root || wpath.empty()) return nullptr;
+
+        std::wstring remaining = wpath;
+        IFileSystemEntryPtr current = root;
+
+        while (!remaining.empty() && current && current->isDirectory())
+        {
+            size_t sep = remaining.find_first_of(L"\\/");
+            std::wstring component = (sep != std::wstring::npos) ? remaining.substr(0, sep) : remaining;
+            remaining = (sep != std::wstring::npos) ? remaining.substr(sep + 1) : L"";
+
+            std::wstring componentLower = ToLowerW(component);
+
+            IFileSystemEntryPtr found = nullptr;
+            for (const auto& child : current->getChildren())
+            {
+                if (!child) continue;
+                std::wstring childLower = ToLowerW(child->getEntryName());
+                if (childLower == componentLower)
+                {
+                    found = child;
+                    break;
+                }
+            }
+
+            if (!found) return nullptr;
+
+            if (remaining.empty())
+            {
+                return std::dynamic_pointer_cast<FileEntry>(found);
+            }
+
+            current = found;
+        }
+
+        return nullptr;
+    }
+
     bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH)
     {
         if (!archive || path.empty()) return false;
 
-        auto fileEntry = archive->findFileCached(path);
+        auto cacheIt = mPathTextureCache.find(path);
+        if (cacheIt != mPathTextureCache.end())
+        {
+            outTexture = cacheIt->second.texture;
+            outW = cacheIt->second.width;
+            outH = cacheIt->second.height;
+            return outTexture != 0;
+        }
+
+        FileEntryPtr fileEntry = archive->findFileCached(path);
+
         if (!fileEntry)
         {
+            std::wstring wpath(path.begin(), path.end());
+            auto root = archive->getRoot();
+            if (root)
+            {
+                fileEntry = FindFileByPath(root, wpath);
+            }
+        }
+
+        if (!fileEntry)
+        {
+            mPathTextureCache[path] = {0, 0, 0};
             return false;
         }
 
         std::vector<uint8_t> bytes;
         if (!archive->getFileData(fileEntry, bytes))
+        {
+            mPathTextureCache[path] = {0, 0, 0};
             return false;
+        }
 
-        if (bytes.empty()) return false;
+        if (bytes.empty())
+        {
+            mPathTextureCache[path] = {0, 0, 0};
+            return false;
+        }
 
         Tex::File tf;
         if (!tf.readFromMemory(bytes.data(), bytes.size()))
+        {
+            mPathTextureCache[path] = {0, 0, 0};
             return false;
+        }
 
         Tex::ImageRGBA img;
         if (!tf.decodeLargestMipToRGBA(img))
+        {
+            mPathTextureCache[path] = {0, 0, 0};
             return false;
+        }
 
         outTexture = UploadRGBATexture(img.rgba.data(), img.width, img.height, true);
         outW = img.width;
         outH = img.height;
+
+        mPathTextureCache[path] = {outTexture, outW, outH};
+
         return outTexture != 0;
+    }
+
+    void Manager::EnsureFallbackTextures()
+    {
+        if (mFallbackWhite == 0)
+        {
+            uint8_t white[4] = {255, 255, 255, 255};
+            mFallbackWhite = UploadRGBATexture(white, 1, 1, false);
+        }
+        if (mFallbackNormal == 0)
+        {
+            uint8_t normal[4] = {128, 128, 255, 255};
+            mFallbackNormal = UploadRGBATexture(normal, 1, 1, false);
+        }
     }
 
     const CachedTexture* Manager::GetLayerTexture(const ArchivePtr& archive, uint32_t layerId)
@@ -132,12 +269,14 @@ namespace TerrainTexture
         if (cacheIt != mTextureCache.end() && cacheIt->second.loaded)
             return &cacheIt->second;
 
+        EnsureFallbackTextures();
+
         const WorldLayerEntry* entry = GetLayerEntry(layerId);
         if (!entry)
         {
             CachedTexture tex;
-            uint8_t white[4] = {255, 255, 255, 255};
-            tex.diffuse = UploadRGBATexture(white, 1, 1, false);
+            tex.diffuse = mFallbackWhite;
+            tex.normal = mFallbackNormal;
             tex.width = 1;
             tex.height = 1;
             tex.loaded = true;
@@ -165,16 +304,14 @@ namespace TerrainTexture
 
         if (tex.diffuse == 0)
         {
-            uint8_t white[4] = {255, 255, 255, 255};
-            tex.diffuse = UploadRGBATexture(white, 1, 1, false);
+            tex.diffuse = mFallbackWhite;
             tex.width = 1;
             tex.height = 1;
         }
 
         if (tex.normal == 0)
         {
-            uint8_t defaultNormal[4] = {128, 128, 255, 255};
-            tex.normal = UploadRGBATexture(defaultNormal, 1, 1, false);
+            tex.normal = mFallbackNormal;
         }
 
         tex.loaded = true;
@@ -182,199 +319,7 @@ namespace TerrainTexture
         return &mTextureCache[layerId];
     }
 
-    bool Manager::DecompressDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
-    {
-        if (!src || width <= 0 || height <= 0) return false;
-
-        outRGBA.assign(static_cast<size_t>(width) * height * 4, 0);
-
-        int blocksX = (width + 3) / 4;
-        int blocksY = (height + 3) / 4;
-        const uint8_t* p = src;
-
-        auto rgb565_to_rgb8 = [](uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
-            r = static_cast<uint8_t>(((c >> 11) & 31) * 255 / 31);
-            g = static_cast<uint8_t>(((c >> 5) & 63) * 255 / 63);
-            b = static_cast<uint8_t>((c & 31) * 255 / 31);
-        };
-
-        for (int by = 0; by < blocksY; ++by)
-        {
-            for (int bx = 0; bx < blocksX; ++bx)
-            {
-                uint16_t c0 = static_cast<uint16_t>(p[0] | (p[1] << 8));
-                uint16_t c1 = static_cast<uint16_t>(p[2] | (p[3] << 8));
-                uint32_t codes;
-                std::memcpy(&codes, p + 4, 4);
-                p += 8;
-
-                uint8_t r0, g0, b0, r1, g1, b1;
-                rgb565_to_rgb8(c0, r0, g0, b0);
-                rgb565_to_rgb8(c1, r1, g1, b1);
-
-                uint8_t pal[4][4]{};
-                pal[0][0] = r0; pal[0][1] = g0; pal[0][2] = b0; pal[0][3] = 255;
-                pal[1][0] = r1; pal[1][1] = g1; pal[1][2] = b1; pal[1][3] = 255;
-
-                if (c0 > c1)
-                {
-                    pal[2][0] = static_cast<uint8_t>((2 * r0 + r1) / 3);
-                    pal[2][1] = static_cast<uint8_t>((2 * g0 + g1) / 3);
-                    pal[2][2] = static_cast<uint8_t>((2 * b0 + b1) / 3);
-                    pal[2][3] = 255;
-                    pal[3][0] = static_cast<uint8_t>((r0 + 2 * r1) / 3);
-                    pal[3][1] = static_cast<uint8_t>((g0 + 2 * g1) / 3);
-                    pal[3][2] = static_cast<uint8_t>((b0 + 2 * b1) / 3);
-                    pal[3][3] = 255;
-                }
-                else
-                {
-                    pal[2][0] = static_cast<uint8_t>((r0 + r1) / 2);
-                    pal[2][1] = static_cast<uint8_t>((g0 + g1) / 2);
-                    pal[2][2] = static_cast<uint8_t>((b0 + b1) / 2);
-                    pal[2][3] = 255;
-                    pal[3][0] = 0;
-                    pal[3][1] = 0;
-                    pal[3][2] = 0;
-                    pal[3][3] = 0;
-                }
-
-                for (int py = 0; py < 4; ++py)
-                {
-                    for (int px = 0; px < 4; ++px)
-                    {
-                        int x = bx * 4 + px;
-                        int y = by * 4 + py;
-                        if (x >= width || y >= height) continue;
-                        uint32_t idx = (codes >> (2 * (py * 4 + px))) & 0x3;
-                        size_t o = (static_cast<size_t>(y) * width + x) * 4;
-                        outRGBA[o + 0] = pal[idx][0];
-                        outRGBA[o + 1] = pal[idx][1];
-                        outRGBA[o + 2] = pal[idx][2];
-                        outRGBA[o + 3] = pal[idx][3];
-                    }
-                }
-            }
-        }
-        return true;
-    }
-
-    bool Manager::DecompressDXT5(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA)
-    {
-        if (!src || width <= 0 || height <= 0) return false;
-
-        outRGBA.assign(static_cast<size_t>(width) * height * 4, 0);
-
-        int blocksX = (width + 3) / 4;
-        int blocksY = (height + 3) / 4;
-        const uint8_t* p = src;
-
-        auto rgb565_to_rgb8 = [](uint16_t c, uint8_t& r, uint8_t& g, uint8_t& b) {
-            r = static_cast<uint8_t>(((c >> 11) & 31) * 255 / 31);
-            g = static_cast<uint8_t>(((c >> 5) & 63) * 255 / 63);
-            b = static_cast<uint8_t>((c & 31) * 255 / 31);
-        };
-
-        for (int by = 0; by < blocksY; ++by)
-        {
-            for (int bx = 0; bx < blocksX; ++bx)
-            {
-                uint8_t a0 = p[0];
-                uint8_t a1 = p[1];
-
-                uint64_t alphaBits = 0;
-                for (int i = 0; i < 6; ++i)
-                    alphaBits |= static_cast<uint64_t>(p[2 + i]) << (8 * i);
-
-                uint8_t alphaPal[8];
-                alphaPal[0] = a0;
-                alphaPal[1] = a1;
-                if (a0 > a1)
-                {
-                    alphaPal[2] = static_cast<uint8_t>((6 * a0 + 1 * a1) / 7);
-                    alphaPal[3] = static_cast<uint8_t>((5 * a0 + 2 * a1) / 7);
-                    alphaPal[4] = static_cast<uint8_t>((4 * a0 + 3 * a1) / 7);
-                    alphaPal[5] = static_cast<uint8_t>((3 * a0 + 4 * a1) / 7);
-                    alphaPal[6] = static_cast<uint8_t>((2 * a0 + 5 * a1) / 7);
-                    alphaPal[7] = static_cast<uint8_t>((1 * a0 + 6 * a1) / 7);
-                }
-                else
-                {
-                    alphaPal[2] = static_cast<uint8_t>((4 * a0 + 1 * a1) / 5);
-                    alphaPal[3] = static_cast<uint8_t>((3 * a0 + 2 * a1) / 5);
-                    alphaPal[4] = static_cast<uint8_t>((2 * a0 + 3 * a1) / 5);
-                    alphaPal[5] = static_cast<uint8_t>((1 * a0 + 4 * a1) / 5);
-                    alphaPal[6] = 0;
-                    alphaPal[7] = 255;
-                }
-
-                p += 8;
-
-                uint16_t c0 = static_cast<uint16_t>(p[0] | (p[1] << 8));
-                uint16_t c1 = static_cast<uint16_t>(p[2] | (p[3] << 8));
-                uint32_t codes;
-                std::memcpy(&codes, p + 4, 4);
-                p += 8;
-
-                uint8_t r0, g0, b0, r1, g1, b1;
-                rgb565_to_rgb8(c0, r0, g0, b0);
-                rgb565_to_rgb8(c1, r1, g1, b1);
-
-                uint8_t pal[4][3]{};
-                pal[0][0] = r0; pal[0][1] = g0; pal[0][2] = b0;
-                pal[1][0] = r1; pal[1][1] = g1; pal[1][2] = b1;
-                pal[2][0] = static_cast<uint8_t>((2 * r0 + r1) / 3);
-                pal[2][1] = static_cast<uint8_t>((2 * g0 + g1) / 3);
-                pal[2][2] = static_cast<uint8_t>((2 * b0 + b1) / 3);
-                pal[3][0] = static_cast<uint8_t>((r0 + 2 * r1) / 3);
-                pal[3][1] = static_cast<uint8_t>((g0 + 2 * g1) / 3);
-                pal[3][2] = static_cast<uint8_t>((b0 + 2 * b1) / 3);
-
-                for (int py = 0; py < 4; ++py)
-                {
-                    for (int px = 0; px < 4; ++px)
-                    {
-                        int x = bx * 4 + px;
-                        int y = by * 4 + py;
-                        if (x >= width || y >= height) continue;
-
-                        int pixelIdx = py * 4 + px;
-                        uint32_t colorIdx = (codes >> (2 * pixelIdx)) & 0x3;
-                        uint32_t alphaIdx = (alphaBits >> (3 * pixelIdx)) & 0x7;
-
-                        size_t o = (static_cast<size_t>(y) * width + x) * 4;
-                        outRGBA[o + 0] = pal[colorIdx][0];
-                        outRGBA[o + 1] = pal[colorIdx][1];
-                        outRGBA[o + 2] = pal[colorIdx][2];
-                        outRGBA[o + 3] = alphaPal[alphaIdx];
-                    }
-                }
-            }
-        }
-        return true;
-    }
-
     GLuint Manager::CreateBlendMapTexture(const uint8_t* data, int width, int height)
-    {
-        if (!data || width <= 0 || height <= 0) return 0;
-
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return tex;
-    }
-
-    GLuint Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
     {
         if (!data || width <= 0 || height <= 0) return 0;
 
@@ -399,7 +344,7 @@ namespace TerrainTexture
         if (!dxtData || dataSize == 0) return 0;
 
         std::vector<uint8_t> rgba;
-        if (!DecompressDXT1(dxtData, width, height, rgba))
+        if (!Tex::File::decodeDXT1(dxtData, width, height, rgba))
             return 0;
 
         for (size_t i = 0; i < rgba.size(); i += 4)
@@ -414,13 +359,9 @@ namespace TerrainTexture
         return CreateBlendMapTexture(rgba.data(), width, height);
     }
 
-    GLuint Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
+    GLuint Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
     {
-        if (!dxtData || dataSize == 0) return 0;
-
-        std::vector<uint8_t> rgba;
-        if (!DecompressDXT5(dxtData, width, height, rgba))
-            return 0;
+        if (!data || width <= 0 || height <= 0) return 0;
 
         GLuint tex = 0;
         glGenTextures(1, &tex);
@@ -432,10 +373,21 @@ namespace TerrainTexture
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 
         glBindTexture(GL_TEXTURE_2D, 0);
         return tex;
+    }
+
+    GLuint Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
+    {
+        if (!dxtData || dataSize == 0) return 0;
+
+        std::vector<uint8_t> rgba;
+        if (!Tex::File::decodeDXT5(dxtData, width, height, rgba))
+            return 0;
+
+        return CreateColorMapTexture(rgba.data(), width, height);
     }
 
     GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips)

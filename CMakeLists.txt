@@ -90,9 +90,9 @@ if(NOT TARGET glad)
             src/Database/Definitions/TicketCategory.h
             src/Database/Definitions/TicketSubCategory.h
             src/Database/Definitions/TrackingSlot.h
-            src/Database/Definitions/TradeSkill.h
-            src/Database/Definitions/TradeSkillAchievementLayout.h
-            src/Database/Definitions/TradeSkillAchievementAward.h
+            src/Database/Definitions/Tradeskill.h
+            src/Database/Definitions/TradeskillAchievementLayout.h
+            src/Database/Definitions/TradeskillAchievementAward.h
             src/Database/Definitions/TradeskillAchievementReward.h
             src/Database/Definitions/TradeskillAdditive.h
             src/Database/Definitions/Spell4Thresholds.h
@@ -253,8 +253,8 @@ add_executable(The_Ham_Sandwich
         src/UI/UI_ModelTab.h
         src/Area/TerrainTexture.cpp
         src/Area/TerrainTexture.h
-        src/Area/terrainshader.cpp
-        src/Area/terrainshader.h
+        src/Area/TerrainShader.cpp
+        src/Area/TerrainShader.h
         src/UI/UI_Tables.cpp
         src/UI/UI_Tables.h
 )

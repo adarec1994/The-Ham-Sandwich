@@ -4,7 +4,10 @@
 #include <filesystem>
 #include <codecvt>
 #include <locale>
+
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 std::string wstring_to_utf8(const std::wstring& str)
 {
