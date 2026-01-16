@@ -182,18 +182,9 @@ namespace TerrainTexture
         return nullptr;
     }
 
-    bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH)
+    bool Manager::LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData)
     {
         if (!archive || path.empty()) return false;
-
-        auto cacheIt = mPathTextureCache.find(path);
-        if (cacheIt != mPathTextureCache.end())
-        {
-            outTexture = cacheIt->second.texture;
-            outW = cacheIt->second.width;
-            outH = cacheIt->second.height;
-            return outTexture != 0;
-        }
 
         FileEntryPtr fileEntry = archive->findFileCached(path);
 
@@ -209,40 +200,74 @@ namespace TerrainTexture
 
         if (!fileEntry)
         {
-            mPathTextureCache[path] = {0, 0, 0};
-            return false;
+            // Try recursive filename search as last resort
+            auto root = archive->getRoot();
+            if (root)
+            {
+                size_t lastSlash = path.rfind('/');
+                if (lastSlash == std::string::npos) lastSlash = path.rfind('\\');
+                std::string filename = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+                std::wstring wfn(filename.begin(), filename.end());
+                std::wstring wfnLower = ToLowerW(wfn);
+                fileEntry = FindFileRecursive(root, wfnLower);
+            }
         }
+
+        if (!fileEntry) return false;
 
         std::vector<uint8_t> bytes;
-        if (!archive->getFileData(fileEntry, bytes))
-        {
-            mPathTextureCache[path] = {0, 0, 0};
-            return false;
-        }
-
-        if (bytes.empty())
-        {
-            mPathTextureCache[path] = {0, 0, 0};
-            return false;
-        }
+        if (!archive->getFileData(fileEntry, bytes)) return false;
+        if (bytes.empty()) return false;
 
         Tex::File tf;
-        if (!tf.readFromMemory(bytes.data(), bytes.size()))
-        {
-            mPathTextureCache[path] = {0, 0, 0};
-            return false;
-        }
+        if (!tf.readFromMemory(bytes.data(), bytes.size())) return false;
 
         Tex::ImageRGBA img;
-        if (!tf.decodeLargestMipToRGBA(img))
+        if (!tf.decodeLargestMipToRGBA(img)) return false;
+
+        outData.rgba = std::move(img.rgba);
+        outData.width = img.width;
+        outData.height = img.height;
+        outData.valid = true;
+
+        return true;
+    }
+
+    bool Manager::GetLayerTextureData(const ArchivePtr& archive, uint32_t layerId, RawTextureData& outData)
+    {
+        if (!archive || layerId == 0) return false;
+
+        if (!LoadWorldLayerTable(archive)) return false;
+
+        const WorldLayerEntry* entry = GetLayerEntry(layerId);
+        if (!entry || entry->diffusePath.empty()) return false;
+
+        return LoadRawTextureFromPath(archive, entry->diffusePath, outData);
+    }
+
+    bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH)
+    {
+        if (!archive || path.empty()) return false;
+
+        auto cacheIt = mPathTextureCache.find(path);
+        if (cacheIt != mPathTextureCache.end())
+        {
+            outTexture = cacheIt->second.texture;
+            outW = cacheIt->second.width;
+            outH = cacheIt->second.height;
+            return outTexture != 0;
+        }
+
+        RawTextureData rawData;
+        if (!LoadRawTextureFromPath(archive, path, rawData))
         {
             mPathTextureCache[path] = {0, 0, 0};
             return false;
         }
 
-        outTexture = UploadRGBATexture(img.rgba.data(), img.width, img.height, true);
-        outW = img.width;
-        outH = img.height;
+        outTexture = UploadRGBATexture(rawData.rgba.data(), rawData.width, rawData.height, true);
+        outW = rawData.width;
+        outH = rawData.height;
 
         mPathTextureCache[path] = {outTexture, outW, outH};
 

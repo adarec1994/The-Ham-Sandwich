@@ -115,6 +115,8 @@ add_executable(The_Ham_Sandwich
         src/Area/AreaRender.cpp
         src/Area/AreaRender.h
         src/Utils/BinStream.h
+        src/Utils/ParallelAreaLoader.cpp
+        src/Utils/ParallelAreaLoader.h
         ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
         src/tex/tex.cpp
         src/tex/tex.h

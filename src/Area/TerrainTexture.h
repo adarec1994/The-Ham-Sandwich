@@ -30,6 +30,15 @@ namespace TerrainTexture
         float scaleV = 1.0f;
     };
 
+    // Raw texture data for export (no GPU upload)
+    struct RawTextureData
+    {
+        std::vector<uint8_t> rgba;
+        int width = 0;
+        int height = 0;
+        bool valid = false;
+    };
+
     class Manager
     {
     public:
@@ -38,6 +47,9 @@ namespace TerrainTexture
         bool LoadWorldLayerTable(const ArchivePtr& archive);
         const CachedTexture* GetLayerTexture(const ArchivePtr& archive, uint32_t layerId);
         const WorldLayerEntry* GetLayerEntry(uint32_t layerId) const;
+
+        // Get raw RGBA data for export (doesn't use GPU)
+        bool GetLayerTextureData(const ArchivePtr& archive, uint32_t layerId, RawTextureData& outData);
 
         GLuint CreateBlendMapTexture(const uint8_t* data, int width, int height);
         GLuint CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height);
@@ -52,6 +64,7 @@ namespace TerrainTexture
         ~Manager();
 
         bool LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH);
+        bool LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData);
 
         std::unordered_map<uint32_t, WorldLayerEntry> mLayerTable;
         std::unordered_map<uint32_t, CachedTexture> mTextureCache;

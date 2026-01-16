@@ -122,6 +122,134 @@ bool AreaFile::loadTexture() {
     return false;
 }
 
+ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file)
+{
+    ParsedArea result;
+    result.file = file;
+
+    if (!archive || !file) return result;
+
+    result.path = file->getFullPath();
+
+    size_t ext = result.path.rfind(L".area");
+    if (ext != std::wstring::npos && ext >= 5) {
+        size_t dot = ext - 5;
+        if (result.path[dot] == L'.') {
+            int bx = 0, by = 0;
+            if (parseHexByte(result.path, dot + 1, bx) && parseHexByte(result.path, dot + 3, by)) {
+                result.tileX = bx;
+                result.tileY = by;
+            }
+        }
+    }
+
+    std::vector<uint8_t> content;
+    if (!archive->getFileData(file, content) || content.size() < 8) {
+        return result;
+    }
+
+    const uint8* base = content.data();
+    const uint8* end = base + content.size();
+    const uint8* ptr = base;
+
+    auto canRead = [&](size_t n) { return static_cast<size_t>(end - ptr) >= n; };
+    auto readU32 = [&]() -> uint32 {
+        uint32 v = static_cast<uint32>(ptr[0]) |
+                  (static_cast<uint32>(ptr[1]) << 8) |
+                  (static_cast<uint32>(ptr[2]) << 16) |
+                  (static_cast<uint32>(ptr[3]) << 24);
+        ptr += 4;
+        return v;
+    };
+
+    uint32 sig = readU32();
+    if (sig != 0x61726561u && sig != 0x41524541u) {
+        return result;
+    }
+
+    readU32();
+
+    std::vector<uint8> chnkData;
+
+    while (canRead(8)) {
+        uint32 magic = readU32();
+        uint32 size = readU32();
+        if (!canRead(size)) break;
+
+        if (magic == 0x43484E4Bu) {
+            chnkData.resize(size);
+            memcpy(chnkData.data(), ptr, size);
+        }
+        ptr += size;
+    }
+
+    if (chnkData.empty()) {
+        result.valid = true;
+        result.minBounds = glm::vec3(0, 0, 0);
+        result.maxBounds = glm::vec3(512, 50, 512);
+        return result;
+    }
+
+    result.chunks.resize(256);
+
+    const uint8* cptr = chnkData.data();
+    const uint8* cend = cptr + chnkData.size();
+    uint32 lastIndex = 0;
+
+    float totalH = 0.0f;
+    uint32 validCount = 0;
+
+    while (static_cast<size_t>(cend - cptr) >= 4) {
+        uint32 cellInfo = static_cast<uint32>(cptr[0]) |
+                         (static_cast<uint32>(cptr[1]) << 8) |
+                         (static_cast<uint32>(cptr[2]) << 16) |
+                         (static_cast<uint32>(cptr[3]) << 24);
+        cptr += 4;
+
+        uint32 idxDelta = (cellInfo >> 24) & 0xFF;
+        uint32 size = cellInfo & 0x00FFFFFF;
+
+        uint32 index = idxDelta + lastIndex;
+        lastIndex = index + 1;
+
+        if (index >= 256) break;
+        if (static_cast<size_t>(cend - cptr) < size) break;
+        if (size < 4) {
+            cptr += size;
+            continue;
+        }
+
+        std::vector<uint8> cellData(size);
+        memcpy(cellData.data(), cptr, size);
+        cptr += size;
+
+        uint32 cellX = index % 16;
+        uint32 cellY = index / 16;
+
+        auto chunk = AreaChunkRender::parseChunkData(cellData, cellX, cellY);
+
+        if (chunk.valid) {
+            totalH += chunk.avgHeight;
+            validCount++;
+            result.maxHeight = std::max(result.maxHeight, chunk.maxHeight);
+            result.minBounds = glm::min(result.minBounds, chunk.minBounds);
+            result.maxBounds = glm::max(result.maxBounds, chunk.maxBounds);
+        }
+
+        result.chunks[index] = std::move(chunk);
+    }
+
+    if (validCount > 0) {
+        result.avgHeight = totalH / static_cast<float>(validCount);
+    } else {
+        result.minBounds = glm::vec3(0, 0, 0);
+        result.maxBounds = glm::vec3(512, 50, 512);
+    }
+
+    result.valid = true;
+    return result;
+}
+
 bool AreaFile::load()
 {
     if (mContent.size() < 8) {
@@ -205,6 +333,43 @@ bool AreaFile::load()
 
         auto chunk = std::make_shared<AreaChunkRender>(cellData, cellX, cellY, mArchive);
         mChunks[index] = chunk;
+
+        if (chunk && chunk->isFullyInitialized()) {
+            totalH += chunk->getAverageHeight();
+            validCount++;
+            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
+            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
+            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
+        }
+    }
+
+    if (validCount > 0) {
+        mAverageHeight = totalH / static_cast<float>(validCount);
+    } else {
+        mMinBounds = glm::vec3(0, 0, 0);
+        mMaxBounds = glm::vec3(512, 50, 512);
+    }
+
+    return true;
+}
+
+bool AreaFile::loadFromParsed(ParsedArea&& parsed)
+{
+    mPath = parsed.path;
+    mTileX = parsed.tileX;
+    mTileY = parsed.tileY;
+    calculateWorldOffset();
+
+    mChunks.assign(256, nullptr);
+
+    float totalH = 0.0f;
+    uint32 validCount = 0;
+
+    for (size_t i = 0; i < parsed.chunks.size() && i < 256; i++) {
+        if (!parsed.chunks[i].valid) continue;
+
+        auto chunk = std::make_shared<AreaChunkRender>(std::move(parsed.chunks[i]), mArchive);
+        mChunks[i] = chunk;
 
         if (chunk && chunk->isFullyInitialized()) {
             totalH += chunk->getAverageHeight();
@@ -372,6 +537,365 @@ void AreaChunkRender::bindTextures(unsigned int program) const
     glActiveTexture(GL_TEXTURE0);
 }
 
+ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY)
+{
+    ParsedChunk result;
+    result.cellX = cellX;
+    result.cellY = cellY;
+
+    if (cellData.size() < 4) return result;
+
+    struct R {
+        const uint8* p;
+        const uint8* e;
+        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
+        uint32 u32le() {
+            uint32 v = static_cast<uint32>(p[0]) |
+                      (static_cast<uint32>(p[1]) << 8) |
+                      (static_cast<uint32>(p[2]) << 16) |
+                      (static_cast<uint32>(p[3]) << 24);
+            p += 4;
+            return v;
+        }
+        uint16 u16le() {
+            uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8);
+            p += 2;
+            return v;
+        }
+        uint8 u8() { return *p++; }
+        void skip(size_t n) { p += n; }
+    };
+
+    R r{ cellData.data(), cellData.data() + cellData.size() };
+
+    result.flags = r.u32le();
+
+    std::vector<uint16> heightmap;
+    bool hasHeightmap = false;
+
+    if ((result.flags & ChnkCellFlags::HeightMap) && r.can(722)) {
+        hasHeightmap = true;
+        heightmap.resize(19 * 19);
+        for (int j = 0; j < 19 * 19; j++) {
+            heightmap[j] = r.u16le();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) {
+        for (int j = 0; j < 4; j++) {
+            result.worldLayerIDs[j] = r.u32le();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::BlendMap) && r.can(8450)) {
+        result.blendMap.resize(65 * 65 * 4);
+        for (int i = 0; i < 65 * 65; i++) {
+            uint16 val = r.u16le();
+            result.blendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15);
+            result.blendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15);
+            result.blendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15);
+            result.blendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15);
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::ColorMap) && r.can(8450)) {
+        result.colorMap.resize(65 * 65 * 4);
+        for (int i = 0; i < 65 * 65; i++) {
+            uint16 val = r.u16le();
+            uint8 r5 = (val >> 0) & 0x1F;
+            uint8 g6 = (val >> 5) & 0x3F;
+            uint8 b5 = (val >> 11) & 0x1F;
+            result.colorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31);
+            result.colorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63);
+            result.colorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31);
+            result.colorMap[i * 4 + 3] = 255;
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::UnkMap) && r.can(8450)) {
+        result.unknownMap.resize(65 * 65);
+        for (int j = 0; j < 65 * 65; j++) {
+            result.unknownMap[j] = r.u16le();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::Unk0x20) && r.can(4)) {
+        result.unk0x20 = static_cast<int32>(r.u32le());
+    }
+
+    if ((result.flags & ChnkCellFlags::SkyIDs) && r.can(64)) {
+        for (int corner = 0; corner < 4; corner++) {
+            for (int skyIdx = 0; skyIdx < 4; skyIdx++) {
+                result.skyCorners[corner].worldSkyIDs[skyIdx] = r.u32le();
+            }
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::SkyWeights) && r.can(16)) {
+        for (int corner = 0; corner < 4; corner++) {
+            for (int weightIdx = 0; weightIdx < 4; weightIdx++) {
+                result.skyCorners[corner].worldSkyWeights[weightIdx] = r.u8();
+            }
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::ShadowMap) && r.can(4225)) {
+        result.shadowMap.resize(65 * 65);
+        for (int j = 0; j < 65 * 65; j++) {
+            result.shadowMap[j] = r.u8();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) {
+        result.lodHeightMap.resize(33 * 33);
+        for (int j = 0; j < 33 * 33; j++) {
+            result.lodHeightMap[j] = r.u16le();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::LoDHeightRange) && r.can(4)) {
+        result.lodHeightRange[0] = r.u16le();
+        result.lodHeightRange[1] = r.u16le();
+    }
+
+    if ((result.flags & ChnkCellFlags::Unk0x800) && r.can(578)) r.skip(578);
+    if ((result.flags & ChnkCellFlags::Unk0x1000) && r.can(1)) r.skip(1);
+
+    if ((result.flags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) {
+        result.colorMapDXT.resize(4624);
+        for (int j = 0; j < 4624; j++) {
+            result.colorMapDXT[j] = r.u8();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) r.skip(2312);
+    if ((result.flags & ChnkCellFlags::Unk0x8000) && r.can(8450)) r.skip(8450);
+
+    if ((result.flags & ChnkCellFlags::ZoneBound) && r.can(4096)) {
+        result.zoneBounds.resize(64 * 64);
+        for (int j = 0; j < 64 * 64; j++) {
+            result.zoneBounds[j] = r.u8();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) {
+        result.blendMapDXT.resize(2312);
+        for (int j = 0; j < 2312; j++) {
+            result.blendMapDXT[j] = r.u8();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) {
+        result.unkMap1.resize(2312);
+        for (int j = 0; j < 2312; j++) {
+            result.unkMap1[j] = r.u8();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) r.skip(2312);
+    if ((result.flags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) r.skip(2312);
+    if ((result.flags & ChnkCellFlags::Unk0x200000) && r.can(1)) r.skip(1);
+    if ((result.flags & ChnkCellFlags::Unk0x400000) && r.can(16)) r.skip(16);
+    if ((result.flags & ChnkCellFlags::Unk0x800000) && r.can(16900)) r.skip(16900);
+    if ((result.flags & ChnkCellFlags::Unk0x1000000) && r.can(8)) r.skip(8);
+    if ((result.flags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) r.skip(8450);
+    if ((result.flags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) r.skip(21316);
+    if ((result.flags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) r.skip(4096);
+
+    if ((result.flags & ChnkCellFlags::Zone) && r.can(16)) {
+        for (int j = 0; j < 4; j++) {
+            result.zoneIds[j] = r.u32le();
+        }
+    }
+
+    if ((result.flags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
+    if ((result.flags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
+    if ((result.flags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
+
+    while (r.can(8)) {
+        uint32 chunkID = r.u32le();
+        uint32 chunkSize = r.u32le();
+
+        if (!r.can(chunkSize)) break;
+
+        switch (chunkID) {
+            case 0x504F5250:
+            {
+                uint32 propCount = chunkSize / 4;
+                result.props.uniqueIDs.resize(propCount);
+                for (uint32 i = 0; i < propCount; i++) {
+                    result.props.uniqueIDs[i] = r.u32le();
+                }
+                break;
+            }
+            case 0x44727563:
+            {
+                result.curd.rawData.resize(chunkSize);
+                for (uint32 i = 0; i < chunkSize; i++) {
+                    result.curd.rawData[i] = r.u8();
+                }
+                break;
+            }
+            case 0x47744157:
+            {
+                if (chunkSize >= 4) {
+                    uint32 waterCount = r.u32le();
+                    if (waterCount > 0 && waterCount < 1000) {
+                        result.waters.resize(waterCount);
+                        uint32 remainingBytes = chunkSize - 4;
+                        uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0;
+                        for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) {
+                            result.waters[i].rawData.resize(bytesPerWater);
+                            for (uint32 j = 0; j < bytesPerWater; j++) {
+                                result.waters[i].rawData[j] = r.u8();
+                            }
+                        }
+                        result.hasWater = true;
+                    }
+                }
+                break;
+            }
+            default:
+                r.skip(chunkSize);
+                break;
+        }
+    }
+
+    if (result.blendMap.empty() && result.blendMapDXT.empty()) {
+        result.blendMap.resize(65 * 65 * 4);
+        for (int i = 0; i < 65 * 65; i++) {
+            result.blendMap[i * 4 + 0] = 255;
+            result.blendMap[i * 4 + 1] = 0;
+            result.blendMap[i * 4 + 2] = 0;
+            result.blendMap[i * 4 + 3] = 0;
+        }
+    }
+
+    if (result.colorMap.empty() && result.colorMapDXT.empty()) {
+        result.colorMap.resize(65 * 65 * 4);
+        for (int i = 0; i < 65 * 65; i++) {
+            result.colorMap[i * 4 + 0] = 128;
+            result.colorMap[i * 4 + 1] = 128;
+            result.colorMap[i * 4 + 2] = 128;
+            result.colorMap[i * 4 + 3] = 255;
+        }
+    }
+
+    if (!hasHeightmap) {
+        return result;
+    }
+
+    float baseX = static_cast<float>(cellY) * 32.0f;
+    float baseZ = static_cast<float>(cellX) * 32.0f;
+
+    float totalHeight = 0.0f;
+    uint32 validHeights = 0;
+
+    result.vertices.resize(17 * 17);
+
+    for (int y = 0; y < 17; y++) {
+        for (int x = 0; x < 17; x++) {
+            uint16 h = heightmap[x * 19 + y] & 0x7FFF;
+            float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
+
+            AreaVertex v{};
+            v.x = baseX + static_cast<float>(x) * UnitSize;
+            v.z = baseZ + static_cast<float>(y) * UnitSize;
+            v.y = height;
+            v.u = static_cast<float>(y) / 16.0f;
+            v.v = static_cast<float>(x) / 16.0f;
+            v.nx = 0.0f;
+            v.ny = 1.0f;
+            v.nz = 0.0f;
+            v.tanx = 1.0f;
+            v.tany = 0.0f;
+            v.tanz = 0.0f;
+            v.tanw = 1.0f;
+
+            if (height > result.maxHeight) result.maxHeight = height;
+            totalHeight += height;
+            validHeights++;
+
+            glm::vec3 pos(v.x, v.y, v.z);
+            result.minBounds = glm::min(result.minBounds, pos);
+            result.maxBounds = glm::max(result.maxBounds, pos);
+
+            result.vertices[y * 17 + x] = v;
+        }
+    }
+
+    if (validHeights > 0) {
+        result.avgHeight = totalHeight / static_cast<float>(validHeights);
+    }
+
+    for (int y = 0; y < 17; y++) {
+        for (int x = 0; x < 17; x++) {
+            auto getPos = [&](int px, int py) -> glm::vec3 {
+                px = std::clamp(px, 0, 16);
+                py = std::clamp(py, 0, 16);
+                auto& vtx = result.vertices[py * 17 + px];
+                return glm::vec3(vtx.x, vtx.y, vtx.z);
+            };
+
+            glm::vec3 left = getPos(x - 1, y);
+            glm::vec3 right = getPos(x + 1, y);
+            glm::vec3 up = getPos(x, y - 1);
+            glm::vec3 down = getPos(x, y + 1);
+
+            glm::vec3 dx = right - left;
+            glm::vec3 dz = down - up;
+            glm::vec3 normal = glm::normalize(glm::cross(dz, dx));
+
+            result.vertices[y * 17 + x].nx = normal.x;
+            result.vertices[y * 17 + x].ny = normal.y;
+            result.vertices[y * 17 + x].nz = normal.z;
+        }
+    }
+
+    result.valid = true;
+    return result;
+}
+
+AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
+    : mFlags(parsed.flags)
+    , mMinBounds(parsed.minBounds)
+    , mMaxBounds(parsed.maxBounds)
+    , mSplatTexture(0)
+    , mColorMapTexture(0)
+{
+    mMaxHeight = parsed.maxHeight;
+    mAverageHeight = parsed.avgHeight;
+
+    for (int i = 0; i < 4; i++) {
+        mWorldLayerIDs[i] = parsed.worldLayerIDs[i];
+        mZoneIds[i] = parsed.zoneIds[i];
+        mLayerScale[i] = 0.0f;
+    }
+
+    mVertices = std::move(parsed.vertices);
+    mBlendMap = std::move(parsed.blendMap);
+    mBlendMapDXT = std::move(parsed.blendMapDXT);
+    mColorMap = std::move(parsed.colorMap);
+    mColorMapDXT = std::move(parsed.colorMapDXT);
+    mUnknownMap = std::move(parsed.unknownMap);
+    mUnk0x20 = parsed.unk0x20;
+    for (int i = 0; i < 4; i++) mSkyCorners[i] = parsed.skyCorners[i];
+    mShadowMap = std::move(parsed.shadowMap);
+    mLodHeightMap = std::move(parsed.lodHeightMap);
+    mLodHeightRange[0] = parsed.lodHeightRange[0];
+    mLodHeightRange[1] = parsed.lodHeightRange[1];
+    mZoneBounds = std::move(parsed.zoneBounds);
+    mUnkMap1 = std::move(parsed.unkMap1);
+    mProps = std::move(parsed.props);
+    mCurd = std::move(parsed.curd);
+    mWaters = std::move(parsed.waters);
+    mHasWater = parsed.hasWater;
+
+    if (mVertices.empty()) return;
+
+    uploadGPU();
+}
+
 AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr)
     : mChunkData(cellData)
     , mFlags(0)
@@ -498,13 +1022,8 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
         mLodHeightRange[1] = r.u16le();
     }
 
-    if ((mFlags & ChnkCellFlags::Unk0x800) && r.can(578)) {
-        r.skip(578);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x1000) && r.can(1)) {
-        r.skip(1);
-    }
+    if ((mFlags & ChnkCellFlags::Unk0x800) && r.can(578)) r.skip(578);
+    if ((mFlags & ChnkCellFlags::Unk0x1000) && r.can(1)) r.skip(1);
 
     if ((mFlags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) {
         mColorMapDXT.resize(4624);
@@ -513,13 +1032,8 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
         }
     }
 
-    if ((mFlags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) {
-        r.skip(2312);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x8000) && r.can(8450)) {
-        r.skip(8450);
-    }
+    if ((mFlags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) r.skip(2312);
+    if ((mFlags & ChnkCellFlags::Unk0x8000) && r.can(8450)) r.skip(8450);
 
     if ((mFlags & ChnkCellFlags::ZoneBound) && r.can(4096)) {
         mZoneBounds.resize(64 * 64);
@@ -542,41 +1056,15 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
         }
     }
 
-    if ((mFlags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) {
-        r.skip(2312);
-    }
-
-    if ((mFlags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) {
-        r.skip(2312);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x200000) && r.can(1)) {
-        r.skip(1);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x400000) && r.can(16)) {
-        r.skip(16);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x800000) && r.can(16900)) {
-        r.skip(16900);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x1000000) && r.can(8)) {
-        r.skip(8);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) {
-        r.skip(8450);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) {
-        r.skip(21316);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) {
-        r.skip(4096);
-    }
+    if ((mFlags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) r.skip(2312);
+    if ((mFlags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) r.skip(2312);
+    if ((mFlags & ChnkCellFlags::Unk0x200000) && r.can(1)) r.skip(1);
+    if ((mFlags & ChnkCellFlags::Unk0x400000) && r.can(16)) r.skip(16);
+    if ((mFlags & ChnkCellFlags::Unk0x800000) && r.can(16900)) r.skip(16900);
+    if ((mFlags & ChnkCellFlags::Unk0x1000000) && r.can(8)) r.skip(8);
+    if ((mFlags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) r.skip(8450);
+    if ((mFlags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) r.skip(21316);
+    if ((mFlags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) r.skip(4096);
 
     if ((mFlags & ChnkCellFlags::Zone) && r.can(16)) {
         for (int j = 0; j < 4; j++) {
@@ -584,17 +1072,9 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
         }
     }
 
-    if ((mFlags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) {
-        r.skip(8450);
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) {
-        r.skip(8450);
-    }
-
-    if ((mFlags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) {
-        r.skip(2312);
-    }
+    if ((mFlags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
+    if ((mFlags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
+    if ((mFlags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
 
     while (r.can(8)) {
         uint32 chunkID = r.u32le();
@@ -713,7 +1193,11 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     }
 
     calcNormals();
+    uploadGPU();
+}
 
+void AreaChunkRender::uploadGPU()
+{
     if (indices.empty()) {
         indices.reserve(16 * 16 * 6);
         for (uint32 y = 0; y < 16; y++) {

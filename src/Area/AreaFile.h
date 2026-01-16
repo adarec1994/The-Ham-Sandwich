@@ -80,6 +80,41 @@ struct CurdData
     std::vector<uint8> rawData;
 };
 
+struct ParsedChunk
+{
+    uint32 cellX = 0;
+    uint32 cellY = 0;
+    uint32 flags = 0;
+
+    std::vector<AreaVertex> vertices;
+    std::vector<uint8> blendMap;
+    std::vector<uint8> blendMapDXT;
+    std::vector<uint8> colorMap;
+    std::vector<uint8> colorMapDXT;
+    std::vector<uint16> unknownMap;
+    int32 unk0x20 = 0;
+    SkyCorner skyCorners[4];
+    std::vector<uint8> shadowMap;
+    std::vector<uint16> lodHeightMap;
+    uint16 lodHeightRange[2] = {0};
+    std::vector<uint8> zoneBounds;
+    std::vector<uint8> unkMap1;
+    uint32 worldLayerIDs[4] = {0};
+    uint32 zoneIds[4] = {0};
+
+    PropData props;
+    CurdData curd;
+    std::vector<WaterData> waters;
+    bool hasWater = false;
+
+    float maxHeight = -100000.0f;
+    float avgHeight = 0.0f;
+    glm::vec3 minBounds{std::numeric_limits<float>::max()};
+    glm::vec3 maxBounds{std::numeric_limits<float>::lowest()};
+
+    bool valid = false;
+};
+
 class AreaChunkRender
 {
 public:
@@ -151,9 +186,11 @@ private:
     void calcNormals();
     void calcTangentBitangent();
     void extendBuffer();
+    void uploadGPU();
 
 public:
     AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr archive);
+    AreaChunkRender(ParsedChunk&& parsed, ArchivePtr archive);
     ~AreaChunkRender();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
@@ -197,9 +234,24 @@ public:
 
     static void geometryInit(uint32 program);
     static const Uniforms& getUniforms();
+    static ParsedChunk parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY);
 };
 
 typedef std::shared_ptr<AreaChunkRender> AreaChunkRenderPtr;
+
+struct ParsedArea
+{
+    FileEntryPtr file;
+    std::wstring path;
+    int tileX = 0;
+    int tileY = 0;
+    std::vector<ParsedChunk> chunks;
+    float maxHeight = -100000.0f;
+    float avgHeight = 0.0f;
+    glm::vec3 minBounds{std::numeric_limits<float>::max()};
+    glm::vec3 maxBounds{std::numeric_limits<float>::lowest()};
+    bool valid = false;
+};
 
 class AreaFile
 {
@@ -234,6 +286,7 @@ public:
     AreaFile(ArchivePtr archive, FileEntryPtr file);
     ~AreaFile();
     bool load();
+    bool loadFromParsed(ParsedArea&& parsed);
 
     void setTileXY(int tx, int ty) { mTileX = tx; mTileY = ty; calculateWorldOffset(); }
     [[nodiscard]] int getTileX() const { return mTileX; }
@@ -252,6 +305,8 @@ public:
     [[nodiscard]] glm::vec3 getWorldOffset() const { return mWorldOffset; }
 
     [[nodiscard]] ArchivePtr getArchive() const { return mArchive; }
+    [[nodiscard]] const std::wstring& getPath() const { return mPath; }
+    [[nodiscard]] FileEntryPtr getFile() const { return mFile; }
 
     static constexpr int WORLD_GRID_ORIGIN = 64;
     static const float GRID_SIZE;
@@ -262,6 +317,7 @@ public:
     [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
 
     static const float UnitSize;
+    static ParsedArea parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file);
 };
 
 typedef std::shared_ptr<AreaFile> AreaFilePtr;
