@@ -1,4 +1,3 @@
-// src/UI/UI_Globals.cpp
 #include "UI_Globals.h"
 #include "UI.h"
 #include "UI_Utils.h"
@@ -14,7 +13,6 @@ std::string gSelectedChunkAreaName;
 
 std::shared_ptr<M3Render> gLoadedModel = nullptr;
 
-// Loading state
 bool gIsLoadingAreas = false;
 int gLoadingAreasCurrent = 0;
 int gLoadingAreasTotal = 0;
@@ -27,7 +25,6 @@ void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFi
 {
     if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
 
-    // Reset reference position so first area renders at origin
     ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
@@ -35,7 +32,6 @@ void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFi
     gLoadedModel = nullptr;
     gPendingAreaFiles.clear();
 
-    // Collect all .area files
     for (const auto& child : folderEntry->getChildren())
     {
         if (!child || child->isDirectory()) continue;
@@ -61,7 +57,6 @@ void ProcessAreaLoading(AppState& state)
 {
     if (!gIsLoadingAreas || gPendingAreaFiles.empty()) return;
 
-    // Load a few areas per frame to keep UI responsive
     int loadPerFrame = 3;
     for (int i = 0; i < loadPerFrame && !gPendingAreaFiles.empty(); ++i)
     {
@@ -77,7 +72,6 @@ void ProcessAreaLoading(AppState& state)
         gLoadingAreasCurrent++;
     }
 
-    // Check if done
     if (gPendingAreaFiles.empty())
     {
         gIsLoadingAreas = false;

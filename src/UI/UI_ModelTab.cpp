@@ -1,4 +1,3 @@
-// src/UI/UI_ModelTab.cpp
 #include "UI_ModelTab.h"
 #include "UI_Utils.h"
 

@@ -1,4 +1,3 @@
-// src/UI/UI_AreaTab.h
 #pragma once
 #include "UI.h"
 

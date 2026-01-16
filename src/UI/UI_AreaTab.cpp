@@ -1,10 +1,9 @@
-// src/UI/UI_AreaTab.cpp
 #include "UI_AreaTab.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 
 #include "../Archive.h"
-#include "../Area/AreaFile.h"  // For ResetAreaReferencePosition()
+#include "../Area/AreaFile.h"
 #include "../tex/tex.h"
 
 #include <unordered_map>
@@ -184,7 +183,6 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
 {
     if (!arc || !fileEntry) return;
 
-    // Reset reference position so this area renders at origin
     ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
@@ -272,7 +270,6 @@ static void RenderAreaTreeFiltered(AppState& state,
 
         std::string loadLabel = std::string("Load ") + FormatFolderLabel(name);
 
-        // Disable button while loading
         if (gIsLoadingAreas)
         {
             ImGui::BeginDisabled();

@@ -1,11 +1,10 @@
-// src/UI/UI_FileTree.cpp
 #include "UI_FileTree.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 #include "UI_Tables.h"
 
 #include "../Archive.h"
-#include "../Area/AreaFile.h"  // For ResetAreaReferencePosition()
+#include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../tex/tex.h"
@@ -23,7 +22,6 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
 {
     if (!arc || !folderEntry || !folderEntry->isDirectory()) return;
 
-    // Reset reference position so first area renders at origin
     ResetAreaReferencePosition();
 
     gLoadedAreas.clear();
@@ -68,7 +66,6 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
 {
     if (!arc || !fileEntry) return;
 
-    // Reset reference position so this area renders at origin
     ResetAreaReferencePosition();
 
     gLoadedAreas.clear();

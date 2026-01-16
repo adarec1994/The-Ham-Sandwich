@@ -33,38 +33,6 @@ namespace TerrainTexture
         mTextureCache.clear();
     }
 
-    static std::wstring ToLowerW(const std::wstring& s)
-    {
-        std::wstring result;
-        result.reserve(s.size());
-        for (wchar_t c : s)
-            result += static_cast<wchar_t>(std::towlower(c));
-        return result;
-    }
-
-    static FileEntryPtr FindFileRecursive(const IFileSystemEntryPtr& entry, const std::wstring& targetLower)
-    {
-        if (!entry) return nullptr;
-
-        if (!entry->isDirectory())
-        {
-            std::wstring name = entry->getEntryName();
-            std::wstring nameLower = ToLowerW(name);
-            if (nameLower.find(targetLower) != std::wstring::npos)
-            {
-                return std::dynamic_pointer_cast<FileEntry>(entry);
-            }
-            return nullptr;
-        }
-
-        for (const auto& child : entry->getChildren())
-        {
-            auto result = FindFileRecursive(child, targetLower);
-            if (result) return result;
-        }
-        return nullptr;
-    }
-
     static std::string WideToNarrow(const std::wstring& wide)
     {
         std::string result;
@@ -84,10 +52,7 @@ namespace TerrainTexture
         if (mTableLoaded) return true;
         if (!archive) return false;
 
-        auto root = archive->getRoot();
-        if (!root) return false;
-
-        auto fileEntry = FindFileRecursive(root, L"worldlayer.tbl");
+        auto fileEntry = archive->findFileCached("db/worldlayer.tbl");
         if (!fileEntry)
         {
             mTableLoaded = true;
@@ -131,56 +96,11 @@ namespace TerrainTexture
         return nullptr;
     }
 
-    static FileEntryPtr FindFileByPath(const IFileSystemEntryPtr& root, const std::wstring& wpath)
-    {
-        if (!root || wpath.empty()) return nullptr;
-
-        std::wstring remaining = wpath;
-        IFileSystemEntryPtr current = root;
-
-        while (!remaining.empty() && current && current->isDirectory())
-        {
-            size_t sep = remaining.find_first_of(L"\\/");
-            std::wstring component = (sep != std::wstring::npos) ? remaining.substr(0, sep) : remaining;
-            remaining = (sep != std::wstring::npos) ? remaining.substr(sep + 1) : L"";
-
-            std::wstring componentLower = ToLowerW(component);
-
-            IFileSystemEntryPtr found = nullptr;
-            for (const auto& child : current->getChildren())
-            {
-                if (!child) continue;
-                std::wstring childLower = ToLowerW(child->getEntryName());
-                if (childLower == componentLower)
-                {
-                    found = child;
-                    break;
-                }
-            }
-
-            if (!found) return nullptr;
-
-            if (remaining.empty())
-            {
-                return std::dynamic_pointer_cast<FileEntry>(found);
-            }
-
-            current = found;
-        }
-
-        return nullptr;
-    }
-
     bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH)
     {
         if (!archive || path.empty()) return false;
 
-        std::wstring wpath(path.begin(), path.end());
-
-        auto root = archive->getRoot();
-        if (!root) return false;
-
-        auto fileEntry = FindFileByPath(root, wpath);
+        auto fileEntry = archive->findFileCached(path);
         if (!fileEntry)
         {
             return false;
@@ -313,7 +233,10 @@ namespace TerrainTexture
                     pal[2][1] = static_cast<uint8_t>((g0 + g1) / 2);
                     pal[2][2] = static_cast<uint8_t>((b0 + b1) / 2);
                     pal[2][3] = 255;
-                    pal[3][0] = 0; pal[3][1] = 0; pal[3][2] = 0; pal[3][3] = 0;
+                    pal[3][0] = 0;
+                    pal[3][1] = 0;
+                    pal[3][2] = 0;
+                    pal[3][3] = 0;
                 }
 
                 for (int py = 0; py < 4; ++py)

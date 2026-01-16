@@ -1,4 +1,3 @@
-// src/UI/UI_Tables.cpp
 #include "UI_Tables.h"
 #include "UI_Utils.h"
 #include "../Archive.h"

@@ -1,9 +1,7 @@
-// src/UI/UI_RenderWorld.cpp
 #include "UI_RenderWorld.h"
 #include "../Area/AreaRender.h"
 #include "UI_Globals.h"
 
-#include <iostream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -39,7 +37,6 @@ static void InitAxisGizmo()
 {
     if (gAxisVAO != 0) return;
 
-    // Compile shaders
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vs, 1, &axisVertexShader, nullptr);
     glCompileShader(vs);
@@ -56,15 +53,13 @@ static void InitAxisGizmo()
     glDeleteShader(vs);
     glDeleteShader(fs);
 
-    // Axis lines: origin to X (red), Y (green), Z (blue)
     float axisData[] = {
-        // Position         // Color
-        0.0f, 0.0f, 0.0f,   1.0f, 0.0f, 0.0f,  // X axis start
-        1.0f, 0.0f, 0.0f,   1.0f, 0.0f, 0.0f,  // X axis end
-        0.0f, 0.0f, 0.0f,   0.0f, 1.0f, 0.0f,  // Y axis start
-        0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f,  // Y axis end
-        0.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f,  // Z axis start
-        0.0f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f,  // Z axis end
+        0.0f, 0.0f, 0.0f,   1.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f,   1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,   0.0f, 1.0f, 0.0f,
+        0.0f, 1.0f, 0.0f,   0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,   0.0f, 0.0f, 1.0f,
+        0.0f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f,
     };
 
     glGenVertexArrays(1, &gAxisVAO);
@@ -86,11 +81,9 @@ static void RenderAxisGizmo(const AppState& state, int display_w, int display_h)
 {
     InitAxisGizmo();
 
-    // Save current viewport
     GLint viewport[4];
     glGetIntegerv(GL_VIEWPORT, viewport);
 
-    // Set small viewport in top-left corner (after the 70px strip)
     int gizmoSize = 80;
     int margin = 10;
     int stripWidth = 70;
@@ -99,7 +92,6 @@ static void RenderAxisGizmo(const AppState& state, int display_w, int display_h)
     glDisable(GL_DEPTH_TEST);
     glUseProgram(gAxisProgram);
 
-    // Create rotation-only view matrix (no translation)
     glm::mat4 rotView = glm::lookAt(
         glm::vec3(0.0f) - state.camera.Front * 2.5f,
         glm::vec3(0.0f),
@@ -117,21 +109,12 @@ static void RenderAxisGizmo(const AppState& state, int display_w, int display_h)
     glDrawArrays(GL_LINES, 0, 6);
     glBindVertexArray(0);
 
-    // Restore viewport
     glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
     glEnable(GL_DEPTH_TEST);
 }
 
 void RenderAreas(const AppState& state, int display_w, int display_h)
 {
-    static int frameCount = 0;
-    if (frameCount < 5)
-    {
-        std::cout << "RenderAreas called, frame " << frameCount
-                  << ", areas=" << gLoadedAreas.size() << "\n";
-        frameCount++;
-    }
-
     if (display_w <= 0 || display_h <= 0) return;
 
     glEnable(GL_DEPTH_TEST);
@@ -178,6 +161,5 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
         }
     }
 
-    // Render axis gizmo last, on top
     RenderAxisGizmo(state, display_w, display_h);
 }

@@ -1,4 +1,3 @@
-// src/UI/UI_RenderWorld.h
 #pragma once
 #include "UI.h"
 

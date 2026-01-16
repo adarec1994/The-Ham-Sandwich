@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <string>
 
-// Define types used in your original code
 typedef uint32_t uint32;
 typedef int32_t int32;
 typedef uint64_t uint64;
@@ -33,8 +32,6 @@ public:
 	}
 
 	uint32 tell() const { return mCurPos; }
-
-	// Added this method to fix the error
 	uint32 getSize() const { return (uint32)mData.size(); }
 
 	template<typename T>

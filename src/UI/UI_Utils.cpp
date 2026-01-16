@@ -1,4 +1,3 @@
-// src/UI/UI_Utils.cpp
 #include "UI_Utils.h"
 #include <algorithm>
 #include <cctype>

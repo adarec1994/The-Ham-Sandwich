@@ -21,7 +21,6 @@ void SnapCameraToLoaded(AppState& state)
         return;
     }
 
-    // Find the first area with actual rendered chunks
     glm::vec3 targetMin(std::numeric_limits<float>::max());
     glm::vec3 targetMax(std::numeric_limits<float>::lowest());
     bool found = false;
@@ -30,14 +29,12 @@ void SnapCameraToLoaded(AppState& state)
     {
         if (!area) continue;
 
-        // Check if this area has any fully initialized chunks
         int validChunkCount = 0;
         for (const auto& chunk : area->getChunks())
         {
             if (chunk && chunk->isFullyInitialized())
             {
                 validChunkCount++;
-                // Accumulate bounds from valid chunks
                 targetMin = glm::min(targetMin, chunk->getMinBounds() + area->getWorldOffset());
                 targetMax = glm::max(targetMax, chunk->getMaxBounds() + area->getWorldOffset());
                 found = true;
@@ -56,13 +53,11 @@ void SnapCameraToLoaded(AppState& state)
         std::cout << "WARNING: No fully initialized chunks found in any area!\n";
         std::cout << "Using default position at origin\n";
 
-        // Default fallback - position at origin looking down
         state.camera.Position = glm::vec3(256.0f, 500.0f, 256.0f);
         state.camera.Yaw = -90.0f;
         state.camera.Pitch = -45.0f;
         state.camera.MovementSpeed = 100.0f;
 
-        // Update camera vectors
         glm::vec3 front;
         front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
         front.y = sin(glm::radians(state.camera.Pitch));
@@ -73,7 +68,6 @@ void SnapCameraToLoaded(AppState& state)
         return;
     }
 
-    // Calculate center and size of rendered geometry
     glm::vec3 center = (targetMin + targetMax) * 0.5f;
     glm::vec3 size = targetMax - targetMin;
     float maxExtent = std::max({size.x, size.y, size.z});
@@ -82,7 +76,6 @@ void SnapCameraToLoaded(AppState& state)
               << ") to (" << targetMax.x << "," << targetMax.y << "," << targetMax.z << ")\n";
     std::cout << "Center: (" << center.x << "," << center.y << "," << center.z << ")\n";
 
-    // Position camera above and behind the center, looking down at terrain
     float height = std::max(200.0f, maxExtent * 0.5f);
     float distance = std::max(300.0f, maxExtent * 0.75f);
 
@@ -92,11 +85,9 @@ void SnapCameraToLoaded(AppState& state)
         center.z - distance * 0.5f
     );
 
-    // Look toward center
     state.camera.Yaw = 45.0f;
     state.camera.Pitch = -30.0f;
 
-    // Update camera vectors
     glm::vec3 front;
     front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
     front.y = sin(glm::radians(state.camera.Pitch));
@@ -105,7 +96,6 @@ void SnapCameraToLoaded(AppState& state)
     state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
-    // Set movement speed based on terrain size
     state.camera.MovementSpeed = std::max(50.0f, maxExtent * 0.25f);
 
     std::cout << "Camera position: (" << state.camera.Position.x << ","

@@ -1,4 +1,3 @@
-// src/UI/UI_ModelTab.h
 #pragma once
 #include "UI.h"
 

@@ -11,11 +11,13 @@
 #include <stdexcept>
 #include <regex>
 #include <sstream>
+#include <unordered_map>
 
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 typedef uint8_t uint8;
 typedef int64_t int64;
+typedef int32_t int32;
 
 #pragma pack(push, 1)
 
@@ -48,7 +50,6 @@ typedef std::shared_ptr<Archive> ArchivePtr;
 class ArchiveFile;
 typedef std::shared_ptr<ArchiveFile> ArchiveFilePtr;
 
-// Forward declarations
 class IArchiveEntry;
 class IArchiveFileEntry;
 class DirectoryEntry;
@@ -61,31 +62,25 @@ typedef std::shared_ptr<DirectoryEntry> DirectoryEntryPtr;
 typedef std::shared_ptr<FileEntry> FileEntryPtr;
 typedef std::shared_ptr<IndexFile> IndexFilePtr;
 
-// Legacy type aliases for backward compatibility
 typedef IArchiveEntry IFileSystemEntry;
 typedef IArchiveEntryPtr IFileSystemEntryPtr;
 
-// ============================================================================
-// IArchiveEntry - Base interface for archive entries (matches C# interface)
-// ============================================================================
 class IArchiveEntry : public std::enable_shared_from_this<IArchiveEntry>
 {
 protected:
     std::weak_ptr<IArchiveEntry> mParent;
     std::list<IArchiveEntryPtr> mChildren;
-    std::wstring mEntryName;  // Just the name, not full path
+    std::wstring mEntryName;
 
 public:
     virtual ~IArchiveEntry() = default;
 
     std::shared_ptr<IArchiveEntry> getParent() const { return mParent.lock(); }
 
-    // C# API: FileName property (returns narrow string)
     std::string getFileName() const {
         return std::string(mEntryName.begin(), mEntryName.end());
     }
 
-    // Legacy API: getEntryName (returns wide string)
     std::wstring getEntryName() const { return mEntryName; }
 
     const std::list<IArchiveEntryPtr>& getChildren() const { return mChildren; }
@@ -93,7 +88,6 @@ public:
     virtual bool isDirectory() const = 0;
     virtual bool hasChildren() const { return false; }
 
-    // Get full path with backslashes (legacy behavior, wstring)
     std::wstring getFullPath() const {
         std::wstring path = mEntryName;
         auto parent = mParent.lock();
@@ -106,7 +100,6 @@ public:
         return path;
     }
 
-    // Get full path with forward slashes (C# behavior, narrow string)
     std::string getFullPathNarrow() const {
         std::string path = getFileName();
         auto parent = mParent.lock();
@@ -120,9 +113,6 @@ public:
     }
 };
 
-// ============================================================================
-// IArchiveFileEntry - Interface for file entries (matches C# interface)
-// ============================================================================
 class IArchiveFileEntry : public IArchiveEntry
 {
 public:
@@ -136,9 +126,6 @@ public:
     virtual uint64 getCompressedSize() const = 0;
 };
 
-// ============================================================================
-// DirectoryEntry - Directory in the archive
-// ============================================================================
 class DirectoryEntry : public IArchiveEntry
 {
 protected:
@@ -159,32 +146,16 @@ public:
 
     void setRoot(bool root) { mIsRootDirectory = root; }
 
-    // Get all files recursively
     void getFiles(std::vector<IArchiveFileEntryPtr>& files);
-
-    // Get all entries
     void getEntries(std::list<IArchiveEntryPtr>& entries, bool recursive = false);
-
-    // Find entry by path (wstring version - legacy)
     IArchiveEntryPtr findEntry(const std::wstring& path);
-
-    // Find entry by path (string version - C# API)
     IArchiveEntryPtr findEntry(const std::string& path);
-
-    // Find file entry by path (wstring version)
     IArchiveFileEntryPtr findFileEntry(const std::wstring& path);
-
-    // Find file entry by path (string version)
     IArchiveFileEntryPtr findFileEntry(const std::string& path);
-
-    // Get files matching a pattern (supports * and ? wildcards)
     std::vector<IArchiveFileEntryPtr> getFiles(const std::string& pattern);
     std::vector<IArchiveFileEntryPtr> getFiles(const std::wstring& pattern);
 };
 
-// ============================================================================
-// FileEntry - File in the archive
-// ============================================================================
 class FileEntry : public IArchiveFileEntry
 {
     uint32 mFlags = 0;
@@ -203,9 +174,6 @@ public:
     uint64 getCompressedSize() const override { return mCompressedSize; }
 };
 
-// ============================================================================
-// IndexFile - Represents the index portion of the archive (matches C# IndexFile)
-// ============================================================================
 class IndexFile
 {
     ArchivePtr mArchive;
@@ -214,21 +182,13 @@ class IndexFile
 public:
     IndexFile(ArchivePtr archive, DirectoryEntryPtr root);
 
-    // C# API: FindEntry(string path) - returns IArchiveEntry (file or directory)
     IArchiveEntryPtr findEntry(const std::string& path);
     IArchiveEntryPtr findEntry(const std::wstring& path);
-
-    // C# API: GetFiles(string pattern) - returns matching file entries
     std::vector<IArchiveFileEntryPtr> getFiles(const std::string& pattern);
     std::vector<IArchiveFileEntryPtr> getFiles(const std::wstring& pattern);
-
-    // Get root directory
     DirectoryEntryPtr getRoot() const { return mRoot; }
 };
 
-// ============================================================================
-// ArchiveFile - Represents a .archive data file (for CoreData support)
-// ============================================================================
 class ArchiveFile : public std::enable_shared_from_this<ArchiveFile>
 {
     std::filesystem::path mPath;
@@ -253,16 +213,12 @@ public:
     const std::vector<AARCEntry>& getAarcTable() const { return mAarcTable; }
 };
 
-// ============================================================================
-// Archive - Main archive class (matches C# Archive class)
-// ============================================================================
 class Archive : public std::enable_shared_from_this<Archive>
 {
     std::filesystem::path mIndexPath;
     std::ifstream mIndexFile;
     std::ifstream mPackFile;
 
-    // Index file data
     uint32 mDirectoryCount = 0;
     uint64 mDirectoryTableStart = 0;
     AIDX mIndexHeader;
@@ -270,62 +226,55 @@ class Archive : public std::enable_shared_from_this<Archive>
     DirectoryEntryPtr mFileRoot;
     uint32 mFileCount = 0;
 
-    // Archive file data
     std::vector<PackDirectoryHeader> mPkDirectoryHeaders;
     std::vector<AARCEntry> mAarcTable;
     uint32 mPkDirCount = 0;
     uint64 mPkDirStart = 0;
 
-    // Optional CoreData archive
     ArchiveFilePtr mCoreData;
-
-    // Index file object (C# API)
     IndexFilePtr mIndexFileObj;
 
+    std::unordered_map<std::string, FileEntryPtr> mFileCache;
+    bool mCacheBuilt = false;
+
     void loadIndexTree();
+    void buildFileCache();
+    void buildFileCacheRecursive(const IArchiveEntryPtr& entry, const std::string& currentPath);
 
 public:
     Archive(const std::filesystem::path& indexPath, ArchiveFilePtr coreData = nullptr);
 
-    // C# API: static Archive FromFile(string path, ArchiveFile coreData = null)
     static ArchivePtr fromFile(const std::filesystem::path& indexPath, ArchiveFilePtr coreData = nullptr);
 
-    // Legacy loading methods (for backward compatibility - prefer fromFile() for new code)
     void loadIndexInfo();
     void loadArchiveInfo();
-    void asyncLoad();  // Parses children after loading
+    void asyncLoad();
 
-    // C# API: IndexFile property
     IndexFilePtr getIndexFile() const { return mIndexFileObj; }
 
-    // C# API: OpenFileStream(IArchiveFileEntry entry) - returns extracted data
-    // In C++ we fill a vector instead of returning a stream
     bool openFileStream(IArchiveFileEntryPtr entry, std::vector<uint8>& content);
     bool openFileStream(FileEntryPtr entry, std::vector<uint8>& content);
 
-    // Legacy API aliases for backward compatibility
     bool getFileData(IArchiveFileEntryPtr entry, std::vector<uint8>& content) { return openFileStream(entry, content); }
     bool getFileData(FileEntryPtr entry, std::vector<uint8>& content) { return openFileStream(entry, content); }
 
-    // C# API: GetFileInfoByPath(string path) - returns IArchiveFileEntry
     IArchiveFileEntryPtr getFileInfoByPath(const std::string& path);
     IArchiveFileEntryPtr getFileInfoByPath(const std::wstring& path);
 
-    // Legacy API: getByPath - returns any entry (file or directory)
     IArchiveEntryPtr getByPath(const std::wstring& path);
     IArchiveEntryPtr getByPath(const std::string& path);
 
-    // Legacy API for compatibility
+    FileEntryPtr findFileCached(const std::string& path);
+    FileEntryPtr findFileByNameCached(const std::string& filename);
+
     DirectoryEntryPtr getRoot() const { return mFileRoot; }
     std::filesystem::path getPath() const { return mIndexPath; }
     uint32 getFileCount() const { return mFileCount; }
 
-    // Internal access
     const std::vector<PackDirectoryHeader>& getBlockTable() const { return mDirectoryHeaders; }
     const std::vector<AARCEntry>& getAarcTable() const { return mAarcTable; }
     const std::vector<PackDirectoryHeader>& getPkDirectoryHeaders() const { return mPkDirectoryHeaders; }
 
-    // Index file I/O helpers
     template<typename T>
     T idxRead() {
         T ret;
@@ -359,7 +308,6 @@ public:
         return static_cast<uint64>(mIndexFile.tellg());
     }
 
-    // Pack file I/O helpers
     template<typename T>
     T pkRead() {
         T ret;
@@ -385,22 +333,12 @@ public:
         return static_cast<uint64>(mPackFile.tellg());
     }
 
-    // Magic constants
-    static const uint32 FileMagic = 0x5041434B;         // 'PACK'
-    static const uint32 IndexMagic = 0x41494458;        // 'AIDX'
-    static const uint32 FileMagicArchive = 0x5041434B;  // 'PACK'
-    static const uint32 AarcMagic = 0x41415243;         // 'AARC'
+    static const uint32 FileMagic = 0x5041434B;
+    static const uint32 IndexMagic = 0x41494458;
+    static const uint32 FileMagicArchive = 0x5041434B;
+    static const uint32 AarcMagic = 0x41415243;
 };
 
-// ============================================================================
-// Utility functions
-// ============================================================================
-
-// Convert pattern with wildcards to regex
 std::string patternToRegex(const std::string& pattern);
-
-// Normalize path separators to forward slashes
 std::string normalizePath(const std::string& path);
-
-// Check if path matches pattern
 bool pathMatchesPattern(const std::string& path, const std::string& pattern);

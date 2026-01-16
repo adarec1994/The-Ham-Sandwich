@@ -11,28 +11,27 @@
 #define wcscasecmp wcscasecmp
 #endif
 
-// Helper to convert narrow string to wide string
 static std::wstring toWideString(const char* src) {
     if (!src) return L"";
     std::string s(src);
     return std::wstring(s.begin(), s.end());
 }
 
-// Helper to convert wide string to narrow string
 static std::string toNarrowString(const std::wstring& src) {
     return std::string(src.begin(), src.end());
 }
 
-// Normalize path - convert backslashes to forward slashes
 static std::wstring normalizePathW(const std::wstring& path) {
     std::wstring result = path;
     std::replace(result.begin(), result.end(), L'\\', L'/');
     return result;
 }
 
-// ============================================================================
-// Utility functions
-// ============================================================================
+static std::string toLowerStr(const std::string& s) {
+    std::string result = s;
+    std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
+}
 
 std::string patternToRegex(const std::string& pattern)
 {
@@ -41,12 +40,8 @@ std::string patternToRegex(const std::string& pattern)
 
     for (char c : pattern) {
         switch (c) {
-            case '*':
-                regex += ".*";
-                break;
-            case '?':
-                regex += ".";
-                break;
+            case '*': regex += ".*"; break;
+            case '?': regex += "."; break;
             case '.':
             case '(':
             case ')':
@@ -61,12 +56,8 @@ std::string patternToRegex(const std::string& pattern)
                 regex += '\\';
                 regex += c;
                 break;
-            case '\\':
-                regex += '/';  // Normalize backslash to forward slash
-                break;
-            default:
-                regex += c;
-                break;
+            case '\\': regex += '/'; break;
+            default: regex += c; break;
         }
     }
 
@@ -94,10 +85,6 @@ bool pathMatchesPattern(const std::string& path, const std::string& pattern)
     }
 }
 
-// ============================================================================
-// FileEntry Implementation
-// ============================================================================
-
 FileEntry::FileEntry(IArchiveEntryPtr parent, const std::wstring& name, const std::vector<uint8>& data)
 {
     mParent = parent;
@@ -111,10 +98,6 @@ FileEntry::FileEntry(IArchiveEntryPtr parent, const std::wstring& name, const st
         memcpy(mHash, data.data() + 28, 20);
     }
 }
-
-// ============================================================================
-// DirectoryEntry Implementation
-// ============================================================================
 
 DirectoryEntry::DirectoryEntry(IArchiveEntryPtr parent, const std::wstring& name, uint32 nextBlock, ArchivePtr archive)
     : mArchive(archive), mNextBlock(nextBlock)
@@ -233,7 +216,6 @@ IArchiveEntryPtr DirectoryEntry::findEntry(const std::wstring& path)
 
     size_t slashPos = normalizedPath.find(L'/');
     if (slashPos == std::wstring::npos) {
-        // Looking for entry in this directory
         for (auto& child : mChildren) {
             if (wcscasecmp(child->getEntryName().c_str(), normalizedPath.c_str()) == 0) {
                 return child;
@@ -242,7 +224,6 @@ IArchiveEntryPtr DirectoryEntry::findEntry(const std::wstring& path)
         return nullptr;
     }
 
-    // Looking for entry in subdirectory
     std::wstring dir = normalizedPath.substr(0, slashPos);
     std::wstring remain = normalizedPath.substr(slashPos + 1);
 
@@ -274,32 +255,24 @@ IArchiveFileEntryPtr DirectoryEntry::findFileEntry(const std::string& path)
     return findFileEntry(toWideString(path.c_str()));
 }
 
+std::vector<IArchiveFileEntryPtr> DirectoryEntry::getFiles(const std::string& pattern)
+{
+    std::vector<IArchiveFileEntryPtr> allFiles;
+    getFiles(allFiles);
+
+    std::vector<IArchiveFileEntryPtr> matches;
+    for (auto& file : allFiles) {
+        if (pathMatchesPattern(file->getFullPathNarrow(), pattern)) {
+            matches.push_back(file);
+        }
+    }
+    return matches;
+}
+
 std::vector<IArchiveFileEntryPtr> DirectoryEntry::getFiles(const std::wstring& pattern)
 {
     return getFiles(toNarrowString(pattern));
 }
-
-std::vector<IArchiveFileEntryPtr> DirectoryEntry::getFiles(const std::string& pattern)
-{
-    std::vector<IArchiveFileEntryPtr> result;
-    std::vector<IArchiveFileEntryPtr> allFiles;
-    getFiles(allFiles);
-
-    std::string normalizedPattern = normalizePath(pattern);
-
-    for (auto& file : allFiles) {
-        std::string fullPath = file->getFullPathNarrow();
-        if (pathMatchesPattern(fullPath, normalizedPattern)) {
-            result.push_back(file);
-        }
-    }
-
-    return result;
-}
-
-// ============================================================================
-// IndexFile Implementation
-// ============================================================================
 
 IndexFile::IndexFile(ArchivePtr archive, DirectoryEntryPtr root)
     : mArchive(archive), mRoot(root)
@@ -330,10 +303,6 @@ std::vector<IArchiveFileEntryPtr> IndexFile::getFiles(const std::wstring& patter
     return mRoot->getFiles(pattern);
 }
 
-// ============================================================================
-// ArchiveFile Implementation (for CoreData support)
-// ============================================================================
-
 ArchiveFile::ArchiveFile(const std::filesystem::path& archivePath)
     : mPath(archivePath)
 {
@@ -345,15 +314,14 @@ ArchiveFile::ArchiveFile(const std::filesystem::path& archivePath)
 
 ArchiveFilePtr ArchiveFile::fromFile(const std::filesystem::path& path)
 {
-    auto archive = std::make_shared<ArchiveFile>(path);
-    archive->load();
-    return archive;
+    auto archiveFile = std::make_shared<ArchiveFile>(path);
+    archiveFile->load();
+    return archiveFile;
 }
 
 void ArchiveFile::load()
 {
     mFile.seekg(0, std::ios::beg);
-
     uint32 sig;
     mFile.read(reinterpret_cast<char*>(&sig), sizeof(sig));
     if (sig != Archive::FileMagicArchive) {
@@ -376,37 +344,33 @@ void ArchiveFile::load()
     mFile.seekg(mDirStart, std::ios::beg);
     mFile.read(reinterpret_cast<char*>(mDirectoryHeaders.data()), mDirCount * sizeof(PackDirectoryHeader));
 
-    // Find AARC table
     bool hasAarc = false;
     uint32 aarcBlock = 0;
     uint32 aarcEntries = 0;
 
     for (auto& header : mDirectoryHeaders) {
         mFile.seekg(header.directoryOffset, std::ios::beg);
-        if (header.blockSize < 16)
-            continue;
+        if (header.blockSize < 16) continue;
 
-        uint32 signature, ver, entryCount, tableBlock;
-        mFile.read(reinterpret_cast<char*>(&signature), sizeof(signature));
-        mFile.read(reinterpret_cast<char*>(&ver), sizeof(ver));
-        mFile.read(reinterpret_cast<char*>(&entryCount), sizeof(entryCount));
-        mFile.read(reinterpret_cast<char*>(&tableBlock), sizeof(tableBlock));
+        uint32 signature, ver, craaEntryCount, craaTableBlock;
+        mFile.read(reinterpret_cast<char*>(&signature), 4);
+        mFile.read(reinterpret_cast<char*>(&ver), 4);
+        mFile.read(reinterpret_cast<char*>(&craaEntryCount), 4);
+        mFile.read(reinterpret_cast<char*>(&craaTableBlock), 4);
 
         if (signature == Archive::AarcMagic) {
             hasAarc = true;
-            aarcBlock = tableBlock;
-            aarcEntries = entryCount;
+            aarcBlock = craaTableBlock;
+            aarcEntries = craaEntryCount;
             break;
         }
     }
 
-    if (!hasAarc) {
-        throw std::runtime_error("Missing AARC table in archive file");
+    if (hasAarc && aarcBlock < mDirectoryHeaders.size()) {
+        mFile.seekg(mDirectoryHeaders[aarcBlock].directoryOffset, std::ios::beg);
+        mAarcTable.resize(aarcEntries);
+        mFile.read(reinterpret_cast<char*>(mAarcTable.data()), aarcEntries * sizeof(AARCEntry));
     }
-
-    mFile.seekg(mDirectoryHeaders[aarcBlock].directoryOffset, std::ios::beg);
-    mAarcTable.resize(aarcEntries);
-    mFile.read(reinterpret_cast<char*>(mAarcTable.data()), aarcEntries * sizeof(AARCEntry));
 }
 
 bool ArchiveFile::hasEntry(const uint8* hash) const
@@ -422,23 +386,19 @@ bool ArchiveFile::hasEntry(const uint8* hash) const
 bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32 flags, std::vector<uint8>& content)
 {
     for (auto& entry : mAarcTable) {
-        if (memcmp(entry.shaHash, hash, 20) != 0)
-            continue;
+        if (memcmp(entry.shaHash, hash, 20) != 0) continue;
 
         auto& block = mDirectoryHeaders[entry.blockIndex];
-
         mFile.seekg(block.directoryOffset, std::ios::beg);
 
         std::vector<uint8> compressed((size_t)block.blockSize);
-        mFile.read(reinterpret_cast<char*>(compressed.data()), (std::streamsize)block.blockSize);
+        mFile.read(reinterpret_cast<char*>(compressed.data()), block.blockSize);
 
-        // Check for raw LZMA (starts with 0x5D)
         if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
             content = std::move(compressed);
             return true;
         }
 
-        // ZLIB decompression
         if (flags == 3) {
             uint32 outSize = (uint32)uncompressedSize;
             content.resize(outSize);
@@ -449,20 +409,15 @@ bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32
             zs.next_out = content.data();
             zs.avail_out = (uInt)content.size();
 
-            if (inflateInit(&zs) != Z_OK)
-                throw std::runtime_error("zlib init failed");
-
+            if (inflateInit(&zs) != Z_OK) return false;
             int ret = inflate(&zs, Z_FINISH);
             inflateEnd(&zs);
 
-            if (ret != Z_STREAM_END)
-                throw std::runtime_error("zlib inflate failed");
-
+            if (ret != Z_STREAM_END) return false;
             content.resize(zs.total_out);
             return true;
         }
 
-        // LZMA decompression
         if (compressed.size() > 5 && compressed[0] == 0x5D) {
             uint32 outSize = (uint32)uncompressedSize;
             content.resize(outSize);
@@ -472,13 +427,11 @@ bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32
             filters[1].id = LZMA_VLI_UNKNOWN;
 
             lzma_ret ret = lzma_properties_decode(&filters[0], nullptr, compressed.data(), 5);
-            if (ret != LZMA_OK)
-                throw std::runtime_error("LZMA properties decode failed");
+            if (ret != LZMA_OK) return false;
 
             lzma_stream strm = LZMA_STREAM_INIT;
             ret = lzma_raw_decoder(&strm, filters);
-            if (ret != LZMA_OK)
-                throw std::runtime_error("LZMA raw decoder init failed");
+            if (ret != LZMA_OK) return false;
 
             strm.next_in = compressed.data() + 5;
             strm.avail_in = compressed.size() - 5;
@@ -487,14 +440,12 @@ bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32
 
             while (true) {
                 ret = lzma_code(&strm, LZMA_RUN);
-                if (ret == LZMA_STREAM_END)
-                    break;
+                if (ret == LZMA_STREAM_END) break;
                 if (ret != LZMA_OK) {
                     lzma_end(&strm);
-                    throw std::runtime_error("LZMA decode failed");
+                    return false;
                 }
-                if (strm.avail_out == 0)
-                    break;
+                if (strm.avail_out == 0) break;
             }
 
             lzma_end(&strm);
@@ -505,10 +456,6 @@ bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32
     return false;
 }
 
-// ============================================================================
-// Archive Implementation
-// ============================================================================
-
 Archive::Archive(const std::filesystem::path& indexPath, ArchiveFilePtr coreData)
     : mIndexPath(indexPath), mCoreData(coreData)
 {
@@ -517,9 +464,8 @@ Archive::Archive(const std::filesystem::path& indexPath, ArchiveFilePtr coreData
         throw std::invalid_argument("Unable to open index file: " + indexPath.string());
     }
 
-    std::filesystem::path archivePath = indexPath;
+    auto archivePath = indexPath;
     archivePath.replace_extension(".archive");
-
     mPackFile.open(archivePath, std::ios::binary);
     if (!mPackFile.is_open()) {
         throw std::invalid_argument("Unable to open archive file: " + archivePath.string());
@@ -532,6 +478,7 @@ ArchivePtr Archive::fromFile(const std::filesystem::path& indexPath, ArchiveFile
     archive->loadIndexInfo();
     archive->loadArchiveInfo();
     archive->mFileRoot->parseChildren();
+    archive->buildFileCache();
     archive->mIndexFileObj = std::make_shared<IndexFile>(archive, archive->mFileRoot);
     return archive;
 }
@@ -541,9 +488,75 @@ void Archive::asyncLoad()
     if (mFileRoot) {
         mFileRoot->parseChildren();
     }
+    if (!mCacheBuilt) {
+        buildFileCache();
+    }
     if (!mIndexFileObj) {
         mIndexFileObj = std::make_shared<IndexFile>(shared_from_this(), mFileRoot);
     }
+}
+
+void Archive::buildFileCache()
+{
+    if (mCacheBuilt) return;
+    mCacheBuilt = true;
+
+    if (mFileRoot) {
+        buildFileCacheRecursive(mFileRoot, "");
+    }
+}
+
+void Archive::buildFileCacheRecursive(const IArchiveEntryPtr& entry, const std::string& currentPath)
+{
+    if (!entry) return;
+
+    std::string entryPath = currentPath;
+    if (!entry->getFileName().empty()) {
+        if (!entryPath.empty()) entryPath += "/";
+        entryPath += entry->getFileName();
+    }
+
+    if (!entry->isDirectory()) {
+        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
+        if (fileEntry) {
+            std::string lowerPath = toLowerStr(entryPath);
+            mFileCache[lowerPath] = fileEntry;
+        }
+    }
+
+    for (const auto& child : entry->getChildren()) {
+        buildFileCacheRecursive(child, entryPath);
+    }
+}
+
+FileEntryPtr Archive::findFileCached(const std::string& path)
+{
+    if (!mCacheBuilt) buildFileCache();
+
+    std::string normalized = normalizePath(path);
+    std::string lower = toLowerStr(normalized);
+
+    auto it = mFileCache.find(lower);
+    if (it != mFileCache.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+FileEntryPtr Archive::findFileByNameCached(const std::string& filename)
+{
+    if (!mCacheBuilt) buildFileCache();
+
+    std::string lowerFilename = toLowerStr(filename);
+
+    for (const auto& [path, entry] : mFileCache) {
+        size_t lastSlash = path.rfind('/');
+        std::string name = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+        if (name == lowerFilename) {
+            return entry;
+        }
+    }
+    return nullptr;
 }
 
 void Archive::loadIndexInfo()
@@ -602,8 +615,7 @@ void Archive::loadArchiveInfo()
 
     for (auto& header : mPkDirectoryHeaders) {
         pkSeek(header.directoryOffset);
-        if (header.blockSize < 16)
-            continue;
+        if (header.blockSize < 16) continue;
 
         uint32 signature = pkRead<uint32>();
         uint32 ver = pkRead<uint32>();
@@ -632,9 +644,7 @@ void Archive::loadIndexTree()
     bool aidxFound = false;
 
     for (auto& entry : mDirectoryHeaders) {
-        if (entry.blockSize < sizeof(AIDX)) {
-            continue;
-        }
+        if (entry.blockSize < sizeof(AIDX)) continue;
 
         idxSeek(entry.directoryOffset);
         AIDX idx = idxRead<AIDX>();
@@ -656,14 +666,15 @@ void Archive::loadIndexTree()
 
 IArchiveFileEntryPtr Archive::getFileInfoByPath(const std::string& path)
 {
+    auto cached = findFileCached(path);
+    if (cached) return cached;
     if (!mFileRoot) return nullptr;
     return mFileRoot->findFileEntry(path);
 }
 
 IArchiveFileEntryPtr Archive::getFileInfoByPath(const std::wstring& path)
 {
-    if (!mFileRoot) return nullptr;
-    return mFileRoot->findFileEntry(path);
+    return getFileInfoByPath(toNarrowString(path));
 }
 
 IArchiveEntryPtr Archive::getByPath(const std::wstring& path)
@@ -691,15 +702,12 @@ bool Archive::openFileStream(FileEntryPtr file, std::vector<uint8>& content)
     uint64 uncompressedSize = file->getUncompressedSize();
     uint32 flags = file->getFlags();
 
-    // First check CoreData if available
     if (mCoreData && mCoreData->hasEntry(hash)) {
         return mCoreData->getFileData(hash, uncompressedSize, flags, content);
     }
 
-    // Look in main archive
     for (auto& entry : mAarcTable) {
-        if (memcmp(entry.shaHash, hash, 20) != 0)
-            continue;
+        if (memcmp(entry.shaHash, hash, 20) != 0) continue;
 
         auto& block = mPkDirectoryHeaders[entry.blockIndex];
 
@@ -708,13 +716,11 @@ bool Archive::openFileStream(FileEntryPtr file, std::vector<uint8>& content)
         std::vector<uint8> compressed((size_t)block.blockSize);
         pkRead(compressed.data(), (uint32)block.blockSize);
 
-        // Check for raw data (not ZLIB, not LZMA)
         if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
             content = std::move(compressed);
             return true;
         }
 
-        // ZLIB decompression (flags == 3)
         if (flags == 3) {
             uint32 outSize = (uint32)uncompressedSize;
             content.resize(outSize);
@@ -738,7 +744,6 @@ bool Archive::openFileStream(FileEntryPtr file, std::vector<uint8>& content)
             return true;
         }
 
-        // LZMA decompression (0x5D header)
         if (compressed.size() > 5 && compressed[0] == 0x5D) {
             uint32 outSize = (uint32)uncompressedSize;
             content.resize(outSize);
@@ -763,14 +768,12 @@ bool Archive::openFileStream(FileEntryPtr file, std::vector<uint8>& content)
 
             while (true) {
                 ret = lzma_code(&strm, LZMA_RUN);
-                if (ret == LZMA_STREAM_END)
-                    break;
+                if (ret == LZMA_STREAM_END) break;
                 if (ret != LZMA_OK) {
                     lzma_end(&strm);
                     throw std::runtime_error("LZMA decode failed");
                 }
-                if (strm.avail_out == 0)
-                    break;
+                if (strm.avail_out == 0) break;
             }
 
             lzma_end(&strm);

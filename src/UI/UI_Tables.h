@@ -1,4 +1,3 @@
-// src/UI/UI_Tables.h
 #pragma once
 #include "UI.h"
 #include "../Database/Tbl.h"

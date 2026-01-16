@@ -1,4 +1,3 @@
-// src/UI/UI_Globals.h
 #pragma once
 #include <memory>
 #include <string>

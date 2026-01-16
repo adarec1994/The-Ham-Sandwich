@@ -1,4 +1,3 @@
-// src/UI/UI_Selection.cpp
 #include "UI_Selection.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"

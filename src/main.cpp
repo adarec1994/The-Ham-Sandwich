@@ -7,7 +7,6 @@
 #define GL_SILENCE_DEPRECATION
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
-#include <iostream>
 #include "stb_image.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -30,20 +29,25 @@ int main()
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-
     glfwSetScrollCallback(window, scroll_callback);
 
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
-        std::cout << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
 
-    // Load Character Icon
     {
         int w, h, nrChannels;
-        unsigned char* data = stbi_load("../Assets/Icons/Character.png", &w, &h, &nrChannels, 0);
+        stbi_set_flip_vertically_on_load(false);
+        unsigned char* data = stbi_load("../Assets/Icons/Character.png", &w, &h, &nrChannels, 4);
         if (data)
         {
+            for (int i = 0; i < w * h * 4; i += 4)
+            {
+                data[i + 0] = 255 - data[i + 0];
+                data[i + 1] = 255 - data[i + 1];
+                data[i + 2] = 255 - data[i + 2];
+            }
+
             glGenTextures(1, &gCharacterIconTexture);
             glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
 
@@ -52,17 +56,11 @@ int main()
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-            GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
-            glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, format, GL_UNSIGNED_BYTE, data);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
             glGenerateMipmap(GL_TEXTURE_2D);
 
             gCharacterIconLoaded = true;
             stbi_image_free(data);
-            std::cout << "Loaded Character.png" << std::endl;
-        }
-        else
-        {
-            std::cout << "Failed to load icons/Character.png" << std::endl;
         }
     }
 

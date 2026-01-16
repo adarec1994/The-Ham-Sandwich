@@ -1,4 +1,3 @@
-// src/UI/UI.cpp
 #include "UI.h"
 #include "UI_Globals.h"
 #include "UI_FileTree.h"
@@ -29,7 +28,6 @@ static void RenderLoadingOverlay()
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    // Semi-transparent overlay
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(viewport->Size);
     ImGui::SetNextWindowBgAlpha(0.7f);
@@ -42,11 +40,9 @@ static void RenderLoadingOverlay()
     ImGui::Begin("##LoadingOverlay", nullptr, overlayFlags);
     ImGui::End();
 
-    // Calculate dynamic window size based on content
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
 
-    // Measure text width
     char loadingText[512];
     snprintf(loadingText, sizeof(loadingText), "Loading %s...", gLoadingAreasName.c_str());
     float textWidth = ImGui::CalcTextSize(loadingText).x;
@@ -73,7 +69,6 @@ static void RenderLoadingOverlay()
 
     if (ImGui::Begin("##LoadingWindow", nullptr, loadingFlags))
     {
-        // Wrap text if too long
         ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
         ImGui::TextUnformatted(loadingText);
         ImGui::PopTextWrapPos();
@@ -96,7 +91,6 @@ static void RenderLoadingOverlay()
 
 void RenderUI(AppState& state)
 {
-    // Process any pending area loads
     ProcessAreaLoading(state);
 
     if (!state.archivesLoaded)
@@ -379,6 +373,5 @@ void RenderUI(AppState& state)
 
     UI_Tables::Draw(state);
 
-    // Render loading overlay last (on top of everything)
     RenderLoadingOverlay();
 }

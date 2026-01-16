@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Wildstar_Studio_2 VERSION 1.0.0 LANGUAGES CXX C)
+project(The_Ham_Sandwich VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -204,7 +204,7 @@ target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
 add_definitions(-DLZMA_API_STATIC)
 
-add_executable(Wildstar_Studio_2
+add_executable(The_Ham_Sandwich
         src/main.cpp
         src/Archive.cpp
         src/Archive.h
@@ -259,7 +259,7 @@ add_executable(Wildstar_Studio_2
         src/UI/UI_Tables.h
 )
 
-target_include_directories(Wildstar_Studio_2 PRIVATE
+target_include_directories(The_Ham_Sandwich PRIVATE
         src/UI
         src/Settings
         src/About
@@ -271,16 +271,16 @@ target_include_directories(Wildstar_Studio_2 PRIVATE
         ${ImGuiFileDialog_SOURCE_DIR}
 )
 
-target_link_libraries(Wildstar_Studio_2 PRIVATE imgui glad glm zlibstatic liblzma stb_lib)
+target_link_libraries(The_Ham_Sandwich PRIVATE imgui glad glm zlibstatic liblzma stb_lib)
 
 if(WIN32)
-    target_link_libraries(Wildstar_Studio_2 PRIVATE opengl32)
+    target_link_libraries(The_Ham_Sandwich PRIVATE opengl32)
 else()
     find_package(OpenGL REQUIRED)
-    target_link_libraries(Wildstar_Studio_2 PRIVATE OpenGL::GL)
+    target_link_libraries(The_Ham_Sandwich PRIVATE OpenGL::GL)
 endif()
 
-add_custom_command(TARGET Wildstar_Studio_2 POST_BUILD
+add_custom_command(TARGET The_Ham_Sandwich POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/Assets
         ${CMAKE_CURRENT_BINARY_DIR}/Assets
