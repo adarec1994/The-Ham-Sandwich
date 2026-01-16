@@ -276,13 +276,11 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
 
     if (!mBlendMap.empty())
     {
-        mBlendMapTexture = texMgr.CreateBlendMapTexture(
-            mBlendMap.data(), 65, 65);
+        mBlendMapTexture = texMgr.CreateBlendMapTexture(mBlendMap.data(), 65, 65);
     }
     else if (!mBlendMapDXT.empty())
     {
-        mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(
-            mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
+        mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
     }
     else
     {
@@ -292,13 +290,11 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
 
     if (!mColorMap.empty())
     {
-        mColorMapTextureGPU = texMgr.CreateColorMapTexture(
-            mColorMap.data(), 65, 65);
+        mColorMapTextureGPU = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
     }
     else if (!mColorMapDXT.empty())
     {
-        mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(
-            mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
+        mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
     }
 
     for (int i = 0; i < 4; ++i)
@@ -376,7 +372,7 @@ void AreaChunkRender::bindTextures(unsigned int program) const
     glActiveTexture(GL_TEXTURE0);
 }
 
-AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr archive)
+AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr)
     : mChunkData(cellData)
     , mFlags(0)
     , mMinBounds(std::numeric_limits<float>::max())
