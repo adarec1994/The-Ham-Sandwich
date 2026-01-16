@@ -24,7 +24,7 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Wildstar Studio 2", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "The Ham Sandwich", nullptr, nullptr);
     if (window == nullptr) return 1;
 
     glfwMakeContextCurrent(window);
@@ -41,7 +41,7 @@ int main()
     // Load Character Icon
     {
         int w, h, nrChannels;
-        unsigned char* data = stbi_load("icons/Character.png", &w, &h, &nrChannels, 0);
+        unsigned char* data = stbi_load("../Assets/Icons/Character.png", &w, &h, &nrChannels, 0);
         if (data)
         {
             glGenTextures(1, &gCharacterIconTexture);

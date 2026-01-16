@@ -1,6 +1,0 @@
-[submodule "Libs/GLWpfControl"]
-	path = Libs/GLWpfControl
-	url = https://github.com/CucFlavius/GLWpfControl
-[submodule "Libs/AvalonDock"]
-	path = Libs/AvalonDock
-	url = https://github.com/CucFlavius/AvalonDock

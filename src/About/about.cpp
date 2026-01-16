@@ -11,20 +11,22 @@ Built with: OpenGL, GLFW, Glad, ImGui
 About:
 ----------------------
 This software was built in order to provide a more up-to-date, clean way of browsing the contents of the WildStar archive files.
-Little reverse engineering work has been done by me, and those who have done this work are listed in the Acknowledgements section.
+No reverse engineering work has been done by me, and those who have done this work are listed in the Acknowledgements section.
 I have simply taken their work, converted/ modernized it in C++, and presented it as an all in one solution.
 
-Most, if not all, aspects of this program are subject to change as more is discovered about the formats and displaying them.
+Most, if not all, aspects of this program are subject to change as it continues to be iterated on and developed.
 Everything should be considered WIP.
 
 Acknowledgements:
 ----------------------
-LaMuerteDeLaPassion - Working on M3 formats and figuring out ohw to export them with animations.
+LaMuerteDeLaPassion - M3 format and general support,
 URL: https://github.com/LaMuerteDeLaPassion/wildstar-export-2
-Muazin Mugadr - For the original Wildstar Studio.
+Muazin Mugadr - Original Wildstar Studio.
 URL: https://bitbucket.org/mugadr_m/wildstar-studio/src/master/
-Marble Bag - For the Nexus Vault application
+Marble Bag - Nexus Vault application
 URL: https://github.com/MarbleBag/NexusVault-CLI
+Zee - Reverse engineered many of the formats.
+URL: https://github.com/CucFlavius/ws-tool
 Wildstar Community - Endearing to preserve this game.
 
 Licensing Information:
