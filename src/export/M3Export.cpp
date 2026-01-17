@@ -87,7 +87,7 @@ namespace M3Export
         WritePngU32BE(out, adler);
         return out;
     }
-    static std::vector<uint8_t> EncodePNG(const uint8_t* rgba, int width, int height)
+    static std::vector<uint8_t> EncodePNG_RGB(const uint8_t* rgba, int width, int height)
     {
         std::vector<uint8_t> png;
         const uint8_t sig[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
@@ -96,17 +96,22 @@ namespace M3Export
         WritePngU32BE(ihdr, width);
         WritePngU32BE(ihdr, height);
         ihdr.push_back(8);
-        ihdr.push_back(6);
+        ihdr.push_back(2);
         ihdr.push_back(0);
         ihdr.push_back(0);
         ihdr.push_back(0);
         WritePngChunk(png, "IHDR", ihdr);
         std::vector<uint8_t> rawData;
-        int stride = width * 4;
         for (int y = 0; y < height; y++)
         {
             rawData.push_back(0);
-            rawData.insert(rawData.end(), rgba + y * stride, rgba + y * stride + stride);
+            for (int x = 0; x < width; x++)
+            {
+                int srcIdx = (y * width + x) * 4;
+                rawData.push_back(rgba[srcIdx + 0]);
+                rawData.push_back(rgba[srcIdx + 1]);
+                rawData.push_back(rgba[srcIdx + 2]);
+            }
         }
         auto compressed = CompressDeflateStore(rawData.data(), rawData.size());
         WritePngChunk(png, "IDAT", compressed);
@@ -188,49 +193,47 @@ namespace M3Export
     }
     struct BufView { size_t off, len; int target; };
     struct Acc { int view, comp, count; std::string type; glm::vec3 minV, maxV; bool hasMinMax; };
+    static std::string Base64Encode(const uint8_t* data, size_t len)
+    {
+        static const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string result;
+        result.reserve((len + 2) / 3 * 4);
+        for (size_t i = 0; i < len; i += 3) {
+            uint32_t n = (uint32_t)data[i] << 16;
+            if (i + 1 < len) n |= (uint32_t)data[i + 1] << 8;
+            if (i + 2 < len) n |= (uint32_t)data[i + 2];
+            result += chars[(n >> 18) & 0x3F];
+            result += chars[(n >> 12) & 0x3F];
+            result += (i + 1 < len) ? chars[(n >> 6) & 0x3F] : '=';
+            result += (i + 2 < len) ? chars[n & 0x3F] : '=';
+        }
+        return result;
+    }
     static std::vector<uint8_t> LoadTextureAsPNG(const ArchivePtr& arc, const std::string& path)
     {
-        if (!arc || path.empty())
-        {
-            return {};
-        }
+        if (!arc || path.empty()) return {};
         std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
         std::wstring wp = conv.from_bytes(path);
-        if (wp.find(L".tex") == std::wstring::npos)
-            wp += L".tex";
+        if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
         auto entry = arc->getByPath(wp);
-        if (!entry)
-        {
+        if (!entry) {
             std::wstring wp2 = wp;
             std::replace(wp2.begin(), wp2.end(), L'/', L'\\');
             entry = arc->getByPath(wp2);
-            if (!entry)
-            {
+            if (!entry) {
                 std::replace(wp2.begin(), wp2.end(), L'\\', L'/');
                 entry = arc->getByPath(wp2);
             }
         }
-        if (!entry)
-        {
-            return {};
-        }
+        if (!entry) return {};
         std::vector<uint8_t> buffer;
         arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
-        if (buffer.empty())
-        {
-            return {};
-        }
+        if (buffer.empty()) return {};
         Tex::File tf;
-        if (!tf.readFromMemory(buffer.data(), buffer.size()))
-        {
-            return {};
-        }
+        if (!tf.readFromMemory(buffer.data(), buffer.size())) return {};
         Tex::ImageRGBA img;
-        if (!tf.decodeLargestMipToRGBA(img))
-        {
-            return {};
-        }
-        return EncodePNG(img.rgba.data(), img.width, img.height);
+        if (!tf.decodeLargestMipToRGBA(img)) return {};
+        return EncodePNG_RGB(img.rgba.data(), img.width, img.height);
     }
     static int64_t gFbxIdCounter = 1000000000;
     static int64_t GenFbxId() { return gFbxIdCounter++; }
@@ -248,11 +251,14 @@ namespace M3Export
         std::filesystem::create_directories(outputDir);
         std::string baseName = settings.customName.empty() ? ExtractModelName(render->getModelName()) : SanitizeFilename(settings.customName);
         std::string fbxPath = outputDir + "/" + baseName + ".fbx";
+        const float SCALE = 100.0f;
         if (progress) progress(0, 100, "Collecting geometry...");
         const auto& allVertices = render->getVertices();
         const auto& allIndices = render->getIndices();
         const auto& submeshes = render->getAllSubmeshes();
         const auto& bones = render->getAllBones();
+        const auto& materials = render->getAllMaterials();
+        const auto& textures = render->getAllTextures();
         const auto& animations = render->getAllAnimations();
         struct SubmeshData {
             std::vector<glm::vec3> positions;
@@ -304,12 +310,60 @@ namespace M3Export
         result.animationCount = settings.exportAnimations ? static_cast<int>(animations.size()) : 0;
         bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
         bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
+        if (progress) progress(10, 100, "Loading textures...");
+        struct FbxTexture { std::string name; std::vector<uint8_t> data; int64_t texId; int64_t vidId; };
+        std::vector<FbxTexture> fbxTextures;
+        std::unordered_map<uint16_t, int> matIdToDiffuseIdx;
+        std::unordered_map<uint16_t, int> matIdToNormalIdx;
+        std::unordered_map<std::string, int> pathToTexIdx;
+        auto LoadOrGetTexture = [&](const std::string& texPath) -> int {
+            if (texPath.empty()) return -1;
+            auto it = pathToTexIdx.find(texPath);
+            if (it != pathToTexIdx.end()) return it->second;
+            auto png = LoadTextureAsPNG(archive, texPath);
+            if (png.empty()) return -1;
+            std::string texName = texPath;
+            size_t slash = texName.rfind('/');
+            if (slash == std::string::npos) slash = texName.rfind('\\');
+            if (slash != std::string::npos) texName = texName.substr(slash + 1);
+            size_t dot = texName.rfind('.');
+            if (dot != std::string::npos) texName = texName.substr(0, dot);
+            texName = SanitizeFilename(texName);
+            if (texName.empty()) texName = "texture_" + std::to_string(fbxTextures.size());
+            int idx = static_cast<int>(fbxTextures.size());
+            fbxTextures.push_back({texName, std::move(png), 0, 0});
+            pathToTexIdx[texPath] = idx;
+            return idx;
+        };
+        if (settings.exportTextures && archive) {
+            for (const auto& mesh : meshList) {
+                if (matIdToDiffuseIdx.count(mesh.materialId)) continue;
+                if (mesh.materialId >= materials.size()) continue;
+                const auto& mat = materials[mesh.materialId];
+                if (mat.variants.empty()) continue;
+                int variantIdx = render->getMaterialSelectedVariant(mesh.materialId);
+                if (variantIdx < 0 || variantIdx >= (int)mat.variants.size()) variantIdx = 0;
+                const auto& variant = mat.variants[variantIdx];
+                std::string diffusePath = variant.textureColorPath;
+                if (diffusePath.empty() && variant.textureIndexA >= 0 && variant.textureIndexA < (int)textures.size())
+                    diffusePath = textures[variant.textureIndexA].path;
+                std::string normalPath = variant.textureNormalPath;
+                if (normalPath.empty() && variant.textureIndexB >= 0 && variant.textureIndexB < (int)textures.size())
+                    normalPath = textures[variant.textureIndexB].path;
+                int diffuseIdx = LoadOrGetTexture(diffusePath);
+                int normalIdx = LoadOrGetTexture(normalPath);
+                matIdToDiffuseIdx[mesh.materialId] = diffuseIdx;
+                matIdToNormalIdx[mesh.materialId] = normalIdx;
+            }
+            result.textureCount = static_cast<int>(fbxTextures.size());
+        }
         if (progress) progress(20, 100, "Building FBX...");
         gFbxIdCounter = 1000000000;
         std::vector<int64_t> meshIds, meshGeoIds, materialIds, boneIds, boneAttrIds, clusterIds, skinIds;
         int64_t rootId = GenFbxId();
         for (size_t i = 0; i < meshList.size(); ++i) { meshIds.push_back(GenFbxId()); meshGeoIds.push_back(GenFbxId()); }
         for (size_t i = 0; i < meshList.size(); ++i) materialIds.push_back(GenFbxId());
+        for (auto& tex : fbxTextures) { tex.texId = GenFbxId(); tex.vidId = GenFbxId(); }
         if (hasSkeleton) {
             for (size_t i = 0; i < bones.size(); ++i) { boneIds.push_back(GenFbxId()); boneAttrIds.push_back(GenFbxId()); }
             for (size_t i = 0; i < meshList.size(); ++i) skinIds.push_back(GenFbxId());
@@ -318,8 +372,7 @@ namespace M3Export
         }
         std::ostringstream fbx;
         fbx << std::fixed << std::setprecision(6);
-        fbx << "; FBX 7.5.0 project file\n";
-        fbx << "; Created by WildStar M3 Exporter\n";
+        fbx << "; FBX 7.5.0 project file\n; Created by WildStar M3 Exporter\n";
         fbx << "FBXHeaderExtension:  {\n\tFBXHeaderVersion: 1003\n\tFBXVersion: 7500\n";
         fbx << "\tCreationTimeStamp:  {\n\t\tVersion: 1000\n\t\tYear: 2025\n\t\tMonth: 1\n\t\tDay: 1\n";
         fbx << "\t\tHour: 0\n\t\tMinute: 0\n\t\tSecond: 0\n\t\tMillisecond: 0\n\t}\n";
@@ -342,7 +395,8 @@ namespace M3Export
         fbx << "\t\tRootNode: 0\n\t}\n}\n\n";
         fbx << "References:  {\n}\n\n";
         int defCount = 1 + (int)meshList.size() * 2 + (int)meshList.size();
-        if (hasSkeleton) defCount += (int)bones.size() + (int)bones.size() + (int)meshList.size() + (int)meshList.size() * (int)bones.size();
+        if (hasSkeleton) defCount += (int)bones.size() * 2 + (int)meshList.size() + (int)meshList.size() * (int)bones.size();
+        if (!fbxTextures.empty()) defCount += (int)fbxTextures.size() * 2;
         fbx << "Definitions:  {\n\tVersion: 100\n\tCount: " << defCount << "\n";
         fbx << "\tObjectType: \"GlobalSettings\" {\n\t\tCount: 1\n\t}\n";
         fbx << "\tObjectType: \"Model\" {\n\t\tCount: " << (1 + meshList.size() + (hasSkeleton ? bones.size() : 0)) << "\n";
@@ -353,6 +407,10 @@ namespace M3Export
         fbx << "\t\t\t}\n\t\t}\n\t}\n";
         fbx << "\tObjectType: \"Geometry\" {\n\t\tCount: " << meshList.size() << "\n\t}\n";
         fbx << "\tObjectType: \"Material\" {\n\t\tCount: " << meshList.size() << "\n\t}\n";
+        if (!fbxTextures.empty()) {
+            fbx << "\tObjectType: \"Texture\" {\n\t\tCount: " << fbxTextures.size() << "\n\t}\n";
+            fbx << "\tObjectType: \"Video\" {\n\t\tCount: " << fbxTextures.size() << "\n\t}\n";
+        }
         if (hasSkeleton) {
             fbx << "\tObjectType: \"Deformer\" {\n\t\tCount: " << (meshList.size() + meshList.size() * bones.size()) << "\n\t}\n";
             fbx << "\tObjectType: \"NodeAttribute\" {\n\t\tCount: " << bones.size() << "\n\t}\n";
@@ -376,20 +434,28 @@ namespace M3Export
                 const auto& bone = bones[bi];
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
                 fbx << "\tNodeAttribute: " << boneAttrIds[bi] << ", \"NodeAttribute::" << boneName << "\", \"LimbNode\" {\n";
-                fbx << "\t\tTypeFlags: \"Skeleton\"\n";
-                fbx << "\t}\n";
+                fbx << "\t\tTypeFlags: \"Skeleton\"\n\t}\n";
             }
             for (size_t bi = 0; bi < bones.size(); ++bi) {
                 const auto& bone = bones[bi];
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
-                glm::mat4 localMat;
+                glm::mat4 scaledGlobal = bone.globalMatrix;
+                scaledGlobal[3][0] *= SCALE;
+                scaledGlobal[3][1] *= SCALE;
+                scaledGlobal[3][2] *= SCALE;
+                glm::mat4 parentScaledGlobal = glm::mat4(1.0f);
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
-                    localMat = glm::inverse(bones[bone.parentId].globalMatrix) * bone.globalMatrix;
-                } else {
-                    localMat = bone.globalMatrix;
+                    parentScaledGlobal = bones[bone.parentId].globalMatrix;
+                    parentScaledGlobal[3][0] *= SCALE;
+                    parentScaledGlobal[3][1] *= SCALE;
+                    parentScaledGlobal[3][2] *= SCALE;
                 }
+                glm::mat4 localMat = glm::inverse(parentScaledGlobal) * scaledGlobal;
                 glm::vec3 t = glm::vec3(localMat[3]);
                 glm::vec3 s(glm::length(glm::vec3(localMat[0])), glm::length(glm::vec3(localMat[1])), glm::length(glm::vec3(localMat[2])));
+                if (s.x < 0.0001f) s.x = 1.0f;
+                if (s.y < 0.0001f) s.y = 1.0f;
+                if (s.z < 0.0001f) s.z = 1.0f;
                 glm::mat3 rotMat(glm::vec3(localMat[0])/s.x, glm::vec3(localMat[1])/s.y, glm::vec3(localMat[2])/s.z);
                 float rx = atan2(rotMat[2][1], rotMat[2][2]) * 57.2957795f;
                 float ry = atan2(-rotMat[2][0], sqrt(rotMat[2][1]*rotMat[2][1] + rotMat[2][2]*rotMat[2][2])) * 57.2957795f;
@@ -408,13 +474,13 @@ namespace M3Export
             fbx << "\t\tVertices: *" << (mesh.positions.size() * 3) << " {\n\t\t\ta: ";
             for (size_t i = 0; i < mesh.positions.size(); ++i) {
                 if (i > 0) fbx << ",";
-                fbx << FbxF(mesh.positions[i].x) << "," << FbxF(mesh.positions[i].y) << "," << FbxF(mesh.positions[i].z);
+                fbx << FbxF(mesh.positions[i].x * SCALE) << "," << FbxF(mesh.positions[i].y * SCALE) << "," << FbxF(mesh.positions[i].z * SCALE);
             }
             fbx << "\n\t\t}\n";
             fbx << "\t\tPolygonVertexIndex: *" << mesh.indices.size() << " {\n\t\t\ta: ";
             for (size_t i = 0; i < mesh.indices.size(); i += 3) {
                 if (i > 0) fbx << ",";
-                fbx << mesh.indices[i] << "," << mesh.indices[i+1] << "," << (int)(-(int)mesh.indices[i+2] - 1);
+                fbx << mesh.indices[i] << "," << mesh.indices[i+1] << "," << (-(int)mesh.indices[i+2] - 1);
             }
             fbx << "\n\t\t}\n";
             fbx << "\t\tGeometryVersion: 124\n";
@@ -445,10 +511,46 @@ namespace M3Export
         }
         for (size_t mi = 0; mi < meshList.size(); ++mi) {
             fbx << "\tMaterial: " << materialIds[mi] << ", \"Material::Material_" << mi << "\", \"\" {\n";
-            fbx << "\t\tVersion: 102\n\t\tShadingModel: \"lambert\"\n\t\tMultiLayer: 0\n";
+            fbx << "\t\tVersion: 102\n\t\tShadingModel: \"phong\"\n\t\tMultiLayer: 0\n";
             fbx << "\t\tProperties70:  {\n";
             fbx << "\t\t\tP: \"DiffuseColor\", \"Color\", \"\", \"A\", 0.8,0.8,0.8\n";
+            fbx << "\t\t\tP: \"Emissive\", \"Vector3D\", \"Vector\", \"\", 0,0,0\n";
+            fbx << "\t\t\tP: \"Ambient\", \"Vector3D\", \"Vector\", \"\", 0.2,0.2,0.2\n";
+            fbx << "\t\t\tP: \"Diffuse\", \"Vector3D\", \"Vector\", \"\", 0.8,0.8,0.8\n";
+            fbx << "\t\t\tP: \"Specular\", \"Vector3D\", \"Vector\", \"\", 0.2,0.2,0.2\n";
+            fbx << "\t\t\tP: \"Shininess\", \"double\", \"Number\", \"\", 20\n";
+            fbx << "\t\t\tP: \"Opacity\", \"double\", \"Number\", \"\", 1\n";
             fbx << "\t\t}\n\t}\n";
+        }
+        for (const auto& tex : fbxTextures) {
+            std::string b64 = Base64Encode(tex.data.data(), tex.data.size());
+            std::string filename = tex.name + ".png";
+            fbx << "\tVideo: " << tex.vidId << ", \"Video::" << tex.name << "\", \"Clip\" {\n";
+            fbx << "\t\tType: \"Clip\"\n";
+            fbx << "\t\tProperties70:  {\n";
+            fbx << "\t\t\tP: \"Path\", \"KString\", \"XRefUrl\", \"\", \"" << filename << "\"\n";
+            fbx << "\t\t}\n";
+            fbx << "\t\tUseMipMap: 0\n";
+            fbx << "\t\tFilename: \"" << filename << "\"\n";
+            fbx << "\t\tRelativeFilename: \"" << filename << "\"\n";
+            fbx << "\t\tContent: ,\"" << b64 << "\"\n";
+            fbx << "\t}\n";
+            fbx << "\tTexture: " << tex.texId << ", \"Texture::" << tex.name << "\", \"\" {\n";
+            fbx << "\t\tType: \"TextureVideoClip\"\n";
+            fbx << "\t\tVersion: 202\n";
+            fbx << "\t\tTextureName: \"Texture::" << tex.name << "\"\n";
+            fbx << "\t\tProperties70:  {\n";
+            fbx << "\t\t\tP: \"UVSet\", \"KString\", \"\", \"\", \"UVMap\"\n";
+            fbx << "\t\t\tP: \"UseMaterial\", \"bool\", \"\", \"\", 1\n";
+            fbx << "\t\t}\n";
+            fbx << "\t\tMedia: \"Video::" << tex.name << "\"\n";
+            fbx << "\t\tFileName: \"" << filename << "\"\n";
+            fbx << "\t\tRelativeFilename: \"" << filename << "\"\n";
+            fbx << "\t\tModelUVTranslation: 0,0\n";
+            fbx << "\t\tModelUVScaling: 1,1\n";
+            fbx << "\t\tTexture_Alpha_Source: \"None\"\n";
+            fbx << "\t\tCropping: 0,0,0,0\n";
+            fbx << "\t}\n";
         }
         if (hasSkeleton) {
             if (progress) progress(50, 100, "Writing skinning...");
@@ -494,7 +596,11 @@ namespace M3Export
                         }
                         fbx << "\n\t\t}\n";
                     }
-                    glm::mat4 ibm = glm::inverse(bone.globalMatrix);
+                    glm::mat4 scaledGlobal = bone.globalMatrix;
+                    scaledGlobal[3][0] *= SCALE;
+                    scaledGlobal[3][1] *= SCALE;
+                    scaledGlobal[3][2] *= SCALE;
+                    glm::mat4 ibm = glm::inverse(scaledGlobal);
                     fbx << "\t\tTransform: *16 {\n\t\t\ta: ";
                     for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
                         if (c > 0 || r > 0) fbx << ",";
@@ -504,7 +610,7 @@ namespace M3Export
                     fbx << "\t\tTransformLink: *16 {\n\t\t\ta: ";
                     for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
                         if (c > 0 || r > 0) fbx << ",";
-                        fbx << FbxF(bone.globalMatrix[c][r]);
+                        fbx << FbxF(scaledGlobal[c][r]);
                     }
                     fbx << "\n\t\t}\n\t}\n";
                 }
@@ -518,6 +624,18 @@ namespace M3Export
             fbx << "\tC: \"OO\"," << meshIds[mi] << "," << rootId << "\n";
             fbx << "\tC: \"OO\"," << meshGeoIds[mi] << "," << meshIds[mi] << "\n";
             fbx << "\tC: \"OO\"," << materialIds[mi] << "," << meshIds[mi] << "\n";
+            auto diffIt = matIdToDiffuseIdx.find(meshList[mi].materialId);
+            if (diffIt != matIdToDiffuseIdx.end() && diffIt->second >= 0) {
+                int texIdx = diffIt->second;
+                fbx << "\tC: \"OP\"," << fbxTextures[texIdx].texId << "," << materialIds[mi] << ", \"DiffuseColor\"\n";
+                fbx << "\tC: \"OO\"," << fbxTextures[texIdx].vidId << "," << fbxTextures[texIdx].texId << "\n";
+            }
+            auto normIt = matIdToNormalIdx.find(meshList[mi].materialId);
+            if (normIt != matIdToNormalIdx.end() && normIt->second >= 0) {
+                int texIdx = normIt->second;
+                fbx << "\tC: \"OP\"," << fbxTextures[texIdx].texId << "," << materialIds[mi] << ", \"NormalMap\"\n";
+                fbx << "\tC: \"OO\"," << fbxTextures[texIdx].vidId << "," << fbxTextures[texIdx].texId << "\n";
+            }
         }
         if (hasSkeleton) {
             for (size_t bi = 0; bi < bones.size(); ++bi) {
