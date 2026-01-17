@@ -25,41 +25,39 @@ namespace UI_Models
         if (!state.show_models_window) return;
 
         M3Render* render = state.m3Render.get();
+        if (!render) return;
 
         std::string windowTitle = "Model";
-        if (render && !render->getModelName().empty())
+        if (!render->getModelName().empty())
             windowTitle = FormatModelName(render->getModelName());
 
-        if (ImGui::Begin(windowTitle.c_str(), &state.show_models_window))
-        {
-            if (!render)
-            {
-                ImGui::TextUnformatted("No model loaded.");
-                ImGui::End();
-                return;
-            }
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        float windowWidth = 300.0f;
+        float windowX = viewport->Pos.x + viewport->Size.x - windowWidth - 10.0f;
+        float windowY = viewport->Pos.y + 40.0f;
 
+        ImGui::SetNextWindowPos(ImVec2(windowX, windowY), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(250, 0), ImVec2(450, viewport->Size.y - 60.0f));
+        ImGui::SetNextWindowBgAlpha(0.9f);
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize;
+
+        if (ImGui::Begin(windowTitle.c_str(), &state.show_models_window, flags))
+        {
             size_t submeshCount = render->getSubmeshCount();
             size_t materialCount = render->getMaterialCount();
             size_t boneCount = render->getBoneCount();
             size_t animCount = render->getAnimationCount();
             size_t texCount = render->getAllTextures().size();
 
-            ImGui::Text("Submeshes: %zu", submeshCount);
-            ImGui::Text("Materials: %zu", materialCount);
-            ImGui::Text("Bones: %zu", boneCount);
-            ImGui::Text("Animations: %zu", animCount);
-            ImGui::Text("Textures: %zu", texCount);
+            ImGui::Text("Submeshes: %zu  Materials: %zu", submeshCount, materialCount);
+            ImGui::Text("Bones: %zu  Animations: %zu  Textures: %zu", boneCount, animCount, texCount);
 
             ImGui::Separator();
 
             bool showSkel = render->getShowSkeleton();
             if (ImGui::Checkbox("Show Skeleton", &showSkel))
-            {
                 render->setShowSkeleton(showSkel);
-            }
-
-            ImGui::Separator();
 
             std::set<uint8_t> uniqueGroups;
             for (size_t i = 0; i < submeshCount; ++i)
@@ -68,25 +66,58 @@ namespace UI_Models
                 if (gid != 255) uniqueGroups.insert(gid);
             }
 
-            if (!uniqueGroups.empty() && uniqueGroups.size() > 1)
+            if (uniqueGroups.size() > 1)
             {
+                ImGui::Separator();
                 ImGui::Text("Variant:");
-                ImGui::SameLine();
-
                 int currentVariant = render->getActiveVariant();
+                float availWidth = ImGui::GetContentRegionAvail().x;
+                float btnWidth = 45.0f;
+                float spacing = ImGui::GetStyle().ItemSpacing.x;
+                float x = 0.0f;
 
                 for (uint8_t gid : uniqueGroups)
                 {
-                    ImGui::SameLine();
+                    if (x + btnWidth > availWidth && x > 0)
+                    {
+                        x = 0.0f;
+                    }
+                    else if (x > 0)
+                    {
+                        ImGui::SameLine();
+                    }
+
                     char label[32];
                     snprintf(label, sizeof(label), "%d", gid);
                     if (ImGui::RadioButton(label, currentVariant == (int)gid))
-                    {
                         render->setActiveVariant((int)gid);
-                    }
-                }
 
-                ImGui::Separator();
+                    x += btnWidth + spacing;
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Animations"))
+            {
+                const auto& anims = render->getAllAnimations();
+                int playingIdx = render->getPlayingAnimation();
+
+                for (size_t i = 0; i < anims.size(); ++i)
+                {
+                    const auto& anim = anims[i];
+                    bool isPlaying = (playingIdx == (int)i);
+                    float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+
+                    char label[64];
+                    snprintf(label, sizeof(label), "%s Anim %zu (%.2fs)###anim%zu", isPlaying ? ">" : " ", i, duration, i);
+
+                    if (isPlaying) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+                    if (ImGui::Selectable(label, isPlaying))
+                    {
+                        if (isPlaying) render->stopAnimation();
+                        else render->playAnimation((int)i);
+                    }
+                    if (isPlaying) ImGui::PopStyleColor();
+                }
             }
 
             if (ImGui::CollapsingHeader("Submeshes"))
@@ -98,22 +129,12 @@ namespace UI_Models
 
                     bool visible = render->getSubmeshVisible(i);
                     if (ImGui::Checkbox("##vis", &visible))
-                    {
                         render->setSubmeshVisible(i, visible);
-                    }
                     ImGui::SameLine();
 
                     if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu (Group %d)", i, sm.groupId))
                     {
-                        ImGui::Text("Material ID: %d", sm.materialID);
-                        ImGui::Text("Start Index: %u", sm.startIndex);
-                        ImGui::Text("Index Count: %u", sm.indexCount);
-                        ImGui::Text("Start Vertex: %u", sm.startVertex);
-                        ImGui::Text("Vertex Count: %u", sm.vertexCount);
-                        ImGui::Text("Group ID: %d", sm.groupId);
-                        ImGui::Text("Bone Mapping: %u - %u", sm.startBoneMapping, sm.startBoneMapping + sm.nrBoneMapping);
-                        ImGui::Text("Bound Min: (%.2f, %.2f, %.2f)", sm.boundMin.x, sm.boundMin.y, sm.boundMin.z);
-                        ImGui::Text("Bound Max: (%.2f, %.2f, %.2f)", sm.boundMax.x, sm.boundMax.y, sm.boundMax.z);
+                        ImGui::Text("Material: %d  Indices: %u  Vertices: %u", sm.materialID, sm.indexCount, sm.vertexCount);
                         ImGui::TreePop();
                     }
                     ImGui::PopID();
@@ -129,32 +150,12 @@ namespace UI_Models
                     {
                         int currentVariant = render->getMaterialSelectedVariant(i);
                         int variantCount = (int)render->getMaterialVariantCount(i);
-
                         if (variantCount > 1)
                         {
                             if (ImGui::SliderInt("Variant", &currentVariant, 0, variantCount - 1))
-                            {
                                 render->setMaterialSelectedVariant(i, currentVariant);
-                            }
                         }
-
                         ImGui::Text("Variants: %d", variantCount);
-
-                        const auto& mat = render->getAllMaterials()[i];
-                        for (size_t v = 0; v < mat.variants.size(); v++)
-                        {
-                            const auto& var = mat.variants[v];
-                            if (ImGui::TreeNode((void*)(intptr_t)(i * 1000 + v), "Variant %zu", v))
-                            {
-                                ImGui::Text("Texture A: %d", var.textureIndexA);
-                                ImGui::Text("Texture B: %d", var.textureIndexB);
-                                if (!var.textureColorPath.empty())
-                                    ImGui::Text("Color: %s", var.textureColorPath.c_str());
-                                if (!var.textureNormalPath.empty())
-                                    ImGui::Text("Normal: %s", var.textureNormalPath.c_str());
-                                ImGui::TreePop();
-                            }
-                        }
                         ImGui::TreePop();
                     }
                     ImGui::PopID();
@@ -165,16 +166,14 @@ namespace UI_Models
             {
                 const auto& textures = render->getAllTextures();
                 const auto& glTextures = render->getGLTextures();
-
-                float thumbSize = 64.0f;
+                float thumbSize = 48.0f;
                 float windowWidth = ImGui::GetContentRegionAvail().x;
-                int columns = std::max(1, (int)(windowWidth / (thumbSize + 10.0f)));
+                int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
 
                 for (size_t i = 0; i < textures.size(); ++i)
                 {
                     const auto& tex = textures[i];
                     ImGui::PushID(static_cast<int>(i));
-
                     unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
 
                     if (glTex != 0)
@@ -188,65 +187,17 @@ namespace UI_Models
                         {
                             ImGui::BeginTooltip();
                             ImGui::Text("[%zu] %s", i, tex.path.c_str());
-                            ImGui::Text("Type: %s", tex.textureType.c_str());
                             ImGui::EndTooltip();
                         }
                     }
                     else
                     {
                         ImGui::Button("N/A", ImVec2(thumbSize, thumbSize));
-                        if (ImGui::IsItemHovered())
-                        {
-                            ImGui::BeginTooltip();
-                            ImGui::Text("[%zu] %s (not loaded)", i, tex.path.c_str());
-                            ImGui::EndTooltip();
-                        }
                     }
 
                     if ((i + 1) % columns != 0 && i + 1 < textures.size())
                         ImGui::SameLine();
-
                     ImGui::PopID();
-                }
-            }
-
-            if (showTexturePopup && selectedTextureIndex >= 0)
-            {
-                const auto& textures = render->getAllTextures();
-                const auto& glTextures = render->getGLTextures();
-
-                if (selectedTextureIndex < (int)textures.size())
-                {
-                    const auto& tex = textures[selectedTextureIndex];
-                    std::string popupTitle = tex.path;
-                    if (popupTitle.empty())
-                        popupTitle = "Texture " + std::to_string(selectedTextureIndex);
-
-                    ImGui::SetNextWindowSize(ImVec2(520, 550), ImGuiCond_FirstUseEver);
-                    if (ImGui::Begin(popupTitle.c_str(), &showTexturePopup))
-                    {
-                        unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
-                        if (glTex != 0)
-                        {
-                            ImVec2 avail = ImGui::GetContentRegionAvail();
-                            float maxDim = std::min(avail.x, avail.y - 60.0f);
-                            ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
-                        }
-                        ImGui::Separator();
-                        ImGui::Text("Path: %s", tex.path.c_str());
-                        ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
-                        ImGui::Text("Intensity: %.2f", tex.intensity);
-                        ImGui::Text("Flags: 0x%08X", tex.flags);
-                    }
-                    ImGui::End();
-
-                    if (!showTexturePopup)
-                        selectedTextureIndex = -1;
-                }
-                else
-                {
-                    showTexturePopup = false;
-                    selectedTextureIndex = -1;
                 }
             }
 
@@ -259,78 +210,92 @@ namespace UI_Models
                     ImGui::PushID(static_cast<int>(i));
                     if (ImGui::TreeNode((void*)(intptr_t)i, "[%d] %s", bone.id, bone.name.c_str()))
                     {
-                        ImGui::Text("Parent ID: %d", bone.parentId);
-                        ImGui::Text("Global ID: %d", bone.globalId);
-                        ImGui::Text("Flags: 0x%04X", bone.flags);
-                        ImGui::Text("Position: (%.3f, %.3f, %.3f)", bone.position.x, bone.position.y, bone.position.z);
-                        ImGui::Text("Path: %s", bone.parentPath.c_str());
-
-                        if (ImGui::TreeNode("Animation Tracks"))
-                        {
-                            for (int t = 0; t < 8; t++)
-                            {
-                                const auto& track = bone.tracks[t];
-                                if (!track.keyframes.empty())
-                                {
-                                    ImGui::Text("Track %d: %zu keyframes", t + 1, track.keyframes.size());
-                                }
-                            }
-                            ImGui::TreePop();
-                        }
-
-                        if (ImGui::TreeNode("Global Matrix"))
-                        {
-                            const auto& m = bone.globalMatrix;
-                            ImGui::Text("%.3f %.3f %.3f %.3f", m[0][0], m[0][1], m[0][2], m[0][3]);
-                            ImGui::Text("%.3f %.3f %.3f %.3f", m[1][0], m[1][1], m[1][2], m[1][3]);
-                            ImGui::Text("%.3f %.3f %.3f %.3f", m[2][0], m[2][1], m[2][2], m[2][3]);
-                            ImGui::Text("%.3f %.3f %.3f %.3f", m[3][0], m[3][1], m[3][2], m[3][3]);
-                            ImGui::TreePop();
-                        }
-
+                        ImGui::Text("Parent: %d  Flags: 0x%04X", bone.parentId, bone.flags);
                         ImGui::TreePop();
                     }
                     ImGui::PopID();
                 }
             }
-
-            if (ImGui::CollapsingHeader("Animations"))
-            {
-                const auto& anims = render->getAllAnimations();
-                int playingIdx = render->getPlayingAnimation();
-
-                if (playingIdx >= 0)
-                {
-                    float duration = render->getAnimationDuration();
-                    float currentTime = render->getAnimationTime();
-                    ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(-1, 0));
-                    ImGui::Spacing();
-                }
-
-                for (size_t i = 0; i < anims.size(); ++i)
-                {
-                    const auto& anim = anims[i];
-                    bool isPlaying = (playingIdx == (int)i);
-
-                    char label[64];
-                    float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
-                    snprintf(label, sizeof(label), "%s Anim %zu (%.2fs)###anim%zu",
-                             isPlaying ? ">" : " ", i, duration, i);
-
-                    if (isPlaying) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
-
-                    if (ImGui::Selectable(label, isPlaying))
-                    {
-                        if (isPlaying)
-                            render->stopAnimation();
-                        else
-                            render->playAnimation((int)i);
-                    }
-
-                    if (isPlaying) ImGui::PopStyleColor();
-                }
-            }
         }
         ImGui::End();
+
+        if (showTexturePopup && selectedTextureIndex >= 0)
+        {
+            const auto& textures = render->getAllTextures();
+            const auto& glTextures = render->getGLTextures();
+
+            if (selectedTextureIndex < (int)textures.size())
+            {
+                const auto& tex = textures[selectedTextureIndex];
+                std::string popupTitle = tex.path.empty() ? "Texture " + std::to_string(selectedTextureIndex) : tex.path;
+
+                ImGui::SetNextWindowSize(ImVec2(520, 550), ImGuiCond_FirstUseEver);
+                if (ImGui::Begin(popupTitle.c_str(), &showTexturePopup))
+                {
+                    unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
+                    if (glTex != 0)
+                    {
+                        ImVec2 avail = ImGui::GetContentRegionAvail();
+                        float maxDim = std::min(avail.x, avail.y - 60.0f);
+                        ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
+                    }
+                    ImGui::Separator();
+                    ImGui::Text("Path: %s", tex.path.c_str());
+                    ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
+                }
+                ImGui::End();
+
+                if (!showTexturePopup)
+                    selectedTextureIndex = -1;
+            }
+            else
+            {
+                showTexturePopup = false;
+                selectedTextureIndex = -1;
+            }
+        }
+
+        if (render->isAnimationPlaying())
+        {
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            float modelInfoX = vp->Pos.x + vp->Size.x - 300.0f - 10.0f;
+            float playbackWidth = 180.0f;
+            float popupX = modelInfoX - playbackWidth - 10.0f;
+            float popupY = vp->Pos.y + 40.0f;
+
+            ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowBgAlpha(0.9f);
+
+            ImGuiWindowFlags popupFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
+
+            bool showPlayback = true;
+            if (ImGui::Begin("Playback", &showPlayback, popupFlags))
+            {
+                float duration = render->getAnimationDuration();
+                float currentTime = render->getAnimationTime();
+                bool isPaused = render->isAnimationPaused();
+
+                ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(160, 14));
+
+                float btnWidth = 50.0f;
+                if (isPaused)
+                {
+                    if (ImGui::Button("Play", ImVec2(btnWidth, 0)))
+                        render->resumeAnimation();
+                }
+                else
+                {
+                    if (ImGui::Button("Pause", ImVec2(btnWidth, 0)))
+                        render->pauseAnimation();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Stop", ImVec2(btnWidth, 0)))
+                    render->stopAnimation();
+            }
+            ImGui::End();
+
+            if (!showPlayback)
+                render->stopAnimation();
+        }
     }
 }

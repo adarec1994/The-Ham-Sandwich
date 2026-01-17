@@ -46,9 +46,8 @@ uniform sampler2D diffTexture;
 void main() {
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(Normal), lightDir), 0.3);
-    vec4 texColor = texture(diffTexture, TexCoord);
-    if(texColor.a < 0.1) discard;
-    FragColor = vec4(texColor.rgb * diff, 1.0);
+    vec3 texColor = texture(diffTexture, TexCoord).rgb;
+    FragColor = vec4(texColor * diff, 1.0);
 }
 )";
 
@@ -368,16 +367,15 @@ void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) 
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
 
-    if (variantIndex < 0 || variantIndex >= (int)submeshGroups.size()) {
-        for (size_t i = 0; i < submeshes.size(); ++i) {
-            submeshVisible[i] = 1;
-        }
-        return;
-    }
-
-    uint16_t targetGroupId = submeshGroups[variantIndex].submeshId;
     for (size_t i = 0; i < submeshes.size(); ++i) {
-        submeshVisible[i] = (submeshes[i].groupId == targetGroupId) ? 1 : 0;
+        uint8_t gid = submeshes[i].groupId;
+        if (gid == 255) {
+            submeshVisible[i] = 1;
+        } else if (variantIndex < 0) {
+            submeshVisible[i] = 1;
+        } else {
+            submeshVisible[i] = (gid == (uint8_t)variantIndex) ? 1 : 0;
+        }
     }
 }
 
@@ -388,12 +386,22 @@ void M3Render::playAnimation(int index) {
     }
     playingAnimation = index;
     animationTime = 0.0f;
+    animationPaused = false;
 }
 
 void M3Render::stopAnimation() {
     playingAnimation = -1;
     animationTime = 0.0f;
+    animationPaused = false;
     boneMatrices.clear();
+}
+
+void M3Render::pauseAnimation() {
+    animationPaused = true;
+}
+
+void M3Render::resumeAnimation() {
+    animationPaused = false;
 }
 
 float M3Render::getAnimationDuration() const {
@@ -474,7 +482,7 @@ void M3Render::updateAnimation(float deltaTime) {
     const auto& anim = animations[playingAnimation];
     float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
 
-    if (duration > 0.0f) {
+    if (duration > 0.0f && !animationPaused) {
         animationTime += deltaTime;
         if (animationTime >= duration) {
             animationTime = std::fmod(animationTime, duration);

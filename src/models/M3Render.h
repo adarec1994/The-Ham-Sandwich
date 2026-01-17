@@ -52,8 +52,11 @@ public:
 
     void playAnimation(int index);
     void stopAnimation();
+    void pauseAnimation();
+    void resumeAnimation();
     int getPlayingAnimation() const { return playingAnimation; }
     bool isAnimationPlaying() const { return playingAnimation >= 0; }
+    bool isAnimationPaused() const { return animationPaused; }
     void updateAnimation(float deltaTime);
     float getAnimationTime() const { return animationTime; }
     float getAnimationDuration() const;
@@ -79,6 +82,7 @@ private:
     bool showSkeleton = false;
     int playingAnimation = -1;
     float animationTime = 0.0f;
+    bool animationPaused = false;
     std::vector<glm::mat4> boneMatrices;
 
     unsigned int skeletonVAO = 0, skeletonVBO = 0;
