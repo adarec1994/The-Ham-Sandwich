@@ -38,6 +38,10 @@ public:
     size_t getAnimationCount() const { return animations.size(); }
     const M3ModelAnimation& getAnimation(size_t i) const { return animations[i]; }
 
+    const M3Geometry& getGeometry() const { return geometry; }
+    const std::vector<M3Vertex>& getVertices() const { return geometry.vertices; }
+    const std::vector<uint32_t>& getIndices() const { return geometry.indices; }
+
     void setModelName(const std::string& name) { modelName = name; }
     const std::string& getModelName() const { return modelName; }
     const std::vector<unsigned int>& getGLTextures() const { return glTextures; }
@@ -71,6 +75,7 @@ private:
     std::vector<M3Texture> textures;
     std::vector<M3ModelAnimation> animations;
     std::vector<unsigned int> glTextures;
+    M3Geometry geometry;
 
     std::vector<int> materialSelectedVariant;
     std::vector<uint8_t> submeshVisible;

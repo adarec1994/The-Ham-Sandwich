@@ -90,6 +90,7 @@ struct RenderVertex {
 M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     if (!data.success) return;
 
+    geometry = data.geometry;
     submeshes = data.geometry.submeshes;
     materials = data.materials;
     bones = data.bones;

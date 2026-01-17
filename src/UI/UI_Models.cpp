@@ -2,9 +2,15 @@
 #include "imgui.h"
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
+#include "../export/M3Export.h"
 #include "UI.h"
+#include "UI_Globals.h"
+#include "ImGuiFileDialog.h"
 #include <algorithm>
 #include <set>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 namespace UI_Models
 {
@@ -19,6 +25,19 @@ namespace UI_Models
 
     static int selectedTextureIndex = -1;
     static bool showTexturePopup = false;
+
+    static bool sExportingFBX = false;
+    static bool sExportingGLB = false;
+    static std::atomic<bool> sExportInProgress{false};
+    static std::atomic<int> sExportProgress{0};
+    static std::atomic<int> sExportTotal{100};
+    static std::string sExportStatus;
+    static std::mutex sExportMutex;
+    static M3Export::ExportResult sExportResult;
+    static bool sShowExportResult = false;
+    static float sNotificationTimer = 0.0f;
+    static std::string sNotificationMessage;
+    static bool sNotificationSuccess = true;
 
     void Draw(AppState& state)
     {
@@ -35,15 +54,22 @@ namespace UI_Models
         float windowWidth = 300.0f;
         float windowX = viewport->Pos.x + viewport->Size.x - windowWidth - 10.0f;
         float windowY = viewport->Pos.y + 40.0f;
+        float windowHeight = viewport->Pos.y + viewport->Size.y - windowY - 10.0f;
 
-        ImGui::SetNextWindowPos(ImVec2(windowX, windowY), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(250, 0), ImVec2(450, viewport->Size.y - 60.0f));
+        ImGui::SetNextWindowPos(ImVec2(windowX, windowY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(windowWidth, windowHeight), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.9f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
 
-        ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize;
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
 
         if (ImGui::Begin(windowTitle.c_str(), &state.show_models_window, flags))
         {
+            float exportHeight = 35.0f;
+            float childHeight = ImGui::GetContentRegionAvail().y - exportHeight;
+
+            ImGui::BeginChild("##ModelContent", ImVec2(0, childHeight), false);
+
             size_t submeshCount = render->getSubmeshCount();
             size_t materialCount = render->getMaterialCount();
             size_t boneCount = render->getBoneCount();
@@ -216,8 +242,38 @@ namespace UI_Models
                     ImGui::PopID();
                 }
             }
+            ImGui::EndChild();
+
+            ImGui::Separator();
+            bool exportDisabled = sExportInProgress.load();
+            if (exportDisabled) ImGui::BeginDisabled();
+
+            if (ImGui::Button("Export FBX", ImVec2(130, 0)))
+            {
+                std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".fbx";
+                IGFD::FileDialogConfig config;
+                config.path = ".";
+                config.fileName = suggestedName;
+                config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
+                ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
+                sExportingFBX = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Export GLB", ImVec2(130, 0)))
+            {
+                std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".glb";
+                IGFD::FileDialogConfig config;
+                config.path = ".";
+                config.fileName = suggestedName;
+                config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
+                ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
+                sExportingGLB = true;
+            }
+
+            if (exportDisabled) ImGui::EndDisabled();
         }
         ImGui::End();
+        ImGui::PopStyleVar();
 
         if (showTexturePopup && selectedTextureIndex >= 0)
         {
@@ -265,6 +321,7 @@ namespace UI_Models
 
             ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowBgAlpha(0.9f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
 
             ImGuiWindowFlags popupFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
 
@@ -293,9 +350,163 @@ namespace UI_Models
                     render->stopAnimation();
             }
             ImGui::End();
+            ImGui::PopStyleVar();
 
             if (!showPlayback)
                 render->stopAnimation();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                sExportInProgress = true;
+                sExportProgress = 0;
+                sExportTotal = 100;
+                sExportStatus = "Starting export...";
+
+                std::thread([render, dirPath]() {
+                    M3Export::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.activeVariant = render->getActiveVariant();
+                    settings.exportTextures = true;
+                    settings.exportAnimations = true;
+                    settings.exportSkeleton = true;
+
+                    auto result = M3Export::ExportToFBX(render, gPendingModelArchive, settings,
+                        [](int cur, int total, const std::string& status) {
+                            sExportProgress = cur;
+                            sExportTotal = total;
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportStatus = status;
+                        });
+
+                    {
+                        std::lock_guard<std::mutex> lock(sExportMutex);
+                        sExportResult = result;
+                    }
+                    sExportInProgress = false;
+                    sShowExportResult = true;
+                }).detach();
+            }
+            ImGuiFileDialog::Instance()->Close();
+            sExportingFBX = false;
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                sExportInProgress = true;
+                sExportProgress = 0;
+                sExportTotal = 100;
+                sExportStatus = "Starting export...";
+
+                std::thread([render, dirPath]() {
+                    M3Export::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.activeVariant = render->getActiveVariant();
+                    settings.exportTextures = true;
+                    settings.exportAnimations = true;
+                    settings.exportSkeleton = true;
+
+                    auto result = M3Export::ExportToGLB(render, gPendingModelArchive, settings,
+                        [](int cur, int total, const std::string& status) {
+                            sExportProgress = cur;
+                            sExportTotal = total;
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportStatus = status;
+                        });
+
+                    {
+                        std::lock_guard<std::mutex> lock(sExportMutex);
+                        sExportResult = result;
+                    }
+                    sExportInProgress = false;
+                    sShowExportResult = true;
+                }).detach();
+            }
+            ImGuiFileDialog::Instance()->Close();
+            sExportingGLB = false;
+        }
+
+        if (sExportInProgress.load())
+        {
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            float popupWidth = 300.0f;
+            float popupHeight = 80.0f;
+            float popupX = vp->Pos.x + (vp->Size.x - popupWidth) * 0.5f;
+            float popupY = vp->Pos.y + (vp->Size.y - popupHeight) * 0.5f;
+
+            ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(popupWidth, popupHeight), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.95f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+
+            if (ImGui::Begin("##ExportProgress", nullptr, flags))
+            {
+                std::string status;
+                {
+                    std::lock_guard<std::mutex> lock(sExportMutex);
+                    status = sExportStatus;
+                }
+
+                ImGui::Text("Exporting...");
+                ImGui::Text("%s", status.c_str());
+                float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
+                ImGui::ProgressBar(progress, ImVec2(-1, 20));
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
+
+        if (sShowExportResult)
+        {
+            M3Export::ExportResult result;
+            {
+                std::lock_guard<std::mutex> lock(sExportMutex);
+                result = sExportResult;
+            }
+            sNotificationSuccess = result.success;
+            sNotificationMessage = result.success ? "Export successful!" : ("Export failed: " + result.errorMessage);
+            sNotificationTimer = 3.0f;
+            sShowExportResult = false;
+        }
+
+        if (sNotificationTimer > 0.0f)
+        {
+            sNotificationTimer -= ImGui::GetIO().DeltaTime;
+            float alpha = std::min(1.0f, sNotificationTimer);
+
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            float notifWidth = 250.0f;
+            float notifX = vp->Pos.x + (vp->Size.x - notifWidth) * 0.5f;
+            float notifY = vp->Pos.y + 60.0f;
+
+            ImGui::SetNextWindowPos(ImVec2(notifX, notifY), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+
+            if (ImGui::Begin("##ExportNotification", nullptr, flags))
+            {
+                if (sNotificationSuccess)
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+                else
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(2);
         }
     }
 }
