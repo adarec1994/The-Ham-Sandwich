@@ -17,6 +17,7 @@ namespace M3Export
     struct ExportSettings
     {
         std::string outputPath;
+        std::string customName;
         float scale = 1.0f;
         bool exportTextures = true;
         bool exportAnimations = true;

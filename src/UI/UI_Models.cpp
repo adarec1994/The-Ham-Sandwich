@@ -6,6 +6,8 @@
 #include "UI.h"
 #include "UI_Globals.h"
 #include "ImGuiFileDialog.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <set>
 #include <thread>
@@ -25,6 +27,7 @@ namespace UI_Models
 
     static int selectedTextureIndex = -1;
     static bool showTexturePopup = false;
+    static bool showUVs = false;
 
     static bool sExportingFBX = false;
     static bool sExportingGLB = false;
@@ -39,12 +42,63 @@ namespace UI_Models
     static std::string sNotificationMessage;
     static bool sNotificationSuccess = true;
 
+    static void HandleModelPicking(AppState& state, M3Render* render)
+    {
+        if (!render) return;
+        if (ImGui::GetIO().WantCaptureMouse) return;
+        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+
+        ImVec2 mousePos = ImGui::GetMousePos();
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+
+        float ndcX = (2.0f * (mousePos.x - vp->Pos.x) / vp->Size.x) - 1.0f;
+        float ndcY = 1.0f - (2.0f * (mousePos.y - vp->Pos.y) / vp->Size.y);
+
+        glm::mat4 invProj = glm::inverse(gProjMatrix);
+        glm::mat4 invView = glm::inverse(gViewMatrix);
+
+        glm::vec4 rayClip(ndcX, ndcY, -1.0f, 1.0f);
+        glm::vec4 rayEye = invProj * rayClip;
+        rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+        glm::vec3 rayWorld = glm::normalize(glm::vec3(invView * rayEye));
+        glm::vec3 rayOrigin = glm::vec3(invView[3]);
+
+        int hit = render->rayPickSubmesh(rayOrigin, rayWorld);
+        render->setSelectedSubmesh(hit);
+
+        if (hit >= 0)
+        {
+            const auto& submeshes = render->getAllSubmeshes();
+            const auto& materials = render->getAllMaterials();
+
+            if ((size_t)hit < submeshes.size())
+            {
+                uint16_t matId = submeshes[hit].materialID;
+                if (matId < materials.size() && !materials[matId].variants.empty())
+                {
+                    int varIdx = render->getMaterialSelectedVariant(matId);
+                    if (varIdx < 0 || varIdx >= (int)materials[matId].variants.size())
+                        varIdx = 0;
+                    int texIdx = materials[matId].variants[varIdx].textureIndexA;
+                    if (texIdx >= 0)
+                    {
+                        selectedTextureIndex = texIdx;
+                        showTexturePopup = true;
+                        showUVs = true;
+                    }
+                }
+            }
+        }
+    }
+
     void Draw(AppState& state)
     {
         if (!state.show_models_window) return;
 
         M3Render* render = state.m3Render.get();
         if (!render) return;
+
+        HandleModelPicking(state, render);
 
         std::string windowTitle = "Model";
         if (!render->getModelName().empty())
@@ -101,6 +155,14 @@ namespace UI_Models
                 float btnWidth = 45.0f;
                 float spacing = ImGui::GetStyle().ItemSpacing.x;
                 float x = 0.0f;
+
+                if (ImGui::RadioButton("All", currentVariant == -1))
+                {
+                    render->setActiveVariant(-1);
+                    for (size_t i = 0; i < submeshCount; ++i)
+                        render->setSubmeshVisible(i, true);
+                }
+                x += btnWidth + spacing;
 
                 for (uint8_t gid : uniqueGroups)
                 {
@@ -285,15 +347,72 @@ namespace UI_Models
                 const auto& tex = textures[selectedTextureIndex];
                 std::string popupTitle = tex.path.empty() ? "Texture " + std::to_string(selectedTextureIndex) : tex.path;
 
-                ImGui::SetNextWindowSize(ImVec2(520, 550), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(520, 580), ImGuiCond_FirstUseEver);
                 if (ImGui::Begin(popupTitle.c_str(), &showTexturePopup))
                 {
+                    ImGui::Checkbox("Show UVs", &showUVs);
+                    ImGui::Separator();
+
                     unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
                     if (glTex != 0)
                     {
                         ImVec2 avail = ImGui::GetContentRegionAvail();
                         float maxDim = std::min(avail.x, avail.y - 60.0f);
+
+                        ImVec2 imgPos = ImGui::GetCursorScreenPos();
                         ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
+
+                        if (showUVs)
+                        {
+                            ImDrawList* drawList = ImGui::GetWindowDrawList();
+                            const auto& vertices = render->getVertices();
+                            const auto& indices = render->getIndices();
+                            const auto& submeshes = render->getAllSubmeshes();
+                            const auto& materials = render->getAllMaterials();
+
+                            ImU32 uvColor = IM_COL32(0, 255, 0, 180);
+
+                            for (size_t si = 0; si < submeshes.size(); ++si)
+                            {
+                                if (!render->getSubmeshVisible(si)) continue;
+
+                                const auto& sm = submeshes[si];
+
+                                if (sm.materialID >= materials.size()) continue;
+                                const auto& mat = materials[sm.materialID];
+                                if (mat.variants.empty()) continue;
+
+                                int varIdx = render->getMaterialSelectedVariant(sm.materialID);
+                                if (varIdx < 0 || varIdx >= (int)mat.variants.size()) varIdx = 0;
+                                const auto& variant = mat.variants[varIdx];
+
+                                if (variant.textureIndexA != selectedTextureIndex &&
+                                    variant.textureIndexB != selectedTextureIndex)
+                                    continue;
+
+                                for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
+                                {
+                                    uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
+                                    uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
+                                    uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
+
+                                    if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+                                        continue;
+
+                                    const auto& v0 = vertices[i0];
+                                    const auto& v1 = vertices[i1];
+                                    const auto& v2 = vertices[i2];
+
+                                    ImVec2 p0(imgPos.x + v0.uv1.x * maxDim, imgPos.y + (1.0f - v0.uv1.y) * maxDim);
+                                    ImVec2 p1(imgPos.x + v1.uv1.x * maxDim, imgPos.y + (1.0f - v1.uv1.y) * maxDim);
+                                    ImVec2 p2(imgPos.x + v2.uv1.x * maxDim, imgPos.y + (1.0f - v2.uv1.y) * maxDim);
+
+                                    drawList->AddLine(p0, p1, uvColor, 1.0f);
+                                    drawList->AddLine(p1, p2, uvColor, 1.0f);
+                                    drawList->AddLine(p2, p0, uvColor, 1.0f);
+                                }
+                            }
+                        }
                     }
                     ImGui::Separator();
                     ImGui::Text("Path: %s", tex.path.c_str());
@@ -362,15 +481,20 @@ namespace UI_Models
             {
                 std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+                size_t extPos = fileName.rfind('.');
+                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
                 sExportInProgress = true;
                 sExportProgress = 0;
                 sExportTotal = 100;
                 sExportStatus = "Starting export...";
 
-                std::thread([render, dirPath]() {
+                std::thread([render, dirPath, exportName]() {
                     M3Export::ExportSettings settings;
                     settings.outputPath = dirPath;
+                    settings.customName = exportName;
                     settings.activeVariant = render->getActiveVariant();
                     settings.exportTextures = true;
                     settings.exportAnimations = true;
@@ -402,15 +526,20 @@ namespace UI_Models
             {
                 std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+                size_t extPos = fileName.rfind('.');
+                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
                 sExportInProgress = true;
                 sExportProgress = 0;
                 sExportTotal = 100;
                 sExportStatus = "Starting export...";
 
-                std::thread([render, dirPath]() {
+                std::thread([render, dirPath, exportName]() {
                     M3Export::ExportSettings settings;
                     settings.outputPath = dirPath;
+                    settings.customName = exportName;
                     settings.activeVariant = render->getActiveVariant();
                     settings.exportTextures = true;
                     settings.exportAnimations = true;
@@ -439,17 +568,12 @@ namespace UI_Models
         if (sExportInProgress.load())
         {
             ImGuiViewport* vp = ImGui::GetMainViewport();
-            float popupWidth = 300.0f;
-            float popupHeight = 80.0f;
-            float popupX = vp->Pos.x + (vp->Size.x - popupWidth) * 0.5f;
-            float popupY = vp->Pos.y + (vp->Size.y - popupHeight) * 0.5f;
-
-            ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_Always);
-            ImGui::SetNextWindowSize(ImVec2(popupWidth, popupHeight), ImGuiCond_Always);
+            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
             ImGui::SetNextWindowBgAlpha(0.95f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
 
-            ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+            ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
 
             if (ImGui::Begin("##ExportProgress", nullptr, flags))
             {
@@ -462,7 +586,7 @@ namespace UI_Models
                 ImGui::Text("Exporting...");
                 ImGui::Text("%s", status.c_str());
                 float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
-                ImGui::ProgressBar(progress, ImVec2(-1, 20));
+                ImGui::ProgressBar(progress, ImVec2(250, 20));
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -487,11 +611,9 @@ namespace UI_Models
             float alpha = std::min(1.0f, sNotificationTimer);
 
             ImGuiViewport* vp = ImGui::GetMainViewport();
-            float notifWidth = 250.0f;
-            float notifX = vp->Pos.x + (vp->Size.x - notifWidth) * 0.5f;
-            float notifY = vp->Pos.y + 60.0f;
+            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 60.0f);
 
-            ImGui::SetNextWindowPos(ImVec2(notifX, notifY), ImGuiCond_Always);
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
             ImGui::SetNextWindowBgAlpha(0.85f * alpha);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);

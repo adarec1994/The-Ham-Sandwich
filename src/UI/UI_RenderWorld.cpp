@@ -252,6 +252,9 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
         100000.0f
     );
 
+    gViewMatrix = view;
+    gProjMatrix = projection;
+
     if (gLoadedModel)
     {
         gLoadedModel->updateAnimation(ImGui::GetIO().DeltaTime);

@@ -12,6 +12,7 @@
 #include <locale>
 #include <sstream>
 #include <iomanip>
+#include <iostream>
 
 namespace M3Export
 {
@@ -148,17 +149,20 @@ namespace M3Export
     static std::string EscapeJsonString(const std::string& s)
     {
         std::string result;
-        for (char c : s)
+        for (unsigned char c : s)
         {
-            switch (c)
+            if (c == '"') result += "\\\"";
+            else if (c == '\\') result += "\\\\";
+            else if (c == '\n') result += "\\n";
+            else if (c == '\r') result += "\\r";
+            else if (c == '\t') result += "\\t";
+            else if (c < 32)
             {
-                case '"': result += "\\\""; break;
-                case '\\': result += "\\\\"; break;
-                case '\n': result += "\\n"; break;
-                case '\r': result += "\\r"; break;
-                case '\t': result += "\\t"; break;
-                default: result += c; break;
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", c);
+                result += buf;
             }
+            else result += c;
         }
         return result;
     }
@@ -196,30 +200,64 @@ namespace M3Export
 
     static std::vector<uint8_t> LoadTextureAsPNG(const ArchivePtr& arc, const std::string& path)
     {
-        if (!arc || path.empty()) return {};
+        if (!arc || path.empty())
+        {
+            std::cout << "[M3Export] LoadTexture: empty path or no archive" << std::endl;
+            return {};
+        }
+
+        std::cout << "[M3Export] Loading texture: " << path << std::endl;
 
         std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
         std::wstring wp = conv.from_bytes(path);
-        if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
+
+        if (wp.find(L".tex") == std::wstring::npos)
+            wp += L".tex";
 
         auto entry = arc->getByPath(wp);
         if (!entry)
         {
-            std::replace(wp.begin(), wp.end(), L'/', L'\\');
-            entry = arc->getByPath(wp);
+            std::wstring wp2 = wp;
+            std::replace(wp2.begin(), wp2.end(), L'/', L'\\');
+            entry = arc->getByPath(wp2);
+            if (!entry)
+            {
+                std::replace(wp2.begin(), wp2.end(), L'\\', L'/');
+                entry = arc->getByPath(wp2);
+            }
         }
-        if (!entry) return {};
+
+        if (!entry)
+        {
+            std::cout << "[M3Export] Could not find texture in archive" << std::endl;
+            return {};
+        }
 
         std::vector<uint8_t> buffer;
         arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
-        if (buffer.empty()) return {};
+        if (buffer.empty())
+        {
+            std::cout << "[M3Export] Texture file is empty" << std::endl;
+            return {};
+        }
+
+        std::cout << "[M3Export] Read " << buffer.size() << " bytes" << std::endl;
 
         Tex::File tf;
-        if (!tf.readFromMemory(buffer.data(), buffer.size())) return {};
+        if (!tf.readFromMemory(buffer.data(), buffer.size()))
+        {
+            std::cout << "[M3Export] Failed to parse .tex file" << std::endl;
+            return {};
+        }
 
         Tex::ImageRGBA img;
-        if (!tf.decodeLargestMipToRGBA(img)) return {};
+        if (!tf.decodeLargestMipToRGBA(img))
+        {
+            std::cout << "[M3Export] Failed to decode texture" << std::endl;
+            return {};
+        }
 
+        std::cout << "[M3Export] Decoded texture: " << img.width << "x" << img.height << std::endl;
         return EncodePNG(img.rgba.data(), img.width, img.height);
     }
 
@@ -239,7 +277,9 @@ namespace M3Export
         if (outputDir.empty()) { result.errorMessage = "No output path"; return result; }
 
         std::filesystem::create_directories(outputDir);
-        std::string baseName = ExtractModelName(render->getModelName());
+        std::string baseName = settings.customName.empty()
+            ? ExtractModelName(render->getModelName())
+            : SanitizeFilename(settings.customName);
         std::string glbPath = outputDir + "/" + baseName + ".glb";
 
         if (progress) progress(0, 100, "Collecting geometry...");
@@ -249,6 +289,12 @@ namespace M3Export
         const auto& submeshes = render->getAllSubmeshes();
         const auto& materials = render->getAllMaterials();
         const auto& textures = render->getAllTextures();
+
+        std::cout << "[M3Export] Model: " << baseName << std::endl;
+        std::cout << "[M3Export] Submeshes: " << submeshes.size() << std::endl;
+        std::cout << "[M3Export] Materials: " << materials.size() << std::endl;
+        std::cout << "[M3Export] Textures: " << textures.size() << std::endl;
+        std::cout << "[M3Export] Archive: " << (archive ? "yes" : "NO") << std::endl;
 
         struct SubmeshExport
         {
@@ -267,7 +313,10 @@ namespace M3Export
 
         for (size_t si = 0; si < submeshes.size(); ++si)
         {
-            if (!render->getSubmeshVisible(si))
+            bool visible = render->getSubmeshVisible(si);
+            std::cout << "[M3Export] Submesh " << si << " visible: " << (visible ? "yes" : "no") << std::endl;
+
+            if (!visible)
                 continue;
 
             const auto& sm = submeshes[si];
@@ -299,7 +348,7 @@ namespace M3Export
                     const auto& v = allVertices[globalIdx];
                     se.positions.push_back(v.position);
                     se.normals.push_back(v.normal);
-                    se.uvs.push_back(glm::vec2(v.uv1.x, 1.0f - v.uv1.y));
+                    se.uvs.push_back(v.uv1);  // Use original UVs without flip
                     se.indices.push_back(newIdx);
                 }
             }
@@ -312,7 +361,9 @@ namespace M3Export
             }
         }
 
-        if (exportList.empty()) { result.errorMessage = "No geometry"; return result; }
+        if (exportList.empty()) { result.errorMessage = "No visible submeshes"; return result; }
+
+        std::cout << "[M3Export] Exporting " << exportList.size() << " submeshes" << std::endl;
 
         result.vertexCount = static_cast<int>(totalVerts);
         result.triangleCount = static_cast<int>(totalTris);
@@ -320,42 +371,91 @@ namespace M3Export
         if (progress) progress(10, 100, "Loading textures...");
 
         struct TexData { std::vector<uint8_t> png; size_t bufOff, bufLen; std::string name; };
-        std::vector<TexData> loadedTex;
-        std::unordered_map<int, int> texIdxToGltfMat;
+        std::vector<TexData> loadedImages;
+        std::unordered_map<int, int> texIdxToGltfImage;
+        std::unordered_map<std::string, int> pathToGltfImage;
+
+        auto LoadAndRegisterTexture = [&](int texIdx, const std::string& path) -> int {
+            if (texIdx < 0 && path.empty()) return -1;
+
+            std::string texPath = path;
+            if (texPath.empty() && texIdx >= 0 && texIdx < (int)textures.size())
+                texPath = textures[texIdx].path;
+            if (texPath.empty()) return -1;
+
+            auto pathIt = pathToGltfImage.find(texPath);
+            if (pathIt != pathToGltfImage.end())
+                return pathIt->second;
+
+            auto png = LoadTextureAsPNG(archive, texPath);
+            if (png.empty()) return -1;
+
+            int imgIdx = static_cast<int>(loadedImages.size());
+            std::string texName = texPath;
+            size_t slash = texName.rfind('/');
+            if (slash == std::string::npos) slash = texName.rfind('\\');
+            if (slash != std::string::npos) texName = texName.substr(slash + 1);
+            texName = SanitizeFilename(texName);
+            if (texName.empty()) texName = "texture_" + std::to_string(imgIdx);
+
+            loadedImages.push_back({std::move(png), 0, 0, texName});
+            pathToGltfImage[texPath] = imgIdx;
+            if (texIdx >= 0) texIdxToGltfImage[texIdx] = imgIdx;
+
+            std::cout << "[M3Export] Loaded texture: " << texPath << " as image " << imgIdx << std::endl;
+            return imgIdx;
+        };
+
+        struct GltfMaterial {
+            std::string name;
+            int diffuseImage = -1;
+            int normalImage = -1;
+        };
+        std::vector<GltfMaterial> gltfMaterials;
+        std::unordered_map<uint16_t, int> matIdToGltfMat;
 
         if (settings.exportTextures && archive)
         {
-            for (size_t ti = 0; ti < textures.size(); ++ti)
+            for (const auto& se : exportList)
             {
-                auto png = LoadTextureAsPNG(archive, textures[ti].path);
-                if (!png.empty())
+                if (matIdToGltfMat.count(se.materialId)) continue;
+
+                int gltfMatIdx = -1;
+                if (se.materialId < materials.size())
                 {
-                    texIdxToGltfMat[static_cast<int>(ti)] = static_cast<int>(loadedTex.size());
-                    std::string texName = textures[ti].path;
-                    size_t slash = texName.rfind('/');
-                    if (slash == std::string::npos) slash = texName.rfind('\\');
-                    if (slash != std::string::npos) texName = texName.substr(slash + 1);
-                    loadedTex.push_back({std::move(png), 0, 0, texName});
+                    const auto& mat = materials[se.materialId];
+                    std::cout << "[M3Export] Processing material " << se.materialId << " with " << mat.variants.size() << " variants" << std::endl;
+
+                    if (!mat.variants.empty())
+                    {
+                        int variantIdx = render->getMaterialSelectedVariant(se.materialId);
+                        if (variantIdx < 0 || variantIdx >= (int)mat.variants.size())
+                            variantIdx = 0;
+                        const auto& variant = mat.variants[variantIdx];
+
+                        int diffuseImg = LoadAndRegisterTexture(variant.textureIndexA, variant.textureColorPath);
+                        int normalImg = LoadAndRegisterTexture(variant.textureIndexB, variant.textureNormalPath);
+
+                        if (diffuseImg >= 0 || normalImg >= 0)
+                        {
+                            gltfMatIdx = static_cast<int>(gltfMaterials.size());
+                            GltfMaterial gm;
+                            gm.name = "Material_" + std::to_string(se.materialId);
+                            gm.diffuseImage = diffuseImg;
+                            gm.normalImage = normalImg;
+                            gltfMaterials.push_back(gm);
+
+                            std::cout << "[M3Export] Material " << se.materialId << " -> glTF material " << gltfMatIdx
+                                      << " (diffuse=" << diffuseImg << ", normal=" << normalImg << ")" << std::endl;
+                        }
+                    }
                 }
+                matIdToGltfMat[se.materialId] = gltfMatIdx;
             }
         }
-        result.textureCount = static_cast<int>(loadedTex.size());
 
-        std::unordered_map<uint16_t, int> matIdToGltfMat;
-        for (const auto& se : exportList)
-        {
-            if (matIdToGltfMat.count(se.materialId)) continue;
-
-            int gltfMat = -1;
-            if (se.materialId < materials.size() && !materials[se.materialId].variants.empty())
-            {
-                int texIdx = materials[se.materialId].variants[0].textureIndexA;
-                auto it = texIdxToGltfMat.find(texIdx);
-                if (it != texIdxToGltfMat.end())
-                    gltfMat = it->second;
-            }
-            matIdToGltfMat[se.materialId] = gltfMat;
-        }
+        std::cout << "[M3Export] Created " << gltfMaterials.size() << " materials, " << loadedImages.size() << " images" << std::endl;
+        result.textureCount = static_cast<int>(loadedImages.size());
 
         if (progress) progress(30, 100, "Building binary buffer...");
 
@@ -371,6 +471,8 @@ namespace M3Export
             MeshData md;
             md.name = se.name;
             md.matIdx = matIdToGltfMat.count(se.materialId) ? matIdToGltfMat[se.materialId] : -1;
+
+            std::cout << "[M3Export] Mesh '" << se.name << "' (M3 mat " << se.materialId << ") -> glTF material " << md.matIdx << std::endl;
 
             glm::vec3 minP(FLT_MAX), maxP(-FLT_MAX);
             size_t posOff = bin.size();
@@ -398,7 +500,7 @@ namespace M3Export
             size_t uvOff = bin.size();
             for (const auto& uv : se.uvs)
             {
-                WriteF32(bin, uv.x); WriteF32(bin, uv.y);
+                WriteF32(bin, uv.x); WriteF32(bin, uv.y);  // Already flipped during collection
             }
             Pad(bin, 4);
             views.push_back({uvOff, se.uvs.size() * 8, 34962});
@@ -415,7 +517,7 @@ namespace M3Export
             meshes.push_back(md);
         }
 
-        for (auto& t : loadedTex)
+        for (auto& t : loadedImages)
         {
             t.bufOff = bin.size();
             bin.insert(bin.end(), t.png.begin(), t.png.end());
@@ -459,20 +561,25 @@ namespace M3Export
         }
         json += "],";
 
-        if (!loadedTex.empty())
+        if (!gltfMaterials.empty())
         {
             json += "\"materials\":[";
-            for (size_t i = 0; i < loadedTex.size(); ++i)
+            for (size_t i = 0; i < gltfMaterials.size(); ++i)
             {
+                const auto& mat = gltfMaterials[i];
                 if (i > 0) json += ",";
-                json += "{\"name\":\"" + EscapeJsonString(loadedTex[i].name) + "\",\"pbrMetallicRoughness\":{";
-                json += "\"baseColorTexture\":{\"index\":" + std::to_string(i) + "},";
-                json += "\"metallicFactor\":0,\"roughnessFactor\":1}}";
+                json += "{\"name\":\"" + EscapeJsonString(mat.name) + "\",\"pbrMetallicRoughness\":{";
+                if (mat.diffuseImage >= 0)
+                    json += "\"baseColorTexture\":{\"index\":" + std::to_string(mat.diffuseImage) + "},";
+                json += "\"metallicFactor\":0,\"roughnessFactor\":1}";
+                if (mat.normalImage >= 0)
+                    json += ",\"normalTexture\":{\"index\":" + std::to_string(mat.normalImage) + "}";
+                json += "}";
             }
             json += "],";
 
             json += "\"textures\":[";
-            for (size_t i = 0; i < loadedTex.size(); ++i)
+            for (size_t i = 0; i < loadedImages.size(); ++i)
             {
                 if (i > 0) json += ",";
                 json += "{\"source\":" + std::to_string(i) + "}";
@@ -480,11 +587,11 @@ namespace M3Export
             json += "],";
 
             json += "\"images\":[";
-            for (size_t i = 0; i < loadedTex.size(); ++i)
+            for (size_t i = 0; i < loadedImages.size(); ++i)
             {
                 if (i > 0) json += ",";
                 int vi = static_cast<int>(views.size());
-                views.push_back({loadedTex[i].bufOff, loadedTex[i].bufLen, 0});
+                views.push_back({loadedImages[i].bufOff, loadedImages[i].bufLen, 0});
                 json += "{\"bufferView\":" + std::to_string(vi) + ",\"mimeType\":\"image/png\"}";
             }
             json += "],";
@@ -549,6 +656,9 @@ namespace M3Export
         out.write(reinterpret_cast<char*>(bin.data()), bin.size());
 
         out.close();
+
+        std::cout << "[M3Export] Wrote " << glbPath << std::endl;
+        std::cout << "[M3Export] Meshes: " << meshes.size() << ", Materials: " << gltfMaterials.size() << ", Images: " << loadedImages.size() << std::endl;
 
         if (progress) progress(100, 100, "Done!");
 

@@ -100,6 +100,8 @@ static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shar
     state.m3Render = nullptr;
     state.show_models_window = false;
 
+    gPendingModelArchive = arc;
+
     std::string name = wstring_to_utf8(fileEntry->getEntryName());
     StartLoadingModel(arc, fileEntry, name);
 }

@@ -6,6 +6,7 @@
 #include <locale>
 #include <algorithm>
 #include <cmath>
+#include <cfloat>
 #include <set>
 
 const char* m3VertexSrc = R"(
@@ -43,11 +44,15 @@ out vec4 FragColor;
 in vec3 Normal;
 in vec2 TexCoord;
 uniform sampler2D diffTexture;
+uniform vec3 highlightColor;
+uniform float highlightMix;
 void main() {
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(Normal), lightDir), 0.3);
     vec3 texColor = texture(diffTexture, TexCoord).rgb;
-    FragColor = vec4(texColor * diff, 1.0);
+    vec3 baseColor = texColor * diff;
+    vec3 finalColor = mix(baseColor, highlightColor, highlightMix);
+    FragColor = vec4(finalColor, 1.0);
 }
 )";
 
@@ -285,6 +290,9 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
 
+    GLint highlightColorLoc = glGetUniformLocation(shaderProgram, "highlightColor");
+    GLint highlightMixLoc = glGetUniformLocation(shaderProgram, "highlightMix");
+
     bool useSkinning = (playingAnimation >= 0 && !boneMatrices.empty());
     glUniform1i(glGetUniformLocation(shaderProgram, "useSkinning"), useSkinning ? 1 : 0);
 
@@ -311,6 +319,14 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tid);
+
+        if ((int)i == selectedSubmesh) {
+            glUniform3f(highlightColorLoc, 0.3f, 1.0f, 0.3f);
+            glUniform1f(highlightMixLoc, 0.4f);
+        } else {
+            glUniform3f(highlightColorLoc, 0.0f, 0.0f, 0.0f);
+            glUniform1f(highlightMixLoc, 0.0f);
+        }
 
         glDrawElementsBaseVertex(
             GL_TRIANGLES,
@@ -598,4 +614,65 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
     glEnable(GL_DEPTH_TEST);
+}
+
+static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
+    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, float& t)
+{
+    const float EPSILON = 0.0000001f;
+    glm::vec3 edge1 = v1 - v0;
+    glm::vec3 edge2 = v2 - v0;
+    glm::vec3 h = glm::cross(dir, edge2);
+    float a = glm::dot(edge1, h);
+    if (a > -EPSILON && a < EPSILON) return false;
+    float f = 1.0f / a;
+    glm::vec3 s = orig - v0;
+    float u = f * glm::dot(s, h);
+    if (u < 0.0f || u > 1.0f) return false;
+    glm::vec3 q = glm::cross(s, edge1);
+    float v = f * glm::dot(dir, q);
+    if (v < 0.0f || u + v > 1.0f) return false;
+    t = f * glm::dot(edge2, q);
+    return t > EPSILON;
+}
+
+int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
+{
+    float closestT = FLT_MAX;
+    int closestSubmesh = -1;
+
+    const auto& verts = geometry.vertices;
+    const auto& indices = geometry.indices;
+
+    for (size_t si = 0; si < submeshes.size(); ++si)
+    {
+        if (si < submeshVisible.size() && submeshVisible[si] == 0) continue;
+
+        const auto& sm = submeshes[si];
+
+        for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
+        {
+            uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
+            uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
+            uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
+
+            if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
+
+            const glm::vec3& v0 = verts[i0].position;
+            const glm::vec3& v1 = verts[i1].position;
+            const glm::vec3& v2 = verts[i2].position;
+
+            float t;
+            if (rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, t))
+            {
+                if (t < closestT)
+                {
+                    closestT = t;
+                    closestSubmesh = static_cast<int>(si);
+                }
+            }
+        }
+    }
+
+    return closestSubmesh;
 }

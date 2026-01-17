@@ -54,6 +54,10 @@ public:
     bool getShowSkeleton() const { return showSkeleton; }
     void renderSkeleton(const glm::mat4& view, const glm::mat4& proj);
 
+    void setSelectedSubmesh(int idx) { selectedSubmesh = idx; }
+    int getSelectedSubmesh() const { return selectedSubmesh; }
+    int rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const;
+
     void playAnimation(int index);
     void stopAnimation();
     void pauseAnimation();
@@ -85,6 +89,7 @@ private:
     std::vector<M3SubmeshGroup> submeshGroups;
     int activeVariant = -1;
     bool showSkeleton = false;
+    int selectedSubmesh = -1;
     int playingAnimation = -1;
     float animationTime = 0.0f;
     bool animationPaused = false;

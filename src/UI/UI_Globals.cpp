@@ -10,6 +10,9 @@
 #include <atomic>
 #include <mutex>
 
+glm::mat4 gViewMatrix = glm::mat4(1.0f);
+glm::mat4 gProjMatrix = glm::mat4(1.0f);
+
 std::vector<AreaFilePtr> gLoadedAreas;
 
 AreaChunkRenderPtr gSelectedChunk = nullptr;
@@ -95,7 +98,7 @@ void ProcessModelLoading(AppState& state)
     }
 
     gIsLoadingModel = false;
-    gPendingModelArchive = nullptr;
+    // Keep gPendingModelArchive for export - don't clear it
     gPendingModelFile = nullptr;
     gLoadingModelName.clear();
     gLoadedModelData = M3ModelData();

@@ -4,9 +4,13 @@
 #include <vector>
 #include <utility>
 #include <atomic>
+#include <glm/glm.hpp>
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
 #include "../Archive.h"
+
+extern glm::mat4 gViewMatrix;
+extern glm::mat4 gProjMatrix;
 
 extern std::vector<AreaFilePtr> gLoadedAreas;
 
