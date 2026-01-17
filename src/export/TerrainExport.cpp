@@ -184,7 +184,7 @@ namespace TerrainExport
             if (!area) continue;
             for (const auto& chunk : area->getChunks())
             {
-                if (!chunk || !chunk->isFullyInitialized()) continue;
+                if (!chunk) continue;
                 const uint32_t* ids = chunk->getWorldLayerIDs();
                 for (int i = 0; i < 4; i++) if (ids[i]) uniqueLayerIds.insert(ids[i]);
             }
