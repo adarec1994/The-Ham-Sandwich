@@ -15,6 +15,7 @@
 #include "../tex/tex.h"
 
 #include <imgui.h>
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cfloat>
 
@@ -92,9 +93,94 @@ static void RenderLoadingOverlay()
     ImGui::PopStyleVar(2);
 }
 
+static void RenderDumpFolderDialog(AppState& state)
+{
+    if (gShowDumpFolderDialog)
+    {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        config.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog("DumpFolderDlg", "Select Output Folder", nullptr, config);
+        gShowDumpFolderDialog = false;
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("DumpFolderDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+    {
+        if (ImGuiFileDialog::Instance()->IsOk())
+        {
+            std::string outputPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+            StartDumpAll(state.archives, outputPath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
+static void RenderDumpOverlay()
+{
+    if (!gIsDumping) return;
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowBgAlpha(0.7f);
+
+    ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                     ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::Begin("##DumpOverlay", nullptr, overlayFlags);
+    ImGui::End();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+
+    float minWidth = 400.0f;
+    float maxWidth = viewport->Size.x * 0.8f;
+    float windowWidth = std::clamp(500.0f, minWidth, maxWidth);
+
+    ImVec2 windowPos(
+        viewport->Pos.x + (viewport->Size.x - windowWidth) * 0.5f,
+        viewport->Pos.y + (viewport->Size.y - 140.0f) * 0.5f
+    );
+
+    ImGui::SetNextWindowPos(windowPos);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0), ImVec2(maxWidth, FLT_MAX));
+
+    ImGuiWindowFlags dumpFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+
+    if (ImGui::Begin("##DumpWindow", nullptr, dumpFlags))
+    {
+        ImGui::Text("Dumping files...");
+        ImGui::Spacing();
+
+        float progress = gDumpTotal > 0
+            ? static_cast<float>(gDumpCurrent) / static_cast<float>(gDumpTotal)
+            : 0.0f;
+
+        ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20));
+
+        ImGui::Spacing();
+
+        char countText[64];
+        snprintf(countText, sizeof(countText), "%d / %d files", gDumpCurrent, gDumpTotal);
+        ImGui::TextUnformatted(countText);
+
+        ImGui::PushTextWrapPos(windowWidth - 40.0f);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", gDumpCurrentFile.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(2);
+}
+
 void RenderUI(AppState& state)
 {
     ProcessAreaLoading(state);
+    ProcessDumping();
     HandleChunkPicking(state);
 
     if (!state.archivesLoaded)
@@ -253,7 +339,7 @@ void RenderUI(AppState& state)
             if (ImGui::Button("Models", ImVec2(strip_width, button_height)))
             {
                 if (state.active_tab_index == 2) state.sidebar_visible = !state.sidebar_visible;
-                else { state.active_tab_index == 2; state.sidebar_visible = true; }
+                else { state.active_tab_index = 2; state.sidebar_visible = true; }
             }
         }
         ImGui::PopStyleColor();
@@ -347,5 +433,7 @@ void RenderUI(AppState& state)
 
     UI_ChunkTextures::Draw(state);
 
+    RenderDumpFolderDialog(state);
+    RenderDumpOverlay();
     RenderLoadingOverlay();
 }

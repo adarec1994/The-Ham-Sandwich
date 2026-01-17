@@ -271,7 +271,14 @@ void UI_RenderFileTab(AppState& state, float& outContentWidth)
     }
     ImGui::Text("EXPLORER");
     ImGui::Separator();
-    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::Dummy(ImVec2(0, 5));
+
+    if (ImGui::Button("Dump All", ImVec2(-1, 0)))
+    {
+        gShowDumpFolderDialog = true;
+    }
+
+    ImGui::Dummy(ImVec2(0, 5));
 
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);

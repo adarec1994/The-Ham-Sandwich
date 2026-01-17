@@ -16,15 +16,33 @@ extern std::string gSelectedChunkAreaName;
 
 extern std::shared_ptr<M3Render> gLoadedModel;
 
-// Loading state
+
 extern bool gIsLoadingAreas;
 extern int gLoadingAreasCurrent;
 extern int gLoadingAreasTotal;
 extern std::string gLoadingAreasName;
 extern std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> gPendingAreaFiles;
 
-// Call this each frame to process pending area loads
+
 void ProcessAreaLoading(AppState& state);
 
-// Start loading areas from a folder
+
 void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry);
+
+
+extern bool gIsDumping;
+extern bool gShowDumpFolderDialog;
+extern int gDumpCurrent;
+extern int gDumpTotal;
+extern std::string gDumpCurrentFile;
+extern std::string gDumpOutputPath;
+
+struct DumpEntry {
+    ArchivePtr arc;
+    std::shared_ptr<FileEntry> file;
+    std::wstring relativePath;
+};
+extern std::vector<DumpEntry> gPendingDumpFiles;
+
+void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& outputPath);
+void ProcessDumping();
