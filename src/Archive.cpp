@@ -385,72 +385,88 @@ bool ArchiveFile::hasEntry(const uint8* hash) const
 
 bool ArchiveFile::getFileData(const uint8* hash, uint64 uncompressedSize, uint32 flags, std::vector<uint8>& content)
 {
-    for (auto& entry : mAarcTable) {
-        if (memcmp(entry.shaHash, hash, 20) != 0) continue;
+    std::vector<uint8> compressed;
 
-        auto& block = mDirectoryHeaders[entry.blockIndex];
-        mFile.seekg(block.directoryOffset, std::ios::beg);
+    {
+        std::lock_guard<std::mutex> lock(mFileMutex);
 
-        std::vector<uint8> compressed((size_t)block.blockSize);
-        mFile.read(reinterpret_cast<char*>(compressed.data()), block.blockSize);
+        for (auto& entry : mAarcTable) {
+            if (memcmp(entry.shaHash, hash, 20) != 0) continue;
 
-        if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
-            content = std::move(compressed);
-            return true;
+            auto& block = mDirectoryHeaders[entry.blockIndex];
+            mFile.seekg(block.directoryOffset, std::ios::beg);
+
+            compressed.resize((size_t)block.blockSize);
+            mFile.read(reinterpret_cast<char*>(compressed.data()), block.blockSize);
+            break;
+        }
+    }
+
+    if (compressed.empty()) return false;
+
+    if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
+        content = std::move(compressed);
+        return true;
+    }
+
+    if (flags == 3) {
+        uint32 outSize = (uint32)uncompressedSize;
+        content.resize(outSize);
+
+        z_stream zs{};
+        zs.next_in = compressed.data();
+        zs.avail_in = (uInt)compressed.size();
+        zs.next_out = content.data();
+        zs.avail_out = (uInt)content.size();
+
+        if (inflateInit(&zs) != Z_OK) return false;
+        int ret = inflate(&zs, Z_FINISH);
+        inflateEnd(&zs);
+
+        if (ret != Z_STREAM_END) return false;
+        content.resize(zs.total_out);
+        return true;
+    }
+
+    if (compressed.size() > 5 && compressed[0] == 0x5D) {
+        uint64 outSize = uncompressedSize;
+        content.resize((size_t)outSize);
+
+        lzma_stream strm = LZMA_STREAM_INIT;
+        lzma_filter filters[2] = {};
+        filters[0].id = LZMA_FILTER_LZMA1;
+        filters[1].id = LZMA_VLI_UNKNOWN;
+
+        lzma_ret ret = lzma_properties_decode(&filters[0], nullptr, compressed.data(), 5);
+        if (ret != LZMA_OK) {
+            free(filters[0].options);
+            return false;
         }
 
-        if (flags == 3) {
-            uint32 outSize = (uint32)uncompressedSize;
-            content.resize(outSize);
+        ret = lzma_raw_decoder(&strm, filters);
+        free(filters[0].options);
 
-            z_stream zs{};
-            zs.next_in = compressed.data();
-            zs.avail_in = (uInt)compressed.size();
-            zs.next_out = content.data();
-            zs.avail_out = (uInt)content.size();
-
-            if (inflateInit(&zs) != Z_OK) return false;
-            int ret = inflate(&zs, Z_FINISH);
-            inflateEnd(&zs);
-
-            if (ret != Z_STREAM_END) return false;
-            content.resize(zs.total_out);
-            return true;
+        if (ret != LZMA_OK) {
+            return false;
         }
 
-        if (compressed.size() > 5 && compressed[0] == 0x5D) {
-            uint32 outSize = (uint32)uncompressedSize;
-            content.resize(outSize);
+        strm.next_in = compressed.data() + 5;
+        strm.avail_in = compressed.size() - 5;
+        strm.next_out = content.data();
+        strm.avail_out = content.size();
 
-            lzma_filter filters[2]{};
-            filters[0].id = LZMA_FILTER_LZMA1;
-            filters[1].id = LZMA_VLI_UNKNOWN;
+        ret = lzma_code(&strm, LZMA_FINISH);
 
-            lzma_ret ret = lzma_properties_decode(&filters[0], nullptr, compressed.data(), 5);
-            if (ret != LZMA_OK) return false;
+        size_t decompressedSize = strm.total_out;
+        lzma_end(&strm);
 
-            lzma_stream strm = LZMA_STREAM_INIT;
-            ret = lzma_raw_decoder(&strm, filters);
-            if (ret != LZMA_OK) return false;
-
-            strm.next_in = compressed.data() + 5;
-            strm.avail_in = compressed.size() - 5;
-            strm.next_out = content.data();
-            strm.avail_out = content.size();
-
-            while (true) {
-                ret = lzma_code(&strm, LZMA_RUN);
-                if (ret == LZMA_STREAM_END) break;
-                if (ret != LZMA_OK) {
-                    lzma_end(&strm);
-                    return false;
-                }
-                if (strm.avail_out == 0) break;
-            }
-
-            lzma_end(&strm);
-            return true;
+        if (ret != LZMA_STREAM_END && ret != LZMA_OK) {
+            content.resize(decompressedSize);
+            return decompressedSize > 0;
         }
+
+        content.resize(decompressedSize);
+        return true;
     }
 
     return false;
@@ -706,79 +722,96 @@ bool Archive::openFileStream(FileEntryPtr file, std::vector<uint8>& content)
         return mCoreData->getFileData(hash, uncompressedSize, flags, content);
     }
 
-    for (auto& entry : mAarcTable) {
-        if (memcmp(entry.shaHash, hash, 20) != 0) continue;
+    std::vector<uint8> compressed;
 
-        auto& block = mPkDirectoryHeaders[entry.blockIndex];
+    {
+        std::lock_guard<std::mutex> lock(mPackFileMutex);
 
-        pkSeek(block.directoryOffset);
+        for (auto& entry : mAarcTable) {
+            if (memcmp(entry.shaHash, hash, 20) != 0) continue;
 
-        std::vector<uint8> compressed((size_t)block.blockSize);
-        pkRead(compressed.data(), (uint32)block.blockSize);
+            auto& block = mPkDirectoryHeaders[entry.blockIndex];
 
-        if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
-            content = std::move(compressed);
-            return true;
+            pkSeek(block.directoryOffset);
+
+            compressed.resize((size_t)block.blockSize);
+            pkRead(compressed.data(), (uint32)block.blockSize);
+            break;
+        }
+    }
+
+    if (compressed.empty()) return false;
+
+    if (flags != 3 && !(compressed.size() > 5 && compressed[0] == 0x5D)) {
+        content = std::move(compressed);
+        return true;
+    }
+
+    if (flags == 3) {
+        uint32 outSize = (uint32)uncompressedSize;
+        content.resize(outSize);
+
+        z_stream zs{};
+        zs.next_in = compressed.data();
+        zs.avail_in = (uInt)compressed.size();
+        zs.next_out = content.data();
+        zs.avail_out = (uInt)content.size();
+
+        if (inflateInit(&zs) != Z_OK)
+            throw std::runtime_error("zlib init failed");
+
+        int ret = inflate(&zs, Z_FINISH);
+        inflateEnd(&zs);
+
+        if (ret != Z_STREAM_END)
+            throw std::runtime_error("zlib inflate failed");
+
+        content.resize(zs.total_out);
+        return true;
+    }
+
+    if (compressed.size() > 5 && compressed[0] == 0x5D) {
+        uint64 outSize = uncompressedSize;
+        content.resize((size_t)outSize);
+
+        lzma_stream strm = LZMA_STREAM_INIT;
+        lzma_filter filters[2] = {};
+        filters[0].id = LZMA_FILTER_LZMA1;
+        filters[1].id = LZMA_VLI_UNKNOWN;
+
+        lzma_ret ret = lzma_properties_decode(&filters[0], nullptr, compressed.data(), 5);
+        if (ret != LZMA_OK) {
+            free(filters[0].options);
+            throw std::runtime_error("LZMA properties decode failed");
         }
 
-        if (flags == 3) {
-            uint32 outSize = (uint32)uncompressedSize;
-            content.resize(outSize);
+        ret = lzma_raw_decoder(&strm, filters);
+        free(filters[0].options);
 
-            z_stream zs{};
-            zs.next_in = compressed.data();
-            zs.avail_in = (uInt)compressed.size();
-            zs.next_out = content.data();
-            zs.avail_out = (uInt)content.size();
-
-            if (inflateInit(&zs) != Z_OK)
-                throw std::runtime_error("zlib init failed");
-
-            int ret = inflate(&zs, Z_FINISH);
-            inflateEnd(&zs);
-
-            if (ret != Z_STREAM_END)
-                throw std::runtime_error("zlib inflate failed");
-
-            content.resize(zs.total_out);
-            return true;
+        if (ret != LZMA_OK) {
+            throw std::runtime_error("LZMA raw decoder init failed");
         }
 
-        if (compressed.size() > 5 && compressed[0] == 0x5D) {
-            uint32 outSize = (uint32)uncompressedSize;
-            content.resize(outSize);
+        strm.next_in = compressed.data() + 5;
+        strm.avail_in = compressed.size() - 5;
+        strm.next_out = content.data();
+        strm.avail_out = content.size();
 
-            lzma_filter filters[2]{};
-            filters[0].id = LZMA_FILTER_LZMA1;
-            filters[1].id = LZMA_VLI_UNKNOWN;
+        ret = lzma_code(&strm, LZMA_FINISH);
 
-            lzma_ret ret = lzma_properties_decode(&filters[0], nullptr, compressed.data(), 5);
-            if (ret != LZMA_OK)
-                throw std::runtime_error("LZMA properties decode failed");
+        size_t decompressedSize = strm.total_out;
+        lzma_end(&strm);
 
-            lzma_stream strm = LZMA_STREAM_INIT;
-            ret = lzma_raw_decoder(&strm, filters);
-            if (ret != LZMA_OK)
-                throw std::runtime_error("LZMA raw decoder init failed");
-
-            strm.next_in = compressed.data() + 5;
-            strm.avail_in = compressed.size() - 5;
-            strm.next_out = content.data();
-            strm.avail_out = content.size();
-
-            while (true) {
-                ret = lzma_code(&strm, LZMA_RUN);
-                if (ret == LZMA_STREAM_END) break;
-                if (ret != LZMA_OK) {
-                    lzma_end(&strm);
-                    throw std::runtime_error("LZMA decode failed");
-                }
-                if (strm.avail_out == 0) break;
+        if (ret != LZMA_STREAM_END && ret != LZMA_OK) {
+            content.resize(decompressedSize);
+            if (decompressedSize > 0) {
+                return true;
             }
-
-            lzma_end(&strm);
-            return true;
+            throw std::runtime_error("LZMA decode failed");
         }
+
+        content.resize(decompressedSize);
+        return true;
     }
 
     return false;

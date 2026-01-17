@@ -12,6 +12,7 @@
 #include <regex>
 #include <sstream>
 #include <unordered_map>
+#include <mutex>
 
 typedef uint32_t uint32;
 typedef uint64_t uint64;
@@ -197,6 +198,7 @@ class ArchiveFile : public std::enable_shared_from_this<ArchiveFile>
     std::vector<AARCEntry> mAarcTable;
     uint32 mDirCount = 0;
     uint64 mDirStart = 0;
+    mutable std::mutex mFileMutex;
 
 public:
     ArchiveFile(const std::filesystem::path& archivePath);
@@ -236,6 +238,7 @@ class Archive : public std::enable_shared_from_this<Archive>
 
     std::unordered_map<std::string, FileEntryPtr> mFileCache;
     bool mCacheBuilt = false;
+    mutable std::mutex mPackFileMutex;
 
     void loadIndexTree();
     void buildFileCache();

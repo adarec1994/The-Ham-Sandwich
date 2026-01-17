@@ -254,6 +254,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
 
     if (gLoadedModel)
     {
+        gLoadedModel->updateAnimation(ImGui::GetIO().DeltaTime);
         gLoadedModel->render(view, projection);
         gLoadedModel->renderSkeleton(view, projection);
     }

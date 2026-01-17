@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <atomic>
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
 #include "../Archive.h"
@@ -15,6 +16,14 @@ extern int gSelectedAreaIndex;
 extern std::string gSelectedChunkAreaName;
 
 extern std::shared_ptr<M3Render> gLoadedModel;
+
+extern bool gIsLoadingModel;
+extern std::string gLoadingModelName;
+extern ArchivePtr gPendingModelArchive;
+extern std::shared_ptr<FileEntry> gPendingModelFile;
+
+void ProcessModelLoading(AppState& state);
+void StartLoadingModel(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& name);
 
 
 extern bool gIsLoadingAreas;
@@ -30,9 +39,9 @@ void ProcessAreaLoading(AppState& state);
 void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry);
 
 
-extern bool gIsDumping;
+extern std::atomic<bool> gIsDumping;
 extern bool gShowDumpFolderDialog;
-extern int gDumpCurrent;
+extern std::atomic<int> gDumpCurrent;
 extern int gDumpTotal;
 extern std::string gDumpCurrentFile;
 extern std::string gDumpOutputPath;

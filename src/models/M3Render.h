@@ -50,6 +50,14 @@ public:
     bool getShowSkeleton() const { return showSkeleton; }
     void renderSkeleton(const glm::mat4& view, const glm::mat4& proj);
 
+    void playAnimation(int index);
+    void stopAnimation();
+    int getPlayingAnimation() const { return playingAnimation; }
+    bool isAnimationPlaying() const { return playingAnimation >= 0; }
+    void updateAnimation(float deltaTime);
+    float getAnimationTime() const { return animationTime; }
+    float getAnimationDuration() const;
+
 private:
     unsigned int VAO = 0, VBO = 0, EBO = 0;
     unsigned int shaderProgram = 0;
@@ -69,6 +77,9 @@ private:
     std::vector<M3SubmeshGroup> submeshGroups;
     int activeVariant = -1;
     bool showSkeleton = false;
+    int playingAnimation = -1;
+    float animationTime = 0.0f;
+    std::vector<glm::mat4> boneMatrices;
 
     unsigned int skeletonVAO = 0, skeletonVBO = 0;
     unsigned int skeletonProgram = 0;

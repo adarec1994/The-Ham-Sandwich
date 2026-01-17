@@ -96,42 +96,12 @@ static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shar
 {
     if (!arc || !fileEntry) return;
 
-    gLoadedAreas.clear();
     state.currentArea.reset();
-
-    gLoadedModel = nullptr;
     state.m3Render = nullptr;
     state.show_models_window = false;
 
     std::string name = wstring_to_utf8(fileEntry->getEntryName());
-    std::cout << "Loading M3 Model: " << name << std::endl;
-
-    M3ModelData data = M3Loader::LoadFromFile(arc, fileEntry);
-    if (data.success)
-    {
-        gLoadedModel = std::make_shared<M3Render>(data, arc);
-        gLoadedModel->setModelName(name);
-        state.m3Render = gLoadedModel;
-        state.show_models_window = true;
-
-        std::cout << "M3 Loaded. Vertices: " << data.geometry.vertices.size() << ", Indices: " << data.geometry.indices.size() << std::endl;
-
-        glm::vec3 boundsMin(std::numeric_limits<float>::max());
-        glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
-        for (const auto& v : data.geometry.vertices)
-        {
-            boundsMin = glm::min(boundsMin, v.position);
-            boundsMax = glm::max(boundsMax, v.position);
-        }
-        SnapCameraToModel(state, boundsMin, boundsMax);
-    }
-    else
-    {
-        std::cout << "Failed to parse M3 Model." << std::endl;
-        gLoadedModel = nullptr;
-        state.m3Render = nullptr;
-        state.show_models_window = false;
-    }
+    StartLoadingModel(arc, fileEntry, name);
 }
 
 static void RenderEntryRecursive_Impl(

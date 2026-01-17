@@ -18,6 +18,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 
 extern void PushSplashButtonColors();
 extern void PopSplashButtonColors();
@@ -28,69 +29,105 @@ extern unsigned int gCharacterIconTexture;
 
 static void RenderLoadingOverlay()
 {
-    if (!gIsLoadingAreas) return;
-
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(viewport->Size);
-    ImGui::SetNextWindowBgAlpha(0.7f);
-
-    ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
-                                     ImGuiWindowFlags_NoBringToFrontOnFocus;
-
-    ImGui::Begin("##LoadingOverlay", nullptr, overlayFlags);
-    ImGui::End();
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
-
-    char loadingText[512];
-    snprintf(loadingText, sizeof(loadingText), "Loading %s...", gLoadingAreasName.c_str());
-    float textWidth = ImGui::CalcTextSize(loadingText).x;
-
-    char countText[64];
-    snprintf(countText, sizeof(countText), "%d / %d areas", gLoadingAreasCurrent, gLoadingAreasTotal);
-    float countWidth = ImGui::CalcTextSize(countText).x;
-
-    float contentWidth = std::max(textWidth, countWidth);
-    float minWidth = 300.0f;
-    float maxWidth = viewport->Size.x * 0.8f;
-    float windowWidth = std::clamp(contentWidth + 60.0f, minWidth, maxWidth);
-
-    ImVec2 windowPos(
-        viewport->Pos.x + (viewport->Size.x - windowWidth) * 0.5f,
-        viewport->Pos.y + (viewport->Size.y - 120.0f) * 0.5f
-    );
-
-    ImGui::SetNextWindowPos(windowPos);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0), ImVec2(maxWidth, FLT_MAX));
-
-    ImGuiWindowFlags loadingFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
-
-    if (ImGui::Begin("##LoadingWindow", nullptr, loadingFlags))
+    if (gIsLoadingAreas)
     {
-        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
-        ImGui::TextUnformatted(loadingText);
-        ImGui::PopTextWrapPos();
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-        ImGui::Spacing();
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+        ImGui::SetNextWindowBgAlpha(0.7f);
 
-        float progress = gLoadingAreasTotal > 0
-            ? static_cast<float>(gLoadingAreasCurrent) / static_cast<float>(gLoadingAreasTotal)
-            : 0.0f;
+        ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-        ImGui::ProgressBar(progress, ImVec2(std::max(windowWidth - 40.0f, 260.0f), 20));
+        ImGui::Begin("##LoadingOverlay", nullptr, overlayFlags);
+        ImGui::End();
 
-        ImGui::Spacing();
-        ImGui::TextUnformatted(countText);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+
+        char loadingText[512];
+        snprintf(loadingText, sizeof(loadingText), "Loading %s...", gLoadingAreasName.c_str());
+        float textWidth = ImGui::CalcTextSize(loadingText).x;
+
+        char countText[64];
+        snprintf(countText, sizeof(countText), "%d / %d areas", gLoadingAreasCurrent, gLoadingAreasTotal);
+        float countWidth = ImGui::CalcTextSize(countText).x;
+
+        float contentWidth = std::max(textWidth, countWidth);
+        float minWidth = 300.0f;
+        float maxWidth = viewport->Size.x * 0.8f;
+        float windowWidth = std::clamp(contentWidth + 60.0f, minWidth, maxWidth);
+
+        ImVec2 windowPos(
+            viewport->Pos.x + (viewport->Size.x - windowWidth) * 0.5f,
+            viewport->Pos.y + (viewport->Size.y - 120.0f) * 0.5f
+        );
+
+        ImGui::SetNextWindowPos(windowPos);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(minWidth, 0), ImVec2(maxWidth, FLT_MAX));
+
+        ImGuiWindowFlags loadingFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+
+        if (ImGui::Begin("##LoadingWindow", nullptr, loadingFlags))
+        {
+            ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+            ImGui::TextUnformatted(loadingText);
+            ImGui::PopTextWrapPos();
+
+            ImGui::Spacing();
+
+            float progress = gLoadingAreasTotal > 0
+                ? static_cast<float>(gLoadingAreasCurrent) / static_cast<float>(gLoadingAreasTotal)
+                : 0.0f;
+
+            ImGui::ProgressBar(progress, ImVec2(std::max(windowWidth - 40.0f, 260.0f), 20));
+
+            ImGui::Spacing();
+            ImGui::TextUnformatted(countText);
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(2);
     }
-    ImGui::End();
 
-    ImGui::PopStyleVar(2);
+    if (gIsLoadingModel)
+    {
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImDrawList* drawList = ImGui::GetForegroundDrawList();
+
+        float viewportMin = std::min(viewport->Size.x, viewport->Size.y);
+        float spinnerRadius = viewportMin * 0.08f;
+        float thickness = spinnerRadius * 0.2f;
+
+        ImVec2 center(
+            viewport->Pos.x + viewport->Size.x * 0.5f,
+            viewport->Pos.y + viewport->Size.y * 0.5f
+        );
+
+        static float angle = 0.0f;
+        angle += ImGui::GetIO().DeltaTime * 5.0f;
+
+        int numSegments = 30;
+        float startAngle = angle;
+        float arcLength = 3.14159f * 1.5f;
+
+        for (int i = 0; i < numSegments; ++i)
+        {
+            float a1 = startAngle + (arcLength * i / numSegments);
+            float a2 = startAngle + (arcLength * (i + 1) / numSegments);
+
+            ImVec2 p1(center.x + std::cos(a1) * spinnerRadius, center.y + std::sin(a1) * spinnerRadius);
+            ImVec2 p2(center.x + std::cos(a2) * spinnerRadius, center.y + std::sin(a2) * spinnerRadius);
+
+            float alpha = (float)i / numSegments;
+            ImU32 segColor = IM_COL32(100, 180, 255, (int)(255 * alpha));
+            drawList->AddLine(p1, p2, segColor, thickness);
+        }
+    }
 }
 
 static void RenderDumpFolderDialog(AppState& state)
@@ -153,11 +190,16 @@ static void RenderDumpOverlay()
 
     if (ImGui::Begin("##DumpWindow", nullptr, dumpFlags))
     {
-        ImGui::Text("Dumping files...");
+        unsigned int numThreads = std::thread::hardware_concurrency();
+        if (numThreads < 2) numThreads = 2;
+        if (numThreads > 16) numThreads = 16;
+
+        ImGui::Text("Dumping files... (%u threads)", numThreads);
         ImGui::Spacing();
 
+        int current = gDumpCurrent.load();
         float progress = gDumpTotal > 0
-            ? static_cast<float>(gDumpCurrent) / static_cast<float>(gDumpTotal)
+            ? static_cast<float>(current) / static_cast<float>(gDumpTotal)
             : 0.0f;
 
         ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20));
@@ -165,12 +207,8 @@ static void RenderDumpOverlay()
         ImGui::Spacing();
 
         char countText[64];
-        snprintf(countText, sizeof(countText), "%d / %d files", gDumpCurrent, gDumpTotal);
+        snprintf(countText, sizeof(countText), "%d / %d files", current, gDumpTotal);
         ImGui::TextUnformatted(countText);
-
-        ImGui::PushTextWrapPos(windowWidth - 40.0f);
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s", gDumpCurrentFile.c_str());
-        ImGui::PopTextWrapPos();
     }
     ImGui::End();
 
@@ -180,6 +218,7 @@ static void RenderDumpOverlay()
 void RenderUI(AppState& state)
 {
     ProcessAreaLoading(state);
+    ProcessModelLoading(state);
     ProcessDumping();
     HandleChunkPicking(state);
 

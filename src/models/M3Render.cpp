@@ -1,8 +1,12 @@
 #include "M3Render.h"
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <codecvt>
 #include <locale>
 #include <algorithm>
+#include <set>
+#include <cmath>
 
 const char* m3VertexSrc = R"(
 #version 330 core
@@ -12,11 +16,26 @@ layout (location = 2) in vec2 aTexCoord;
 layout (location = 3) in vec4 aBoneWeights;
 layout (location = 4) in uvec4 aBoneIndices;
 uniform mat4 model, view, projection;
+uniform mat4 boneMatrices[200];
+uniform bool useSkinning;
 out vec3 Normal;
 out vec2 TexCoord;
 void main() {
-    gl_Position = projection * view * model * vec4(aPos, 1.0);
-    Normal = aNormal;
+    vec4 pos = vec4(aPos, 1.0);
+    vec3 norm = aNormal;
+
+    if (useSkinning && (aBoneWeights.x + aBoneWeights.y + aBoneWeights.z + aBoneWeights.w) > 0.0) {
+        mat4 skinMat = mat4(0.0);
+        skinMat += boneMatrices[aBoneIndices.x] * aBoneWeights.x;
+        skinMat += boneMatrices[aBoneIndices.y] * aBoneWeights.y;
+        skinMat += boneMatrices[aBoneIndices.z] * aBoneWeights.z;
+        skinMat += boneMatrices[aBoneIndices.w] * aBoneWeights.w;
+        pos = skinMat * pos;
+        norm = mat3(skinMat) * norm;
+    }
+
+    gl_Position = projection * view * model * pos;
+    Normal = norm;
     TexCoord = aTexCoord;
 }
 )";
@@ -31,7 +50,6 @@ void main() {
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(Normal), lightDir), 0.3);
     vec4 texColor = texture(diffTexture, TexCoord);
-    if(texColor.a < 0.1) discard;
     FragColor = vec4(texColor.rgb * diff, 1.0);
 }
 )";
@@ -85,6 +103,16 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
     submeshVariantOverride.assign(submeshes.size(), -1);
+
+    std::set<uint8_t> uniqueGroups;
+    for (const auto& sm : submeshes)
+    {
+        if (sm.groupId != 255) uniqueGroups.insert(sm.groupId);
+    }
+    if (!uniqueGroups.empty())
+    {
+        setActiveVariant(*uniqueGroups.begin());
+    }
 
     loadTextures(data, arc);
     fallbackWhiteTex = createFallbackWhite();
@@ -251,6 +279,8 @@ unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) c
 void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
     if (!shaderProgram || !VAO) return;
 
+    glDisable(GL_BLEND);
+
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
@@ -258,6 +288,14 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
     glm::mat4 model = glm::mat4(1.0f);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
+
+    bool useSkinning = (playingAnimation >= 0 && !boneMatrices.empty());
+    glUniform1i(glGetUniformLocation(shaderProgram, "useSkinning"), useSkinning ? 1 : 0);
+
+    if (useSkinning && !boneMatrices.empty()) {
+        GLint loc = glGetUniformLocation(shaderProgram, "boneMatrices");
+        glUniformMatrix4fv(loc, (GLsizei)std::min(boneMatrices.size(), (size_t)200), GL_FALSE, glm::value_ptr(boneMatrices[0]));
+    }
 
     glBindVertexArray(VAO);
 
@@ -334,16 +372,26 @@ void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) 
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
 
-    if (variantIndex < 0 || variantIndex >= (int)submeshGroups.size()) {
+    if (variantIndex < 0) {
         for (size_t i = 0; i < submeshes.size(); ++i) {
             submeshVisible[i] = 1;
         }
         return;
     }
 
-    uint16_t targetGroupId = submeshGroups[variantIndex].submeshId;
+    uint8_t targetGroupId = static_cast<uint8_t>(variantIndex);
+    bool anyMatch = false;
+
     for (size_t i = 0; i < submeshes.size(); ++i) {
-        submeshVisible[i] = (submeshes[i].groupId == targetGroupId) ? 1 : 0;
+        bool match = (submeshes[i].groupId == targetGroupId);
+        submeshVisible[i] = match ? 1 : 0;
+        if (match) anyMatch = true;
+    }
+
+    if (!anyMatch) {
+        for (size_t i = 0; i < submeshes.size(); ++i) {
+            submeshVisible[i] = 1;
+        }
     }
 }
 
@@ -400,4 +448,103 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     glEnable(GL_DEPTH_TEST);
 
     glBindVertexArray(0);
+}
+
+void M3Render::playAnimation(int index) {
+    if (index < 0 || index >= (int)animations.size()) {
+        stopAnimation();
+        return;
+    }
+    playingAnimation = index;
+    animationTime = 0.0f;
+}
+
+void M3Render::stopAnimation() {
+    playingAnimation = -1;
+    animationTime = 0.0f;
+    boneMatrices.clear();
+}
+
+static glm::mat4 interpolateKeyframes(const M3AnimationTrack& track, float timeMs) {
+    if (track.keyframes.empty()) {
+        return glm::mat4(1.0f);
+    }
+
+    const M3KeyFrame* prev = &track.keyframes[0];
+    const M3KeyFrame* next = prev;
+
+    for (size_t i = 0; i < track.keyframes.size(); ++i) {
+        if (track.keyframes[i].timestamp <= timeMs) {
+            prev = &track.keyframes[i];
+            next = (i + 1 < track.keyframes.size()) ? &track.keyframes[i + 1] : prev;
+        } else {
+            next = &track.keyframes[i];
+            break;
+        }
+    }
+
+    float t = 0.0f;
+    if (next != prev && next->timestamp != prev->timestamp) {
+        t = (timeMs - prev->timestamp) / (float)(next->timestamp - prev->timestamp);
+        t = glm::clamp(t, 0.0f, 1.0f);
+    }
+
+    glm::vec3 scale = glm::mix(prev->scale, next->scale, t);
+    glm::quat rotation = glm::slerp(prev->rotation, next->rotation, t);
+    glm::vec3 translation = glm::mix(prev->translation, next->translation, t);
+
+    glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+    glm::mat4 R = glm::mat4_cast(rotation);
+    glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
+
+    return T * R * S;
+}
+
+void M3Render::updateAnimation(float deltaTime) {
+    if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) {
+        boneMatrices.clear();
+        return;
+    }
+
+    const auto& anim = animations[playingAnimation];
+    float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+
+    if (duration > 0.0f) {
+        animationTime += deltaTime;
+        if (animationTime >= duration) {
+            animationTime = std::fmod(animationTime, duration);
+        }
+    }
+
+    float currentTimeMs = anim.timestampStart + animationTime * 1000.0f;
+
+    boneMatrices.resize(bones.size());
+    std::vector<glm::mat4> worldTransforms(bones.size());
+
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+
+        glm::mat4 localTransform = glm::mat4(1.0f);
+
+        for (int t = 0; t < 8; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) {
+                localTransform = interpolateKeyframes(bone.tracks[t], currentTimeMs);
+                break;
+            }
+        }
+
+        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+            worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
+        } else {
+            worldTransforms[i] = localTransform;
+        }
+
+        boneMatrices[i] = worldTransforms[i] * bone.inverseGlobalMatrix;
+    }
+}
+
+float M3Render::getAnimationDuration() const {
+    if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) return 0.0f;
+    const auto& anim = animations[playingAnimation];
+    return (anim.timestampEnd - anim.timestampStart) / 1000.0f;
 }

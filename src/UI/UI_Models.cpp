@@ -4,6 +4,7 @@
 #include "../models/M3Common.h"
 #include "UI.h"
 #include <algorithm>
+#include <set>
 
 namespace UI_Models
 {
@@ -60,27 +61,28 @@ namespace UI_Models
 
             ImGui::Separator();
 
-            const auto& submeshGroups = render->getSubmeshGroups();
-            if (!submeshGroups.empty())
+            std::set<uint8_t> uniqueGroups;
+            for (size_t i = 0; i < submeshCount; ++i)
+            {
+                uint8_t gid = render->getSubmesh(i).groupId;
+                if (gid != 255) uniqueGroups.insert(gid);
+            }
+
+            if (!uniqueGroups.empty() && uniqueGroups.size() > 1)
             {
                 ImGui::Text("Variant:");
                 ImGui::SameLine();
 
                 int currentVariant = render->getActiveVariant();
 
-                if (ImGui::RadioButton("All", currentVariant == -1))
-                {
-                    render->setActiveVariant(-1);
-                }
-
-                for (size_t i = 0; i < submeshGroups.size(); ++i)
+                for (uint8_t gid : uniqueGroups)
                 {
                     ImGui::SameLine();
                     char label[32];
-                    snprintf(label, sizeof(label), "%d", submeshGroups[i].submeshId);
-                    if (ImGui::RadioButton(label, currentVariant == (int)i))
+                    snprintf(label, sizeof(label), "%d", gid);
+                    if (ImGui::RadioButton(label, currentVariant == (int)gid))
                     {
-                        render->setActiveVariant((int)i);
+                        render->setActiveVariant((int)gid);
                     }
                 }
 
@@ -295,21 +297,37 @@ namespace UI_Models
             if (ImGui::CollapsingHeader("Animations"))
             {
                 const auto& anims = render->getAllAnimations();
+                int playingIdx = render->getPlayingAnimation();
+
+                if (playingIdx >= 0)
+                {
+                    float duration = render->getAnimationDuration();
+                    float currentTime = render->getAnimationTime();
+                    ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(-1, 0));
+                    ImGui::Spacing();
+                }
+
                 for (size_t i = 0; i < anims.size(); ++i)
                 {
                     const auto& anim = anims[i];
-                    ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::TreeNode((void*)(intptr_t)i, "Animation %zu (Seq: %d)", i, anim.sequenceId))
+                    bool isPlaying = (playingIdx == (int)i);
+
+                    char label[64];
+                    float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+                    snprintf(label, sizeof(label), "%s Anim %zu (%.2fs)###anim%zu",
+                             isPlaying ? ">" : " ", i, duration, i);
+
+                    if (isPlaying) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+
+                    if (ImGui::Selectable(label, isPlaying))
                     {
-                        ImGui::Text("Sequence ID: %d", anim.sequenceId);
-                        ImGui::Text("Fallback: %d", anim.fallbackSequence);
-                        float startSec = anim.timestampStart / 1000.0f;
-                        float endSec = anim.timestampEnd / 1000.0f;
-                        ImGui::Text("Time: %.3fs - %.3fs (%.3fs)", startSec, endSec, endSec - startSec);
-                        ImGui::Text("Frames: %u - %u", anim.timestampStart, anim.timestampEnd);
-                        ImGui::TreePop();
+                        if (isPlaying)
+                            render->stopAnimation();
+                        else
+                            render->playAnimation((int)i);
                     }
-                    ImGui::PopID();
+
+                    if (isPlaying) ImGui::PopStyleColor();
                 }
             }
         }

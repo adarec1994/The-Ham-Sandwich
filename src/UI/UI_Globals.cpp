@@ -2,9 +2,13 @@
 #include "UI.h"
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
+#include "../models/M3Loader.h"
 #include <iostream>
 #include <fstream>
 #include <filesystem>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 std::vector<AreaFilePtr> gLoadedAreas;
 
@@ -15,21 +19,87 @@ std::string gSelectedChunkAreaName;
 
 std::shared_ptr<M3Render> gLoadedModel = nullptr;
 
+bool gIsLoadingModel = false;
+std::string gLoadingModelName;
+ArchivePtr gPendingModelArchive = nullptr;
+std::shared_ptr<FileEntry> gPendingModelFile = nullptr;
+static std::atomic<bool> gModelLoadComplete{false};
+static M3ModelData gLoadedModelData;
+static std::thread gModelLoadThread;
+
 bool gIsLoadingAreas = false;
 int gLoadingAreasCurrent = 0;
 int gLoadingAreasTotal = 0;
 std::string gLoadingAreasName;
 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> gPendingAreaFiles;
 
-bool gIsDumping = false;
+std::atomic<bool> gIsDumping{false};
 bool gShowDumpFolderDialog = false;
-int gDumpCurrent = 0;
+std::atomic<int> gDumpCurrent{0};
 int gDumpTotal = 0;
 std::string gDumpCurrentFile;
 std::string gDumpOutputPath;
 std::vector<DumpEntry> gPendingDumpFiles;
+static std::vector<std::thread> gDumpThreads;
+static std::mutex gDumpMutex;
 
 extern void SnapCameraToLoaded(AppState& state);
+
+void StartLoadingModel(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& name)
+{
+    if (gIsLoadingModel) return;
+
+    gPendingModelArchive = arc;
+    gPendingModelFile = file;
+    gLoadingModelName = name;
+    gIsLoadingModel = true;
+    gModelLoadComplete = false;
+    gLoadedModelData = M3ModelData();
+
+    gModelLoadThread = std::thread([arc, file]() {
+        gLoadedModelData = M3Loader::LoadFromFile(arc, file);
+        gModelLoadComplete = true;
+    });
+    gModelLoadThread.detach();
+}
+
+void ProcessModelLoading(AppState& state)
+{
+    if (!gIsLoadingModel) return;
+
+    if (!gModelLoadComplete) return;
+
+    gLoadedAreas.clear();
+    gSelectedChunk = nullptr;
+
+    std::cout << "Loading M3 Model: " << gLoadingModelName << std::endl;
+
+    if (gLoadedModelData.success)
+    {
+        gLoadedModel = std::make_shared<M3Render>(gLoadedModelData, gPendingModelArchive);
+        gLoadedModel->setModelName(gLoadingModelName);
+        state.m3Render = gLoadedModel;
+        state.show_models_window = true;
+
+        std::cout << "M3 Loaded. Vertices: " << gLoadedModelData.geometry.vertices.size()
+                  << ", Indices: " << gLoadedModelData.geometry.indices.size() << std::endl;
+
+        SnapCameraToLoaded(state);
+    }
+    else
+    {
+        std::cerr << "Failed to load M3: " << gLoadingModelName << std::endl;
+        gLoadedModel = nullptr;
+        state.m3Render = nullptr;
+        state.show_models_window = false;
+    }
+
+    gIsLoadingModel = false;
+    gPendingModelArchive = nullptr;
+    gPendingModelFile = nullptr;
+    gLoadingModelName.clear();
+    gLoadedModelData = M3ModelData();
+}
 
 void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry)
 {
@@ -132,6 +202,8 @@ static void CollectFilesRecursive(const ArchivePtr& arc, const IFileSystemEntryP
 
 void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& outputPath)
 {
+    if (gIsDumping) return;
+
     gPendingDumpFiles.clear();
     gDumpOutputPath = outputPath;
 
@@ -151,51 +223,67 @@ void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& ou
     gDumpCurrent = 0;
     gDumpTotal = static_cast<int>(gPendingDumpFiles.size());
     gDumpCurrentFile = "";
+
+    unsigned int numThreads = std::thread::hardware_concurrency();
+    if (numThreads < 2) numThreads = 2;
+    if (numThreads > 16) numThreads = 16;
+
+    gDumpThreads.clear();
+
+    for (unsigned int t = 0; t < numThreads; ++t)
+    {
+        gDumpThreads.emplace_back([outputPath]() {
+            while (true)
+            {
+                DumpEntry entry;
+                {
+                    std::lock_guard<std::mutex> lock(gDumpMutex);
+                    if (gPendingDumpFiles.empty()) break;
+                    entry = gPendingDumpFiles.back();
+                    gPendingDumpFiles.pop_back();
+                }
+
+                std::string relPath = wstring_to_utf8(entry.relativePath);
+                std::filesystem::path outPath = std::filesystem::path(outputPath) / relPath;
+
+                try
+                {
+                    std::filesystem::create_directories(outPath.parent_path());
+
+                    std::vector<uint8_t> data;
+                    entry.arc->getFileData(entry.file, data);
+
+                    if (!data.empty())
+                    {
+                        std::ofstream out(outPath, std::ios::binary);
+                        if (out)
+                        {
+                            out.write(reinterpret_cast<const char*>(data.data()), data.size());
+                        }
+                    }
+                }
+                catch (const std::exception& e)
+                {
+                    std::cerr << "Failed to dump: " << relPath << " - " << e.what() << std::endl;
+                }
+
+                gDumpCurrent++;
+            }
+        });
+    }
+
+    std::thread convergenceThread([]() {
+        for (auto& t : gDumpThreads)
+        {
+            if (t.joinable()) t.join();
+        }
+        gDumpThreads.clear();
+        gIsDumping = false;
+        std::cout << "Dump complete: " << gDumpCurrent.load() << " files" << std::endl;
+    });
+    convergenceThread.detach();
 }
 
 void ProcessDumping()
 {
-    if (!gIsDumping || gPendingDumpFiles.empty()) return;
-
-    int dumpPerFrame = 50;
-    for (int i = 0; i < dumpPerFrame && !gPendingDumpFiles.empty(); ++i)
-    {
-        auto entry = gPendingDumpFiles.back();
-        gPendingDumpFiles.pop_back();
-
-        std::string relPath = wstring_to_utf8(entry.relativePath);
-        gDumpCurrentFile = relPath;
-
-        std::filesystem::path outPath = std::filesystem::path(gDumpOutputPath) / relPath;
-
-        try
-        {
-            std::filesystem::create_directories(outPath.parent_path());
-
-            std::vector<uint8_t> data;
-            entry.arc->getFileData(entry.file, data);
-
-            if (!data.empty())
-            {
-                std::ofstream out(outPath, std::ios::binary);
-                if (out)
-                {
-                    out.write(reinterpret_cast<const char*>(data.data()), data.size());
-                }
-            }
-        }
-        catch (const std::exception& e)
-        {
-            std::cerr << "Failed to dump: " << relPath << " - " << e.what() << std::endl;
-        }
-
-        gDumpCurrent++;
-    }
-
-    if (gPendingDumpFiles.empty())
-    {
-        gIsDumping = false;
-        gDumpCurrentFile = "";
-        std::cout << "Dump complete: " << gDumpCurrent << " files" << std::endl;
-    }
 }
