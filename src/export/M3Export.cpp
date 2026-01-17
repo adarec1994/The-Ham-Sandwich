@@ -15,13 +15,10 @@
 #include <locale>
 #include <sstream>
 #include <iomanip>
-#include <iostream>
-
 namespace M3Export
 {
     static uint32_t Crc32Table[256];
     static bool Crc32Init = false;
-
     static void InitCrc32()
     {
         if (Crc32Init) return;
@@ -34,7 +31,6 @@ namespace M3Export
         }
         Crc32Init = true;
     }
-
     static uint32_t Crc32(const uint8_t* data, size_t len, uint32_t crc = 0)
     {
         InitCrc32();
@@ -43,7 +39,6 @@ namespace M3Export
             crc = Crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
         return ~crc;
     }
-
     static uint32_t Adler32(const uint8_t* data, size_t len)
     {
         uint32_t a = 1, b = 0;
@@ -54,7 +49,6 @@ namespace M3Export
         }
         return (b << 16) | a;
     }
-
     static void WritePngU32BE(std::vector<uint8_t>& out, uint32_t v)
     {
         out.push_back((v >> 24) & 0xFF);
@@ -62,7 +56,6 @@ namespace M3Export
         out.push_back((v >> 8) & 0xFF);
         out.push_back(v & 0xFF);
     }
-
     static void WritePngChunk(std::vector<uint8_t>& out, const char* type, const std::vector<uint8_t>& data)
     {
         WritePngU32BE(out, static_cast<uint32_t>(data.size()));
@@ -72,7 +65,6 @@ namespace M3Export
         uint32_t crc = Crc32(out.data() + typeStart, 4 + data.size());
         WritePngU32BE(out, crc);
     }
-
     static std::vector<uint8_t> CompressDeflateStore(const uint8_t* data, size_t len)
     {
         std::vector<uint8_t> out;
@@ -95,7 +87,6 @@ namespace M3Export
         WritePngU32BE(out, adler);
         return out;
     }
-
     static std::vector<uint8_t> EncodePNG(const uint8_t* rgba, int width, int height)
     {
         std::vector<uint8_t> png;
@@ -123,7 +114,6 @@ namespace M3Export
         WritePngChunk(png, "IEND", iend);
         return png;
     }
-
     static std::string SanitizeFilename(const std::string& name)
     {
         std::string result;
@@ -137,7 +127,6 @@ namespace M3Export
         }
         return result.empty() ? "model" : result;
     }
-
     static std::string ExtractModelName(const std::string& path)
     {
         if (path.empty()) return "model";
@@ -148,7 +137,6 @@ namespace M3Export
         if (ext != std::string::npos) filename = filename.substr(0, ext);
         return SanitizeFilename(filename);
     }
-
     static std::string EscapeJsonString(const std::string& s)
     {
         std::string result;
@@ -169,7 +157,6 @@ namespace M3Export
         }
         return result;
     }
-
     static std::string FloatStr(float v)
     {
         if (std::isnan(v) || std::isinf(v)) return "0";
@@ -177,7 +164,6 @@ namespace M3Export
         oss << std::setprecision(7) << v;
         return oss.str();
     }
-
     static void WriteU32(std::vector<uint8_t>& buf, uint32_t v)
     {
         buf.push_back(v & 0xFF);
@@ -185,44 +171,33 @@ namespace M3Export
         buf.push_back((v >> 16) & 0xFF);
         buf.push_back((v >> 24) & 0xFF);
     }
-
     static void WriteU16(std::vector<uint8_t>& buf, uint16_t v)
     {
         buf.push_back(v & 0xFF);
         buf.push_back((v >> 8) & 0xFF);
     }
-
     static void WriteF32(std::vector<uint8_t>& buf, float v)
     {
         uint32_t u;
         std::memcpy(&u, &v, 4);
         WriteU32(buf, u);
     }
-
     static void Pad(std::vector<uint8_t>& buf, size_t a)
     {
         while (buf.size() % a) buf.push_back(0);
     }
-
     struct BufView { size_t off, len; int target; };
     struct Acc { int view, comp, count; std::string type; glm::vec3 minV, maxV; bool hasMinMax; };
-
     static std::vector<uint8_t> LoadTextureAsPNG(const ArchivePtr& arc, const std::string& path)
     {
         if (!arc || path.empty())
         {
-            std::cout << "[M3Export] LoadTexture: empty path or no archive" << std::endl;
             return {};
         }
-
-        std::cout << "[M3Export] Loading texture: " << path << std::endl;
-
         std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
         std::wstring wp = conv.from_bytes(path);
-
         if (wp.find(L".tex") == std::wstring::npos)
             wp += L".tex";
-
         auto entry = arc->getByPath(wp);
         if (!entry)
         {
@@ -235,76 +210,51 @@ namespace M3Export
                 entry = arc->getByPath(wp2);
             }
         }
-
         if (!entry)
         {
-            std::cout << "[M3Export] Could not find texture in archive" << std::endl;
             return {};
         }
-
         std::vector<uint8_t> buffer;
         arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
         if (buffer.empty())
         {
-            std::cout << "[M3Export] Texture file is empty" << std::endl;
             return {};
         }
-
-        std::cout << "[M3Export] Read " << buffer.size() << " bytes" << std::endl;
-
         Tex::File tf;
         if (!tf.readFromMemory(buffer.data(), buffer.size()))
         {
-            std::cout << "[M3Export] Failed to parse .tex file" << std::endl;
             return {};
         }
-
         Tex::ImageRGBA img;
         if (!tf.decodeLargestMipToRGBA(img))
         {
-            std::cout << "[M3Export] Failed to decode texture" << std::endl;
             return {};
         }
-
-        std::cout << "[M3Export] Decoded texture: " << img.width << "x" << img.height << std::endl;
         return EncodePNG(img.rgba.data(), img.width, img.height);
     }
-
     ExportResult ExportToFBX(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
     {
         ExportResult result;
         result.errorMessage = "FBX export not implemented";
         return result;
     }
-
     ExportResult ExportToGLB(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
     {
         ExportResult result;
         if (!render) { result.errorMessage = "No model"; return result; }
-
         std::string outputDir = settings.outputPath;
         if (outputDir.empty()) { result.errorMessage = "No output path"; return result; }
-
         std::filesystem::create_directories(outputDir);
         std::string baseName = settings.customName.empty()
             ? ExtractModelName(render->getModelName())
             : SanitizeFilename(settings.customName);
         std::string glbPath = outputDir + "/" + baseName + ".glb";
-
         if (progress) progress(0, 100, "Collecting geometry...");
-
         const auto& allVertices = render->getVertices();
         const auto& allIndices = render->getIndices();
         const auto& submeshes = render->getAllSubmeshes();
         const auto& materials = render->getAllMaterials();
         const auto& textures = render->getAllTextures();
-
-        std::cout << "[M3Export] Model: " << baseName << std::endl;
-        std::cout << "[M3Export] Submeshes: " << submeshes.size() << std::endl;
-        std::cout << "[M3Export] Materials: " << materials.size() << std::endl;
-        std::cout << "[M3Export] Textures: " << textures.size() << std::endl;
-        std::cout << "[M3Export] Archive: " << (archive ? "yes" : "NO") << std::endl;
-
         struct SubmeshExport
         {
             std::vector<glm::vec3> positions;
@@ -318,34 +268,24 @@ namespace M3Export
             std::string name;
         };
         std::vector<SubmeshExport> exportList;
-
         size_t totalVerts = 0;
         size_t totalTris = 0;
-
         for (size_t si = 0; si < submeshes.size(); ++si)
         {
             bool visible = render->getSubmeshVisible(si);
-            std::cout << "[M3Export] Submesh " << si << " visible: " << (visible ? "yes" : "no") << std::endl;
-
             if (!visible)
                 continue;
-
             const auto& sm = submeshes[si];
-
             SubmeshExport se;
             se.materialId = sm.materialID;
             se.originalIndex = si;
             se.name = "Submesh_" + std::to_string(si);
-
             std::unordered_map<uint32_t, uint32_t> remap;
-
             for (uint32_t i = 0; i < sm.indexCount; ++i)
             {
                 uint32_t localIdx = allIndices[sm.startIndex + i];
                 uint32_t globalIdx = localIdx + sm.startVertex;
-
                 if (globalIdx >= allVertices.size()) continue;
-
                 auto it = remap.find(globalIdx);
                 if (it != remap.end())
                 {
@@ -355,7 +295,6 @@ namespace M3Export
                 {
                     uint32_t newIdx = static_cast<uint32_t>(se.positions.size());
                     remap[globalIdx] = newIdx;
-
                     const auto& v = allVertices[globalIdx];
                     se.positions.push_back(v.position);
                     se.normals.push_back(v.normal);
@@ -365,7 +304,6 @@ namespace M3Export
                     se.indices.push_back(newIdx);
                 }
             }
-
             if (!se.positions.empty() && !se.indices.empty())
             {
                 totalVerts += se.positions.size();
@@ -373,37 +311,26 @@ namespace M3Export
                 exportList.push_back(std::move(se));
             }
         }
-
         if (exportList.empty()) { result.errorMessage = "No visible submeshes"; return result; }
-
-        std::cout << "[M3Export] Exporting " << exportList.size() << " submeshes" << std::endl;
-
         result.vertexCount = static_cast<int>(totalVerts);
         result.triangleCount = static_cast<int>(totalTris);
         result.boneCount = static_cast<int>(render->getAllBones().size());
-
         if (progress) progress(10, 100, "Loading textures...");
-
         struct TexData { std::vector<uint8_t> png; size_t bufOff, bufLen; std::string name; };
         std::vector<TexData> loadedImages;
         std::unordered_map<int, int> texIdxToGltfImage;
         std::unordered_map<std::string, int> pathToGltfImage;
-
         auto LoadAndRegisterTexture = [&](int texIdx, const std::string& path) -> int {
             if (texIdx < 0 && path.empty()) return -1;
-
             std::string texPath = path;
             if (texPath.empty() && texIdx >= 0 && texIdx < (int)textures.size())
                 texPath = textures[texIdx].path;
             if (texPath.empty()) return -1;
-
             auto pathIt = pathToGltfImage.find(texPath);
             if (pathIt != pathToGltfImage.end())
                 return pathIt->second;
-
             auto png = LoadTextureAsPNG(archive, texPath);
             if (png.empty()) return -1;
-
             int imgIdx = static_cast<int>(loadedImages.size());
             std::string texName = texPath;
             size_t slash = texName.rfind('/');
@@ -411,15 +338,11 @@ namespace M3Export
             if (slash != std::string::npos) texName = texName.substr(slash + 1);
             texName = SanitizeFilename(texName);
             if (texName.empty()) texName = "texture_" + std::to_string(imgIdx);
-
             loadedImages.push_back({std::move(png), 0, 0, texName});
             pathToGltfImage[texPath] = imgIdx;
             if (texIdx >= 0) texIdxToGltfImage[texIdx] = imgIdx;
-
-            std::cout << "[M3Export] Loaded texture: " << texPath << " as image " << imgIdx << std::endl;
             return imgIdx;
         };
-
         struct GltfMaterial {
             std::string name;
             int diffuseImage = -1;
@@ -427,29 +350,23 @@ namespace M3Export
         };
         std::vector<GltfMaterial> gltfMaterials;
         std::unordered_map<uint16_t, int> matIdToGltfMat;
-
         if (settings.exportTextures && archive)
         {
             for (const auto& se : exportList)
             {
                 if (matIdToGltfMat.count(se.materialId)) continue;
-
                 int gltfMatIdx = -1;
                 if (se.materialId < materials.size())
                 {
                     const auto& mat = materials[se.materialId];
-                    std::cout << "[M3Export] Processing material " << se.materialId << " with " << mat.variants.size() << " variants" << std::endl;
-
                     if (!mat.variants.empty())
                     {
                         int variantIdx = render->getMaterialSelectedVariant(se.materialId);
                         if (variantIdx < 0 || variantIdx >= (int)mat.variants.size())
                             variantIdx = 0;
                         const auto& variant = mat.variants[variantIdx];
-
                         int diffuseImg = LoadAndRegisterTexture(variant.textureIndexA, variant.textureColorPath);
                         int normalImg = LoadAndRegisterTexture(variant.textureIndexB, variant.textureNormalPath);
-
                         if (diffuseImg >= 0 || normalImg >= 0)
                         {
                             gltfMatIdx = static_cast<int>(gltfMaterials.size());
@@ -458,45 +375,21 @@ namespace M3Export
                             gm.diffuseImage = diffuseImg;
                             gm.normalImage = normalImg;
                             gltfMaterials.push_back(gm);
-
-                            std::cout << "[M3Export] Material " << se.materialId << " -> glTF material " << gltfMatIdx
-                                      << " (diffuse=" << diffuseImg << ", normal=" << normalImg << ")" << std::endl;
                         }
                     }
                 }
                 matIdToGltfMat[se.materialId] = gltfMatIdx;
             }
         }
-
-        std::cout << "[M3Export] Created " << gltfMaterials.size() << " materials, " << loadedImages.size() << " images" << std::endl;
         result.textureCount = static_cast<int>(loadedImages.size());
-
         if (progress) progress(30, 100, "Building binary buffer...");
-
         std::vector<uint8_t> bin;
         std::vector<BufView> views;
         std::vector<Acc> accessors;
-
         struct MeshData { int posAcc, normAcc, uvAcc, jointsAcc, weightsAcc, idxAcc; int matIdx; std::string name; };
         std::vector<MeshData> meshes;
-
         const auto& bones = render->getAllBones();
         bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
-
-        if (hasSkeleton)
-        {
-            std::cout << "[M3Export] Skeleton: " << bones.size() << " bones" << std::endl;
-            for (size_t i = 0; i < std::min(bones.size(), (size_t)5); ++i)
-            {
-                const auto& b = bones[i];
-                std::cout << "[M3Export]   Bone " << i << ": parent=" << b.parentId
-                          << " pos=(" << b.globalMatrix[3][0] << "," << b.globalMatrix[3][1] << "," << b.globalMatrix[3][2] << ")"
-                          << std::endl;
-            }
-            if (bones.size() > 5)
-                std::cout << "[M3Export]   ... and " << (bones.size() - 5) << " more" << std::endl;
-        }
-
         for (const auto& se : exportList)
         {
             MeshData md;
@@ -504,9 +397,6 @@ namespace M3Export
             md.matIdx = matIdToGltfMat.count(se.materialId) ? matIdToGltfMat[se.materialId] : -1;
             md.jointsAcc = -1;
             md.weightsAcc = -1;
-
-            std::cout << "[M3Export] Mesh '" << se.name << "' (M3 mat " << se.materialId << ") -> glTF material " << md.matIdx << std::endl;
-
             glm::vec3 minP(FLT_MAX), maxP(-FLT_MAX);
             size_t posOff = bin.size();
             for (const auto& p : se.positions)
@@ -519,7 +409,6 @@ namespace M3Export
             views.push_back({posOff, se.positions.size() * 12, 34962});
             md.posAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5126, (int)se.positions.size(), "VEC3", minP, maxP, true});
-
             size_t normOff = bin.size();
             for (const auto& n : se.normals)
             {
@@ -529,7 +418,6 @@ namespace M3Export
             views.push_back({normOff, se.normals.size() * 12, 34962});
             md.normAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5126, (int)se.normals.size(), "VEC3", {}, {}, false});
-
             size_t uvOff = bin.size();
             for (const auto& uv : se.uvs)
             {
@@ -539,7 +427,6 @@ namespace M3Export
             views.push_back({uvOff, se.uvs.size() * 8, 34962});
             md.uvAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5126, (int)se.uvs.size(), "VEC2", {}, {}, false});
-
             if (hasSkeleton && !se.joints.empty())
             {
                 size_t jointsOff = bin.size();
@@ -555,7 +442,6 @@ namespace M3Export
                 views.push_back({jointsOff, se.joints.size() * 8, 34962});
                 md.jointsAcc = static_cast<int>(accessors.size());
                 accessors.push_back({(int)views.size() - 1, 5123, (int)se.joints.size(), "VEC4", {}, {}, false});
-
                 size_t weightsOff = bin.size();
                 for (const auto& w : se.weights)
                 {
@@ -580,17 +466,14 @@ namespace M3Export
                 md.weightsAcc = static_cast<int>(accessors.size());
                 accessors.push_back({(int)views.size() - 1, 5126, (int)se.weights.size(), "VEC4", {}, {}, false});
             }
-
             size_t idxOff = bin.size();
             for (uint32_t idx : se.indices) WriteU32(bin, idx);
             Pad(bin, 4);
             views.push_back({idxOff, se.indices.size() * 4, 34963});
             md.idxAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5125, (int)se.indices.size(), "SCALAR", {}, {}, false});
-
             meshes.push_back(md);
         }
-
         for (auto& t : loadedImages)
         {
             t.bufOff = bin.size();
@@ -598,15 +481,13 @@ namespace M3Export
             t.bufLen = t.png.size();
             Pad(bin, 4);
         }
-
         int inverseBindMatricesAcc = -1;
         if (hasSkeleton)
         {
             size_t ibmOff = bin.size();
             for (const auto& bone : bones)
             {
-                glm::mat4 ibm = bone.inverseGlobalMatrix;
-                ibm[3][3] = 1.0f;
+                glm::mat4 ibm = glm::inverse(bone.globalMatrix);
                 for (int c = 0; c < 4; ++c)
                 {
                     for (int r = 0; r < 4; ++r)
@@ -620,49 +501,40 @@ namespace M3Export
             inverseBindMatricesAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5126, (int)bones.size(), "MAT4", {}, {}, false});
         }
-
-        // ========== ANIMATION DATA ==========
         const auto& animations = render->getAllAnimations();
         bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
-
         struct AnimChannelData {
             int boneIndex;
-            std::string path; // "translation", "rotation", "scale"
-            int inputAcc;  // time accessor
-            int outputAcc; // value accessor
         };
-
         struct AnimData {
             std::string name;
             std::vector<AnimChannelData> channels;
         };
         std::vector<AnimData> gltfAnimations;
-
         if (hasAnimations)
         {
-            std::cout << "[M3Export] Exporting " << animations.size() << " animations" << std::endl;
-
             for (size_t animIdx = 0; animIdx < animations.size(); ++animIdx)
             {
                 const auto& anim = animations[animIdx];
                 float startTime = anim.timestampStart / 1000.0f;
                 float endTime = anim.timestampEnd / 1000.0f;
                 float duration = endTime - startTime;
-
                 if (duration <= 0.0f) continue;
-
                 AnimData animData;
                 animData.name = "Animation_" + std::to_string(anim.sequenceId);
-
-                std::cout << "[M3Export]   Animation " << animIdx << " (seq " << anim.sequenceId
-                          << "): " << startTime << "s - " << endTime << "s" << std::endl;
-
                 for (size_t boneIdx = 0; boneIdx < bones.size(); ++boneIdx)
                 {
                     const auto& bone = bones[boneIdx];
                     bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-
-                    // Check for scale track (tracks 0, 1, or 2)
+                    glm::mat4 bindLocalMatrix;
+                    if (!isRootBone) {
+                        glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
+                        bindLocalMatrix = parentGlobalInv * bone.globalMatrix;
+                    } else {
+                        bindLocalMatrix = bone.globalMatrix;
+                    }
+                    glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
+                    bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
                     const M3AnimationTrack* scaleTrack = nullptr;
                     for (int t = 0; t <= 2; ++t)
                     {
@@ -672,8 +544,6 @@ namespace M3Export
                             break;
                         }
                     }
-
-                    // Check for rotation track (tracks 4 or 5)
                     const M3AnimationTrack* rotTrack = nullptr;
                     for (int t = 4; t <= 5; ++t)
                     {
@@ -683,25 +553,16 @@ namespace M3Export
                             break;
                         }
                     }
-
-                    // Check for translation track (track 6)
-                    // Skip root bones and locomotion bones (bones at origin with lots of T6 keyframes)
-                    // These contain root motion data that would cause the model to drift
-                    bool isLocomotionBone = (glm::length(bone.position) < 0.001f &&
-                                             glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f &&
-                                             bone.tracks[6].keyframes.size() > 10);
+                    bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
                     const M3AnimationTrack* transTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty() && !isRootBone && !isLocomotionBone)
+                    if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin)
                     {
                         transTrack = &bone.tracks[6];
                     }
-
-                    // Export translation
                     if (transTrack && !transTrack->keyframes.empty())
                     {
                         std::vector<float> times;
                         std::vector<glm::vec3> values;
-
                         for (const auto& kf : transTrack->keyframes)
                         {
                             float t = kf.timestamp / 1000.0f - startTime;
@@ -711,10 +572,8 @@ namespace M3Export
                                 values.push_back(kf.translation);
                             }
                         }
-
                         if (times.size() >= 2)
                         {
-                            // Write times
                             size_t timeOff = bin.size();
                             float minT = times.front(), maxT = times.back();
                             for (float t : times) WriteF32(bin, t);
@@ -723,8 +582,6 @@ namespace M3Export
                             int timeAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
                                 glm::vec3(minT), glm::vec3(maxT), true});
-
-                            // Write values
                             size_t valOff = bin.size();
                             for (const auto& v : values)
                             {
@@ -736,17 +593,13 @@ namespace M3Export
                             views.push_back({valOff, values.size() * 12, 0});
                             int valAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
-
                             animData.channels.push_back({(int)boneIdx, "translation", timeAcc, valAcc});
                         }
                     }
-
-                    // Export rotation
                     if (rotTrack && !rotTrack->keyframes.empty())
                     {
                         std::vector<float> times;
                         std::vector<glm::quat> values;
-
                         for (const auto& kf : rotTrack->keyframes)
                         {
                             float t = kf.timestamp / 1000.0f - startTime;
@@ -756,10 +609,8 @@ namespace M3Export
                                 values.push_back(kf.rotation);
                             }
                         }
-
                         if (times.size() >= 2)
                         {
-                            // Write times
                             size_t timeOff = bin.size();
                             float minT = times.front(), maxT = times.back();
                             for (float t : times) WriteF32(bin, t);
@@ -768,8 +619,6 @@ namespace M3Export
                             int timeAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
                                 glm::vec3(minT), glm::vec3(maxT), true});
-
-                            // Write values (glTF expects x,y,z,w order)
                             size_t valOff = bin.size();
                             for (const auto& q : values)
                             {
@@ -782,17 +631,13 @@ namespace M3Export
                             views.push_back({valOff, values.size() * 16, 0});
                             int valAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC4", {}, {}, false});
-
                             animData.channels.push_back({(int)boneIdx, "rotation", timeAcc, valAcc});
                         }
                     }
-
-                    // Export scale
                     if (scaleTrack && !scaleTrack->keyframes.empty())
                     {
                         std::vector<float> times;
                         std::vector<glm::vec3> values;
-
                         for (const auto& kf : scaleTrack->keyframes)
                         {
                             float t = kf.timestamp / 1000.0f - startTime;
@@ -802,10 +647,8 @@ namespace M3Export
                                 values.push_back(kf.scale);
                             }
                         }
-
                         if (times.size() >= 2)
                         {
-                            // Write times
                             size_t timeOff = bin.size();
                             float minT = times.front(), maxT = times.back();
                             for (float t : times) WriteF32(bin, t);
@@ -814,8 +657,6 @@ namespace M3Export
                             int timeAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
                                 glm::vec3(minT), glm::vec3(maxT), true});
-
-                            // Write values
                             size_t valOff = bin.size();
                             for (const auto& v : values)
                             {
@@ -827,32 +668,20 @@ namespace M3Export
                             views.push_back({valOff, values.size() * 12, 0});
                             int valAcc = static_cast<int>(accessors.size());
                             accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
-
                             animData.channels.push_back({(int)boneIdx, "scale", timeAcc, valAcc});
                         }
                     }
                 }
-
                 if (!animData.channels.empty())
                 {
-                    std::cout << "[M3Export]     Exported " << animData.channels.size() << " channels" << std::endl;
                     gltfAnimations.push_back(std::move(animData));
                 }
             }
-
             result.animationCount = static_cast<int>(gltfAnimations.size());
-            std::cout << "[M3Export] Total animations exported: " << gltfAnimations.size() << std::endl;
         }
-
         if (progress) progress(60, 100, "Building JSON...");
-
-        // ========== HIERARCHICAL SKELETON ==========
-        // Build proper parent-child relationships
-        // Each bone uses LOCAL transform (relative to parent)
-
         std::vector<std::vector<int>> boneChildren(bones.size());
         std::vector<int> rootBones;
-
         if (hasSkeleton)
         {
             for (size_t i = 0; i < bones.size(); ++i)
@@ -867,26 +696,17 @@ namespace M3Export
                     rootBones.push_back(static_cast<int>(i));
                 }
             }
-
-            std::cout << "[M3Export] Root bones: " << rootBones.size() << std::endl;
             for (int rb : rootBones)
             {
-                std::cout << "[M3Export]   Root bone " << rb << ": " << bones[rb].name << std::endl;
             }
         }
-
         int rootNode = 0;
         int firstMeshNode = 1;
         int firstBoneNode = static_cast<int>(1 + meshes.size());
-
         std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"WildStar M3 Exporter\"},";
         json += "\"scene\":0,";
-
         json += "\"scenes\":[{\"name\":\"Scene\",\"nodes\":[" + std::to_string(rootNode) + "]}],";
-
         json += "\"nodes\":[";
-
-        // Root node - contains mesh nodes and ROOT bones only
         json += "{\"name\":\"" + EscapeJsonString(baseName) + "\",\"children\":[";
         for (size_t i = 0; i < meshes.size(); ++i)
         {
@@ -901,8 +721,6 @@ namespace M3Export
             }
         }
         json += "]}";
-
-        // Mesh nodes
         for (size_t i = 0; i < meshes.size(); ++i)
         {
             json += ",{\"name\":\"" + EscapeJsonString(meshes[i].name) + "\",\"mesh\":" + std::to_string(i);
@@ -910,27 +728,22 @@ namespace M3Export
                 json += ",\"skin\":0";
             json += "}";
         }
-
-        // Bone nodes - with hierarchy and LOCAL transforms
         if (hasSkeleton)
         {
             for (size_t i = 0; i < bones.size(); ++i)
             {
                 const auto& bone = bones[i];
                 json += ",{\"name\":\"" + EscapeJsonString(bone.name.empty() ? "Bone_" + std::to_string(i) : bone.name) + "\"";
-
-                // Compute LOCAL transform: localMatrix = inverse(parent.globalMatrix) * bone.globalMatrix
                 glm::mat4 localMatrix;
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size())
                 {
-                    localMatrix = bones[bone.parentId].inverseGlobalMatrix * bone.globalMatrix;
+                    glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
+                    localMatrix = parentGlobalInv * bone.globalMatrix;
                 }
                 else
                 {
                     localMatrix = bone.globalMatrix;
                 }
-
-                // Write matrix in COLUMN-MAJOR order for glTF
                 json += ",\"matrix\":[";
                 for (int c = 0; c < 4; ++c)
                 {
@@ -941,8 +754,6 @@ namespace M3Export
                     }
                 }
                 json += "]";
-
-                // Add children
                 if (!boneChildren[i].empty())
                 {
                     json += ",\"children\":[";
@@ -953,13 +764,10 @@ namespace M3Export
                     }
                     json += "]";
                 }
-
                 json += "}";
             }
         }
         json += "],";
-
-        // Meshes
         json += "\"meshes\":[";
         for (size_t i = 0; i < meshes.size(); ++i)
         {
@@ -980,8 +788,6 @@ namespace M3Export
             json += "}]}";
         }
         json += "],";
-
-        // Skin
         if (hasSkeleton)
         {
             json += "\"skins\":[{\"name\":\"Armature\",\"inverseBindMatrices\":" + std::to_string(inverseBindMatricesAcc);
@@ -994,8 +800,6 @@ namespace M3Export
             }
             json += "]}],";
         }
-
-        // Animations
         if (!gltfAnimations.empty())
         {
             json += "\"animations\":[";
@@ -1003,10 +807,7 @@ namespace M3Export
             {
                 const auto& anim = gltfAnimations[ai];
                 if (ai > 0) json += ",";
-
                 json += "{\"name\":\"" + EscapeJsonString(anim.name) + "\"";
-
-                // Samplers
                 json += ",\"samplers\":[";
                 for (size_t ci = 0; ci < anim.channels.size(); ++ci)
                 {
@@ -1017,8 +818,6 @@ namespace M3Export
                     json += ",\"interpolation\":\"LINEAR\"}";
                 }
                 json += "]";
-
-                // Channels
                 json += ",\"channels\":[";
                 for (size_t ci = 0; ci < anim.channels.size(); ++ci)
                 {
@@ -1029,12 +828,10 @@ namespace M3Export
                     json += ",\"path\":\"" + ch.path + "\"}}";
                 }
                 json += "]";
-
                 json += "}";
             }
             json += "],";
         }
-
         if (!gltfMaterials.empty())
         {
             json += "\"materials\":[";
@@ -1051,7 +848,6 @@ namespace M3Export
                 json += "}";
             }
             json += "],";
-
             json += "\"textures\":[";
             for (size_t i = 0; i < loadedImages.size(); ++i)
             {
@@ -1059,7 +855,6 @@ namespace M3Export
                 json += "{\"source\":" + std::to_string(i) + "}";
             }
             json += "],";
-
             json += "\"images\":[";
             for (size_t i = 0; i < loadedImages.size(); ++i)
             {
@@ -1070,7 +865,6 @@ namespace M3Export
             }
             json += "],";
         }
-
         json += "\"accessors\":[";
         for (size_t i = 0; i < accessors.size(); ++i)
         {
@@ -1088,7 +882,6 @@ namespace M3Export
             json += "}";
         }
         json += "],";
-
         json += "\"bufferViews\":[";
         for (size_t i = 0; i < views.size(); ++i)
         {
@@ -1099,49 +892,33 @@ namespace M3Export
             json += "}";
         }
         json += "],";
-
         json += "\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}]}";
-
         while (json.size() % 4) json += ' ';
-
         if (progress) progress(90, 100, "Writing file...");
-
         std::ofstream out(glbPath, std::ios::binary);
         if (!out) { result.errorMessage = "Can't write file"; return result; }
-
         uint32_t totalLen = 12 + 8 + static_cast<uint32_t>(json.size()) + 8 + static_cast<uint32_t>(bin.size());
-
         std::vector<uint8_t> header;
         WriteU32(header, 0x46546C67);
         WriteU32(header, 2);
         WriteU32(header, totalLen);
         out.write(reinterpret_cast<char*>(header.data()), header.size());
-
         std::vector<uint8_t> jc;
         WriteU32(jc, static_cast<uint32_t>(json.size()));
         WriteU32(jc, 0x4E4F534A);
         out.write(reinterpret_cast<char*>(jc.data()), jc.size());
         out.write(json.data(), json.size());
-
         std::vector<uint8_t> bc;
         WriteU32(bc, static_cast<uint32_t>(bin.size()));
         WriteU32(bc, 0x004E4942);
         out.write(reinterpret_cast<char*>(bc.data()), bc.size());
         out.write(reinterpret_cast<char*>(bin.data()), bin.size());
-
         out.close();
-
-        std::cout << "[M3Export] Wrote " << glbPath << std::endl;
-        std::cout << "[M3Export] Meshes: " << meshes.size() << ", Materials: " << gltfMaterials.size()
-                  << ", Images: " << loadedImages.size() << ", Bones: " << bones.size() << std::endl;
-
         if (progress) progress(100, 100, "Done!");
-
         result.success = true;
         result.outputFile = glbPath;
         return result;
     }
-
     std::string GetSuggestedFilename(M3Render* render)
     {
         if (!render) return "model";

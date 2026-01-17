@@ -98,7 +98,6 @@ void ProcessModelLoading(AppState& state)
     }
 
     gIsLoadingModel = false;
-    // Keep gPendingModelArchive for export - don't clear it
     gPendingModelFile = nullptr;
     gLoadingModelName.clear();
     gLoadedModelData = M3ModelData();

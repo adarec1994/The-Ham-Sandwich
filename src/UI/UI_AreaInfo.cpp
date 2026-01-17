@@ -342,7 +342,6 @@ namespace UI_AreaInfo
             return;
         }
 
-        // FBX Export Dialog
         if (ImGuiFileDialog::Instance()->Display("ExportFolderDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk())
@@ -353,7 +352,6 @@ namespace UI_AreaInfo
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Terrain Export Dialog
         if (ImGuiFileDialog::Instance()->Display("ExportTerrainDialog", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk())
@@ -364,7 +362,6 @@ namespace UI_AreaInfo
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Handle FBX Export
         if (sPendingExport && !sExporting)
         {
             sPendingExport = false;
@@ -406,7 +403,6 @@ namespace UI_AreaInfo
             }).detach();
         }
 
-        // Handle Terrain Export
         if (sPendingTerrainExport && !sExporting)
         {
             sPendingTerrainExport = false;
@@ -446,7 +442,6 @@ namespace UI_AreaInfo
             }).detach();
         }
 
-        // Handle export completion
         if (sExportComplete && sExporting)
         {
             sExporting = false;
@@ -591,7 +586,6 @@ namespace UI_AreaInfo
                 }
                 else
                 {
-                    // Terrain export (primary - for Blender)
                     if (ImGui::Button("Export for Blender (.wsterrain)", ImVec2(ImGui::GetContentRegionAvail().x, 30)))
                     {
                         IGFD::FileDialogConfig config;
@@ -602,7 +596,6 @@ namespace UI_AreaInfo
 
                     ImGui::Spacing();
 
-                    // FBX export (secondary)
                     if (ImGui::Button("Export to FBX (baked)", ImVec2(ImGui::GetContentRegionAvail().x, 24)))
                     {
                         IGFD::FileDialogConfig config;

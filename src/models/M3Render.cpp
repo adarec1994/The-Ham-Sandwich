@@ -9,7 +9,6 @@
 #include <cfloat>
 #include <set>
 #include <iostream>
-
 const char* m3VertexSrc = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -38,7 +37,6 @@ void main() {
     TexCoord = aTexCoord;
 }
 )";
-
 const char* m3FragSrc = R"(
 #version 330 core
 out vec4 FragColor;
@@ -56,7 +54,6 @@ void main() {
     FragColor = vec4(finalColor, 1.0);
 }
 )";
-
 const char* skeletonVertSrc = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -68,7 +65,6 @@ void main() {
     vColor = aColor;
 }
 )";
-
 const char* skeletonFragSrc = R"(
 #version 330 core
 in vec3 vColor;
@@ -77,14 +73,12 @@ void main() {
     FragColor = vec4(vColor, 1.0);
 }
 )";
-
 static unsigned int CompileShader(GLenum type, const char* src) {
     unsigned int s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
     glCompileShader(s);
     return s;
 }
-
 struct RenderVertex {
     glm::vec3 position;
     glm::vec3 normal;
@@ -92,10 +86,8 @@ struct RenderVertex {
     glm::vec4 boneWeights;
     glm::uvec4 boneIndices;
 };
-
 M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     if (!data.success) return;
-
     geometry = data.geometry;
     submeshes = data.geometry.submeshes;
     materials = data.materials;
@@ -103,27 +95,9 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     textures = data.textures;
     animations = data.animations;
     submeshGroups = data.submeshGroups;
-
-    // DEBUG: Print bone info on load
-    std::cout << "\n=== MODEL LOADED: " << bones.size() << " bones ===" << std::endl;
-    for (size_t i = 0; i < bones.size(); ++i) {
-        const auto& b = bones[i];
-        glm::vec3 globalPos = glm::vec3(b.globalMatrix[3]);
-        std::cout << "Bone " << i << ": parentId=" << b.parentId
-                  << " pos=(" << b.position.x << "," << b.position.y << "," << b.position.z << ")"
-                  << " globalMat[3]=(" << globalPos.x << "," << globalPos.y << "," << globalPos.z << ")"
-                  << " tracks: ";
-        for (int t = 0; t < 8; ++t) {
-            if (!b.tracks[t].keyframes.empty()) std::cout << "T" << t << "(" << b.tracks[t].keyframes.size() << ") ";
-        }
-        std::cout << std::endl;
-    }
-    std::cout << "=== END BONE LIST ===\n" << std::endl;
-
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
     submeshVariantOverride.assign(submeshes.size(), -1);
-
     std::set<uint8_t> uniqueGroups;
     for (const auto& sm : submeshes) {
         if (sm.groupId != 255) uniqueGroups.insert(sm.groupId);
@@ -131,10 +105,8 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     if (!uniqueGroups.empty()) {
         setActiveVariant(*uniqueGroups.begin());
     }
-
     loadTextures(data, arc);
     fallbackWhiteTex = createFallbackWhite();
-
     std::vector<RenderVertex> renderVerts;
     renderVerts.reserve(data.geometry.vertices.size());
     for (const auto& v : data.geometry.vertices) {
@@ -146,38 +118,27 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
         rv.boneIndices = v.boneIndices;
         renderVerts.push_back(rv);
     }
-
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glGenBuffers(1, &EBO);
-
     glBindVertexArray(VAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, renderVerts.size() * sizeof(RenderVertex), renderVerts.data(), GL_STATIC_DRAW);
-
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.geometry.indices.size() * sizeof(uint32_t), data.geometry.indices.data(), GL_STATIC_DRAW);
-
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)0);
-
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, normal));
-
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, uv));
-
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneWeights));
-
     glEnableVertexAttribArray(4);
     glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneIndices));
-
     setupShader();
     setupSkeletonShader();
 }
-
 M3Render::~M3Render() {
     if (VAO) glDeleteVertexArrays(1, &VAO);
     if (VBO) glDeleteBuffers(1, &VBO);
@@ -189,7 +150,6 @@ M3Render::~M3Render() {
     if (skeletonVBO) glDeleteBuffers(1, &skeletonVBO);
     if (skeletonProgram) glDeleteProgram(skeletonProgram);
 }
-
 void M3Render::setupShader() {
     unsigned int v = CompileShader(GL_VERTEX_SHADER, m3VertexSrc);
     unsigned int f = CompileShader(GL_FRAGMENT_SHADER, m3FragSrc);
@@ -200,7 +160,6 @@ void M3Render::setupShader() {
     glDeleteShader(v);
     glDeleteShader(f);
 }
-
 void M3Render::setupSkeletonShader() {
     unsigned int v = CompileShader(GL_VERTEX_SHADER, skeletonVertSrc);
     unsigned int f = CompileShader(GL_FRAGMENT_SHADER, skeletonFragSrc);
@@ -210,11 +169,9 @@ void M3Render::setupSkeletonShader() {
     glLinkProgram(skeletonProgram);
     glDeleteShader(v);
     glDeleteShader(f);
-
     glGenVertexArrays(1, &skeletonVAO);
     glGenBuffers(1, &skeletonVBO);
 }
-
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     glTextures.clear();
     glTextures.reserve(data.textures.size());
@@ -222,7 +179,6 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
         glTextures.push_back(loadTextureFromArchive(arc, tex.path));
     }
 }
-
 unsigned int M3Render::createFallbackWhite() {
     unsigned int tid = 0;
     glGenTextures(1, &tid);
@@ -236,56 +192,43 @@ unsigned int M3Render::createFallbackWhite() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     return tid;
 }
-
 unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty()) return 0;
-
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring wp = conv.from_bytes(path);
     if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
-
     auto entry = arc->getByPath(wp);
     if (!entry) {
         std::replace(wp.begin(), wp.end(), L'/', L'\\');
         entry = arc->getByPath(wp);
     }
     if (!entry) return 0;
-
     std::vector<uint8_t> buffer;
     arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
     if (buffer.empty()) return 0;
-
     Tex::File tf;
     if (!tf.readFromMemory(buffer.data(), buffer.size())) return 0;
-
     Tex::ImageRGBA img;
     if (!tf.decodeLargestMipToRGBA(img)) return 0;
-
     unsigned int tid = 0;
     glGenTextures(1, &tid);
     glBindTexture(GL_TEXTURE_2D, tid);
-
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
     glGenerateMipmap(GL_TEXTURE_2D);
-
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
     return tid;
 }
-
 unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
     if (materialId >= materials.size()) return fallbackWhiteTex;
     const auto& m = materials[materialId];
     if (m.variants.empty()) return fallbackWhiteTex;
-
     int v = variant;
     if (v < 0) v = 0;
     if (v >= (int)m.variants.size()) v = (int)m.variants.size() - 1;
-
     int idx = m.variants[v].textureIndexA;
     if (idx >= 0 && idx < (int)glTextures.size()) {
         unsigned int tid = glTextures[idx];
@@ -293,50 +236,36 @@ unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) c
     }
     return fallbackWhiteTex;
 }
-
 void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
     if (!shaderProgram || !VAO) return;
-
     glDisable(GL_BLEND);
-
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-
     glm::mat4 model = glm::mat4(1.0f);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
-
     GLint highlightColorLoc = glGetUniformLocation(shaderProgram, "highlightColor");
     GLint highlightMixLoc = glGetUniformLocation(shaderProgram, "highlightMix");
-
     bool useSkinning = (playingAnimation >= 0 && !boneMatrices.empty());
     glUniform1i(glGetUniformLocation(shaderProgram, "useSkinning"), useSkinning ? 1 : 0);
-
     if (useSkinning && !boneMatrices.empty()) {
         GLint loc = glGetUniformLocation(shaderProgram, "boneMatrices");
         glUniformMatrix4fv(loc, (GLsizei)std::min(boneMatrices.size(), (size_t)200), GL_FALSE, glm::value_ptr(boneMatrices[0]));
     }
-
     glBindVertexArray(VAO);
-
     for (size_t i = 0; i < submeshes.size(); ++i) {
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
-
         const auto& sm = submeshes[i];
-
         int variant = 0;
         if (i < submeshVariantOverride.size() && submeshVariantOverride[i] >= 0) {
             variant = submeshVariantOverride[i];
         } else if (sm.materialID < materialSelectedVariant.size()) {
             variant = materialSelectedVariant[sm.materialID];
         }
-
         unsigned int tid = resolveDiffuseTexture(sm.materialID, variant);
-
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, tid);
-
         if ((int)i == selectedSubmesh) {
             glUniform3f(highlightColorLoc, 0.3f, 1.0f, 0.3f);
             glUniform1f(highlightMixLoc, 0.4f);
@@ -344,7 +273,6 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
             glUniform3f(highlightColorLoc, 0.0f, 0.0f, 0.0f);
             glUniform1f(highlightMixLoc, 0.0f);
         }
-
         glDrawElementsBaseVertex(
             GL_TRIANGLES,
             sm.indexCount,
@@ -354,21 +282,17 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
         );
     }
 }
-
 size_t M3Render::getSubmeshCount() const { return submeshes.size(); }
 const M3Submesh& M3Render::getSubmesh(size_t i) const { return submeshes[i]; }
-
 size_t M3Render::getMaterialCount() const { return materials.size(); }
 size_t M3Render::getMaterialVariantCount(size_t materialId) const {
     if (materialId >= materials.size()) return 0;
     return materials[materialId].variants.size();
 }
-
 int M3Render::getMaterialSelectedVariant(size_t materialId) const {
     if (materialId >= materialSelectedVariant.size()) return 0;
     return materialSelectedVariant[materialId];
 }
-
 void M3Render::setMaterialSelectedVariant(size_t materialId, int variant) {
     if (materialId >= materialSelectedVariant.size()) return;
     int maxV = (int)getMaterialVariantCount(materialId);
@@ -377,30 +301,24 @@ void M3Render::setMaterialSelectedVariant(size_t materialId, int variant) {
     if (variant >= maxV) variant = maxV - 1;
     materialSelectedVariant[materialId] = variant;
 }
-
 bool M3Render::getSubmeshVisible(size_t submeshId) const {
     if (submeshId >= submeshVisible.size()) return true;
     return submeshVisible[submeshId] != 0;
 }
-
 void M3Render::setSubmeshVisible(size_t submeshId, bool v) {
     if (submeshId >= submeshVisible.size()) return;
     submeshVisible[submeshId] = v ? 1 : 0;
 }
-
 int M3Render::getSubmeshVariantOverride(size_t submeshId) const {
     if (submeshId >= submeshVariantOverride.size()) return -1;
     return submeshVariantOverride[submeshId];
 }
-
 void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) {
     if (submeshId >= submeshVariantOverride.size()) return;
     submeshVariantOverride[submeshId] = variantOrMinus1;
 }
-
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
-
     for (size_t i = 0; i < submeshes.size(); ++i) {
         uint8_t gid = submeshes[i].groupId;
         if (gid == 255) {
@@ -412,7 +330,6 @@ void M3Render::setActiveVariant(int variantIndex) {
         }
     }
 }
-
 void M3Render::playAnimation(int index) {
     if (index < 0 || index >= (int)animations.size()) {
         stopAnimation();
@@ -422,28 +339,23 @@ void M3Render::playAnimation(int index) {
     animationTime = 0.0f;
     animationPaused = false;
 }
-
 void M3Render::stopAnimation() {
     playingAnimation = -1;
     animationTime = 0.0f;
     animationPaused = false;
     boneMatrices.clear();
 }
-
 void M3Render::pauseAnimation() {
     animationPaused = true;
 }
-
 void M3Render::resumeAnimation() {
     animationPaused = false;
 }
-
 float M3Render::getAnimationDuration() const {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) return 0.0f;
     const auto& anim = animations[playingAnimation];
     return (anim.timestampEnd - anim.timestampStart) / 1000.0f;
 }
-
 static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(1.0f);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -464,7 +376,6 @@ static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     }
     return glm::mix(prev->scale, next->scale, t);
 }
-
 static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::quat(1, 0, 0, 0);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -485,7 +396,6 @@ static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs
     }
     return glm::slerp(prev->rotation, next->rotation, t);
 }
-
 static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(0.0f);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -506,114 +416,74 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
     }
     return glm::mix(prev->translation, next->translation, t);
 }
-
 void M3Render::updateAnimation(float deltaTime) {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) {
         boneMatrices.clear();
         return;
     }
-
     const auto& anim = animations[playingAnimation];
     float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
-
     if (duration > 0.0f && !animationPaused) {
         animationTime += deltaTime;
         if (animationTime >= duration) {
             animationTime = std::fmod(animationTime, duration);
         }
     }
-
     float currentTimeMs = anim.timestampStart + animationTime * 1000.0f;
-
     boneMatrices.resize(bones.size());
     std::vector<glm::mat4> worldTransforms(bones.size());
-
-    // DEBUG: Print once per animation start
-    static int debugFrame = 0;
-    bool doDebug = (debugFrame++ % 300 == 0); // Print every ~5 seconds at 60fps
-    if (doDebug) {
-        std::cout << "\n=== ANIMATION FRAME (time=" << animationTime << "s, timeMs=" << currentTimeMs << ") ===" << std::endl;
-    }
-
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
         bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-
+        glm::mat4 bindLocalMatrix;
+        if (!isRootBone) {
+            glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
+            bindLocalMatrix = parentGlobalInv * bone.globalMatrix;
+        } else {
+            bindLocalMatrix = bone.globalMatrix;
+        }
+        glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
         glm::vec3 scale(1.0f);
         glm::quat rotation(1, 0, 0, 0);
-        glm::vec3 translation = bone.position;
-
+        glm::vec3 translation = bindTranslation;
         for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 scale = interpolateScale(bone.tracks[t], currentTimeMs);
                 break;
             }
         }
-
         for (int t = 4; t <= 5; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 rotation = interpolateRotation(bone.tracks[t], currentTimeMs);
                 break;
             }
         }
-
-        // Skip translation tracks on root bones to keep model anchored at origin
-        // Root motion data is typically locomotion data, not for in-place playback
-        // Also skip for "locomotion bones" - bones at origin with T6 animation (root motion carriers)
-        bool isLocomotionBone = (glm::length(bone.position) < 0.001f &&
-                                 glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f &&
-                                 bone.tracks[6].keyframes.size() > 10);
-        if (!bone.tracks[6].keyframes.empty() && !isRootBone && !isLocomotionBone) {
+        bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
+        bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
+        if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
-
-        if (doDebug && isLocomotionBone) {
-            std::cout << "  Bone " << i << " detected as LOCOMOTION bone (skipping T6)" << std::endl;
-        }
-
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
         glm::mat4 R = glm::mat4_cast(rotation);
         glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
         glm::mat4 localTransform = T * R * S;
-
         if (!isRootBone) {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
         } else {
             worldTransforms[i] = localTransform;
         }
-
         boneMatrices[i] = worldTransforms[i] * bone.inverseGlobalMatrix;
-
-        // DEBUG
-        if (doDebug && i < 5) { // Print first 5 bones
-            glm::vec3 worldPos = glm::vec3(worldTransforms[i][3]);
-            glm::vec3 finalPos = glm::vec3(boneMatrices[i][3]);
-            std::cout << "Bone " << i << " (root=" << isRootBone << "): "
-                      << "trans=(" << translation.x << "," << translation.y << "," << translation.z << ") "
-                      << "worldPos=(" << worldPos.x << "," << worldPos.y << "," << worldPos.z << ") "
-                      << "finalMat[3]=(" << finalPos.x << "," << finalPos.y << "," << finalPos.z << ")"
-                      << std::endl;
-        }
-    }
-
-    if (doDebug) {
-        std::cout << "=== END FRAME ===\n" << std::endl;
     }
 }
-
 void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
-
     struct SkeletonVertex {
         glm::vec3 pos;
         glm::vec3 color;
     };
-
     std::vector<SkeletonVertex> verts;
     verts.reserve(bones.size() * 8);
-
     std::vector<glm::vec3> boneWorldPos(bones.size());
-
     if (playingAnimation >= 0 && !boneMatrices.empty()) {
         for (size_t i = 0; i < bones.size(); ++i) {
             glm::mat4 worldTransform = boneMatrices[i] * bones[i].globalMatrix;
@@ -624,11 +494,9 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
             boneWorldPos[i] = glm::vec3(bones[i].globalMatrix[3]);
         }
     }
-
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
         glm::vec3 bonePos = boneWorldPos[i];
-
         float ptSize = 0.02f;
         glm::vec3 jointColor(1.0f, 1.0f, 0.0f);
         verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
@@ -637,7 +505,6 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
         verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
-
         if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
             glm::vec3 parentPos = boneWorldPos[bone.parentId];
             glm::vec3 boneColor(0.0f, 1.0f, 1.0f);
@@ -645,27 +512,21 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
             verts.push_back({parentPos, boneColor});
         }
     }
-
     if (verts.empty()) return;
-
     glBindVertexArray(skeletonVAO);
     glBindBuffer(GL_ARRAY_BUFFER, skeletonVBO);
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(SkeletonVertex), verts.data(), GL_DYNAMIC_DRAW);
-
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)0);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)offsetof(SkeletonVertex, color));
-
     glUseProgram(skeletonProgram);
     glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-
     glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
     glEnable(GL_DEPTH_TEST);
 }
-
 static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
     const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, float& t)
 {
@@ -685,33 +546,25 @@ static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
     t = f * glm::dot(edge2, q);
     return t > EPSILON;
 }
-
 int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
 {
     float closestT = FLT_MAX;
     int closestSubmesh = -1;
-
     const auto& verts = geometry.vertices;
     const auto& indices = geometry.indices;
-
     for (size_t si = 0; si < submeshes.size(); ++si)
     {
         if (si < submeshVisible.size() && submeshVisible[si] == 0) continue;
-
         const auto& sm = submeshes[si];
-
         for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
         {
             uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
             uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
             uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
-
             if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
-
             const glm::vec3& v0 = verts[i0].position;
             const glm::vec3& v1 = verts[i1].position;
             const glm::vec3& v2 = verts[i2].position;
-
             float t;
             if (rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, t))
             {
@@ -723,6 +576,5 @@ int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir
             }
         }
     }
-
     return closestSubmesh;
 }
