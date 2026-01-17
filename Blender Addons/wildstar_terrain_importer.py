@@ -1,11 +1,11 @@
 bl_info = {
     "name": "WildStar Terrain Importer",
-    "author": "WildStar Tools",
-    "version": (2, 5, 0),
+    "author": "Matthew Wakeman",
+    "version": (1, , 0),
     "blender": (3, 0, 0),
-    "location": "File > Import > WildStar Terrain (.wsterrain)",
-    "description": "Import WildStar terrain with splatmap materials and normal maps",
-    "category": "Import-Export",
+    "location": "",
+    "description": "",
+    "category": "",
 }
 
 import bpy
