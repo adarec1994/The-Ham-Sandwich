@@ -3,10 +3,13 @@
 #include "../Archive.h"
 #include "../tex/tex.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
 #include <cstring>
+#include <cfloat>
 #include <unordered_map>
 #include <codecvt>
 #include <locale>
@@ -183,6 +186,12 @@ namespace M3Export
         buf.push_back((v >> 24) & 0xFF);
     }
 
+    static void WriteU16(std::vector<uint8_t>& buf, uint16_t v)
+    {
+        buf.push_back(v & 0xFF);
+        buf.push_back((v >> 8) & 0xFF);
+    }
+
     static void WriteF32(std::vector<uint8_t>& buf, float v)
     {
         uint32_t u;
@@ -264,7 +273,7 @@ namespace M3Export
     ExportResult ExportToFBX(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
     {
         ExportResult result;
-        result.errorMessage = "FBX export not implemented - use GLB";
+        result.errorMessage = "FBX export not implemented";
         return result;
     }
 
@@ -301,6 +310,8 @@ namespace M3Export
             std::vector<glm::vec3> positions;
             std::vector<glm::vec3> normals;
             std::vector<glm::vec2> uvs;
+            std::vector<glm::uvec4> joints;
+            std::vector<glm::vec4> weights;
             std::vector<uint32_t> indices;
             uint16_t materialId;
             size_t originalIndex;
@@ -348,7 +359,9 @@ namespace M3Export
                     const auto& v = allVertices[globalIdx];
                     se.positions.push_back(v.position);
                     se.normals.push_back(v.normal);
-                    se.uvs.push_back(v.uv1);  // Use original UVs without flip
+                    se.uvs.push_back(v.uv1);
+                    se.joints.push_back(v.boneIndices);
+                    se.weights.push_back(v.boneWeights);
                     se.indices.push_back(newIdx);
                 }
             }
@@ -367,6 +380,7 @@ namespace M3Export
 
         result.vertexCount = static_cast<int>(totalVerts);
         result.triangleCount = static_cast<int>(totalTris);
+        result.boneCount = static_cast<int>(render->getAllBones().size());
 
         if (progress) progress(10, 100, "Loading textures...");
 
@@ -463,14 +477,33 @@ namespace M3Export
         std::vector<BufView> views;
         std::vector<Acc> accessors;
 
-        struct MeshData { int posAcc, normAcc, uvAcc, idxAcc; int matIdx; std::string name; };
+        struct MeshData { int posAcc, normAcc, uvAcc, jointsAcc, weightsAcc, idxAcc; int matIdx; std::string name; };
         std::vector<MeshData> meshes;
+
+        const auto& bones = render->getAllBones();
+        bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
+
+        if (hasSkeleton)
+        {
+            std::cout << "[M3Export] Skeleton: " << bones.size() << " bones" << std::endl;
+            for (size_t i = 0; i < std::min(bones.size(), (size_t)5); ++i)
+            {
+                const auto& b = bones[i];
+                std::cout << "[M3Export]   Bone " << i << ": parent=" << b.parentId
+                          << " pos=(" << b.globalMatrix[3][0] << "," << b.globalMatrix[3][1] << "," << b.globalMatrix[3][2] << ")"
+                          << std::endl;
+            }
+            if (bones.size() > 5)
+                std::cout << "[M3Export]   ... and " << (bones.size() - 5) << " more" << std::endl;
+        }
 
         for (const auto& se : exportList)
         {
             MeshData md;
             md.name = se.name;
             md.matIdx = matIdToGltfMat.count(se.materialId) ? matIdToGltfMat[se.materialId] : -1;
+            md.jointsAcc = -1;
+            md.weightsAcc = -1;
 
             std::cout << "[M3Export] Mesh '" << se.name << "' (M3 mat " << se.materialId << ") -> glTF material " << md.matIdx << std::endl;
 
@@ -500,12 +533,53 @@ namespace M3Export
             size_t uvOff = bin.size();
             for (const auto& uv : se.uvs)
             {
-                WriteF32(bin, uv.x); WriteF32(bin, uv.y);  // Already flipped during collection
+                WriteF32(bin, uv.x); WriteF32(bin, uv.y);
             }
             Pad(bin, 4);
             views.push_back({uvOff, se.uvs.size() * 8, 34962});
             md.uvAcc = static_cast<int>(accessors.size());
             accessors.push_back({(int)views.size() - 1, 5126, (int)se.uvs.size(), "VEC2", {}, {}, false});
+
+            if (hasSkeleton && !se.joints.empty())
+            {
+                size_t jointsOff = bin.size();
+                for (const auto& j : se.joints)
+                {
+                    uint16_t maxBone = static_cast<uint16_t>(bones.size() > 0 ? bones.size() - 1 : 0);
+                    WriteU16(bin, std::min(static_cast<uint16_t>(j.x), maxBone));
+                    WriteU16(bin, std::min(static_cast<uint16_t>(j.y), maxBone));
+                    WriteU16(bin, std::min(static_cast<uint16_t>(j.z), maxBone));
+                    WriteU16(bin, std::min(static_cast<uint16_t>(j.w), maxBone));
+                }
+                Pad(bin, 4);
+                views.push_back({jointsOff, se.joints.size() * 8, 34962});
+                md.jointsAcc = static_cast<int>(accessors.size());
+                accessors.push_back({(int)views.size() - 1, 5123, (int)se.joints.size(), "VEC4", {}, {}, false});
+
+                size_t weightsOff = bin.size();
+                for (const auto& w : se.weights)
+                {
+                    float sum = w.x + w.y + w.z + w.w;
+                    if (sum > 0.0001f)
+                    {
+                        WriteF32(bin, w.x / sum);
+                        WriteF32(bin, w.y / sum);
+                        WriteF32(bin, w.z / sum);
+                        WriteF32(bin, w.w / sum);
+                    }
+                    else
+                    {
+                        WriteF32(bin, 1.0f);
+                        WriteF32(bin, 0.0f);
+                        WriteF32(bin, 0.0f);
+                        WriteF32(bin, 0.0f);
+                    }
+                }
+                Pad(bin, 4);
+                views.push_back({weightsOff, se.weights.size() * 16, 34962});
+                md.weightsAcc = static_cast<int>(accessors.size());
+                accessors.push_back({(int)views.size() - 1, 5126, (int)se.weights.size(), "VEC4", {}, {}, false});
+            }
 
             size_t idxOff = bin.size();
             for (uint32_t idx : se.indices) WriteU32(bin, idx);
@@ -525,26 +599,99 @@ namespace M3Export
             Pad(bin, 4);
         }
 
+        int inverseBindMatricesAcc = -1;
+        if (hasSkeleton)
+        {
+            size_t ibmOff = bin.size();
+            for (const auto& bone : bones)
+            {
+                glm::mat4 ibm = bone.inverseGlobalMatrix;
+                ibm[3][3] = 1.0f;
+                for (int c = 0; c < 4; ++c)
+                {
+                    for (int r = 0; r < 4; ++r)
+                    {
+                        WriteF32(bin, ibm[c][r]);
+                    }
+                }
+            }
+            Pad(bin, 4);
+            views.push_back({ibmOff, bones.size() * 64, 0});
+            inverseBindMatricesAcc = static_cast<int>(accessors.size());
+            accessors.push_back({(int)views.size() - 1, 5126, (int)bones.size(), "MAT4", {}, {}, false});
+        }
+
         if (progress) progress(60, 100, "Building JSON...");
+
+        // ========== FLAT SKELETON HIERARCHY ==========
+        // All bones are direct children of root node
+        // Each bone uses its globalMatrix as the local transform
+        // This way glTF computes: jointMatrix = globalMatrix * inverseBindMatrix = identity (in bind pose)
+
+        int rootNode = 0;
+        int firstMeshNode = 1;
+        int firstBoneNode = static_cast<int>(1 + meshes.size());
 
         std::string json = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"WildStar M3 Exporter\"},";
         json += "\"scene\":0,";
 
-        json += "\"scenes\":[{\"name\":\"Scene\",\"nodes\":[0]}],";
+        json += "\"scenes\":[{\"name\":\"Scene\",\"nodes\":[" + std::to_string(rootNode) + "]}],";
 
-        json += "\"nodes\":[{\"name\":\"" + EscapeJsonString(baseName) + "\",\"children\":[";
+        json += "\"nodes\":[";
+
+        // Root node with mesh nodes and ALL bone nodes as direct children (flat hierarchy)
+        json += "{\"name\":\"" + EscapeJsonString(baseName) + "\",\"children\":[";
         for (size_t i = 0; i < meshes.size(); ++i)
         {
             if (i > 0) json += ",";
-            json += std::to_string(i + 1);
+            json += std::to_string(firstMeshNode + i);
+        }
+        if (hasSkeleton)
+        {
+            for (size_t i = 0; i < bones.size(); ++i)
+            {
+                json += "," + std::to_string(firstBoneNode + i);
+            }
         }
         json += "]}";
+
+        // Mesh nodes
         for (size_t i = 0; i < meshes.size(); ++i)
         {
-            json += ",{\"name\":\"" + EscapeJsonString(meshes[i].name) + "\",\"mesh\":" + std::to_string(i) + "}";
+            json += ",{\"name\":\"" + EscapeJsonString(meshes[i].name) + "\",\"mesh\":" + std::to_string(i);
+            if (hasSkeleton)
+                json += ",\"skin\":0";
+            json += "}";
+        }
+
+        // Bone nodes - flat hierarchy, each bone uses globalMatrix as its local transform
+        // IMPORTANT: Write matrix in COLUMN-MAJOR order for glTF
+        if (hasSkeleton)
+        {
+            for (size_t i = 0; i < bones.size(); ++i)
+            {
+                const auto& bone = bones[i];
+                json += ",{\"name\":\"" + EscapeJsonString(bone.name.empty() ? "Bone_" + std::to_string(i) : bone.name) + "\"";
+
+                // Write globalMatrix in column-major order (glTF requirement)
+                // GLM mat[c][r] = column c, row r
+                // Column-major: write column 0, then column 1, etc.
+                json += ",\"matrix\":[";
+                for (int c = 0; c < 4; ++c)
+                {
+                    for (int r = 0; r < 4; ++r)
+                    {
+                        if (c > 0 || r > 0) json += ",";
+                        json += FloatStr(bone.globalMatrix[c][r]);  // [c][r] for column-major!
+                    }
+                }
+                json += "]";
+                json += "}";
+            }
         }
         json += "],";
 
+        // Meshes
         json += "\"meshes\":[";
         for (size_t i = 0; i < meshes.size(); ++i)
         {
@@ -553,13 +700,32 @@ namespace M3Export
             json += "{\"name\":\"" + EscapeJsonString(m.name) + "\",\"primitives\":[{";
             json += "\"attributes\":{\"POSITION\":" + std::to_string(m.posAcc);
             json += ",\"NORMAL\":" + std::to_string(m.normAcc);
-            json += ",\"TEXCOORD_0\":" + std::to_string(m.uvAcc) + "}";
+            json += ",\"TEXCOORD_0\":" + std::to_string(m.uvAcc);
+            if (m.jointsAcc >= 0)
+                json += ",\"JOINTS_0\":" + std::to_string(m.jointsAcc);
+            if (m.weightsAcc >= 0)
+                json += ",\"WEIGHTS_0\":" + std::to_string(m.weightsAcc);
+            json += "}";
             json += ",\"indices\":" + std::to_string(m.idxAcc);
             if (m.matIdx >= 0)
                 json += ",\"material\":" + std::to_string(m.matIdx);
             json += "}]}";
         }
         json += "],";
+
+        // Skin - with flat hierarchy, skeleton root is the model root
+        if (hasSkeleton)
+        {
+            json += "\"skins\":[{\"name\":\"Armature\",\"inverseBindMatrices\":" + std::to_string(inverseBindMatricesAcc);
+            json += ",\"skeleton\":" + std::to_string(rootNode);
+            json += ",\"joints\":[";
+            for (size_t i = 0; i < bones.size(); ++i)
+            {
+                if (i > 0) json += ",";
+                json += std::to_string(firstBoneNode + i);
+            }
+            json += "]}],";
+        }
 
         if (!gltfMaterials.empty())
         {
@@ -658,7 +824,8 @@ namespace M3Export
         out.close();
 
         std::cout << "[M3Export] Wrote " << glbPath << std::endl;
-        std::cout << "[M3Export] Meshes: " << meshes.size() << ", Materials: " << gltfMaterials.size() << ", Images: " << loadedImages.size() << std::endl;
+        std::cout << "[M3Export] Meshes: " << meshes.size() << ", Materials: " << gltfMaterials.size()
+                  << ", Images: " << loadedImages.size() << ", Bones: " << bones.size() << std::endl;
 
         if (progress) progress(100, 100, "Done!");
 
