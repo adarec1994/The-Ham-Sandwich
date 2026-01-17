@@ -621,12 +621,253 @@ namespace M3Export
             accessors.push_back({(int)views.size() - 1, 5126, (int)bones.size(), "MAT4", {}, {}, false});
         }
 
+        // ========== ANIMATION DATA ==========
+        const auto& animations = render->getAllAnimations();
+        bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
+
+        struct AnimChannelData {
+            int boneIndex;
+            std::string path; // "translation", "rotation", "scale"
+            int inputAcc;  // time accessor
+            int outputAcc; // value accessor
+        };
+
+        struct AnimData {
+            std::string name;
+            std::vector<AnimChannelData> channels;
+        };
+        std::vector<AnimData> gltfAnimations;
+
+        if (hasAnimations)
+        {
+            std::cout << "[M3Export] Exporting " << animations.size() << " animations" << std::endl;
+
+            for (size_t animIdx = 0; animIdx < animations.size(); ++animIdx)
+            {
+                const auto& anim = animations[animIdx];
+                float startTime = anim.timestampStart / 1000.0f;
+                float endTime = anim.timestampEnd / 1000.0f;
+                float duration = endTime - startTime;
+
+                if (duration <= 0.0f) continue;
+
+                AnimData animData;
+                animData.name = "Animation_" + std::to_string(anim.sequenceId);
+
+                std::cout << "[M3Export]   Animation " << animIdx << " (seq " << anim.sequenceId
+                          << "): " << startTime << "s - " << endTime << "s" << std::endl;
+
+                for (size_t boneIdx = 0; boneIdx < bones.size(); ++boneIdx)
+                {
+                    const auto& bone = bones[boneIdx];
+
+                    // Check for scale track (tracks 0, 1, or 2)
+                    const M3AnimationTrack* scaleTrack = nullptr;
+                    for (int t = 0; t <= 2; ++t)
+                    {
+                        if (!bone.tracks[t].keyframes.empty())
+                        {
+                            scaleTrack = &bone.tracks[t];
+                            break;
+                        }
+                    }
+
+                    // Check for rotation track (tracks 4 or 5)
+                    const M3AnimationTrack* rotTrack = nullptr;
+                    for (int t = 4; t <= 5; ++t)
+                    {
+                        if (!bone.tracks[t].keyframes.empty())
+                        {
+                            rotTrack = &bone.tracks[t];
+                            break;
+                        }
+                    }
+
+                    // Check for translation track (track 6)
+                    const M3AnimationTrack* transTrack = nullptr;
+                    if (!bone.tracks[6].keyframes.empty())
+                    {
+                        transTrack = &bone.tracks[6];
+                    }
+
+                    // Export translation
+                    if (transTrack && !transTrack->keyframes.empty())
+                    {
+                        std::vector<float> times;
+                        std::vector<glm::vec3> values;
+
+                        for (const auto& kf : transTrack->keyframes)
+                        {
+                            float t = kf.timestamp / 1000.0f - startTime;
+                            if (t >= 0.0f && t <= duration)
+                            {
+                                times.push_back(t);
+                                values.push_back(kf.translation);
+                            }
+                        }
+
+                        if (times.size() >= 2)
+                        {
+                            // Write times
+                            size_t timeOff = bin.size();
+                            float minT = times.front(), maxT = times.back();
+                            for (float t : times) WriteF32(bin, t);
+                            Pad(bin, 4);
+                            views.push_back({timeOff, times.size() * 4, 0});
+                            int timeAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
+                                glm::vec3(minT), glm::vec3(maxT), true});
+
+                            // Write values
+                            size_t valOff = bin.size();
+                            for (const auto& v : values)
+                            {
+                                WriteF32(bin, v.x);
+                                WriteF32(bin, v.y);
+                                WriteF32(bin, v.z);
+                            }
+                            Pad(bin, 4);
+                            views.push_back({valOff, values.size() * 12, 0});
+                            int valAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
+
+                            animData.channels.push_back({(int)boneIdx, "translation", timeAcc, valAcc});
+                        }
+                    }
+
+                    // Export rotation
+                    if (rotTrack && !rotTrack->keyframes.empty())
+                    {
+                        std::vector<float> times;
+                        std::vector<glm::quat> values;
+
+                        for (const auto& kf : rotTrack->keyframes)
+                        {
+                            float t = kf.timestamp / 1000.0f - startTime;
+                            if (t >= 0.0f && t <= duration)
+                            {
+                                times.push_back(t);
+                                values.push_back(kf.rotation);
+                            }
+                        }
+
+                        if (times.size() >= 2)
+                        {
+                            // Write times
+                            size_t timeOff = bin.size();
+                            float minT = times.front(), maxT = times.back();
+                            for (float t : times) WriteF32(bin, t);
+                            Pad(bin, 4);
+                            views.push_back({timeOff, times.size() * 4, 0});
+                            int timeAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
+                                glm::vec3(minT), glm::vec3(maxT), true});
+
+                            // Write values (glTF expects x,y,z,w order)
+                            size_t valOff = bin.size();
+                            for (const auto& q : values)
+                            {
+                                WriteF32(bin, q.x);
+                                WriteF32(bin, q.y);
+                                WriteF32(bin, q.z);
+                                WriteF32(bin, q.w);
+                            }
+                            Pad(bin, 4);
+                            views.push_back({valOff, values.size() * 16, 0});
+                            int valAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC4", {}, {}, false});
+
+                            animData.channels.push_back({(int)boneIdx, "rotation", timeAcc, valAcc});
+                        }
+                    }
+
+                    // Export scale
+                    if (scaleTrack && !scaleTrack->keyframes.empty())
+                    {
+                        std::vector<float> times;
+                        std::vector<glm::vec3> values;
+
+                        for (const auto& kf : scaleTrack->keyframes)
+                        {
+                            float t = kf.timestamp / 1000.0f - startTime;
+                            if (t >= 0.0f && t <= duration)
+                            {
+                                times.push_back(t);
+                                values.push_back(kf.scale);
+                            }
+                        }
+
+                        if (times.size() >= 2)
+                        {
+                            // Write times
+                            size_t timeOff = bin.size();
+                            float minT = times.front(), maxT = times.back();
+                            for (float t : times) WriteF32(bin, t);
+                            Pad(bin, 4);
+                            views.push_back({timeOff, times.size() * 4, 0});
+                            int timeAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
+                                glm::vec3(minT), glm::vec3(maxT), true});
+
+                            // Write values
+                            size_t valOff = bin.size();
+                            for (const auto& v : values)
+                            {
+                                WriteF32(bin, v.x);
+                                WriteF32(bin, v.y);
+                                WriteF32(bin, v.z);
+                            }
+                            Pad(bin, 4);
+                            views.push_back({valOff, values.size() * 12, 0});
+                            int valAcc = static_cast<int>(accessors.size());
+                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
+
+                            animData.channels.push_back({(int)boneIdx, "scale", timeAcc, valAcc});
+                        }
+                    }
+                }
+
+                if (!animData.channels.empty())
+                {
+                    std::cout << "[M3Export]     Exported " << animData.channels.size() << " channels" << std::endl;
+                    gltfAnimations.push_back(std::move(animData));
+                }
+            }
+
+            result.animationCount = static_cast<int>(gltfAnimations.size());
+            std::cout << "[M3Export] Total animations exported: " << gltfAnimations.size() << std::endl;
+        }
+
         if (progress) progress(60, 100, "Building JSON...");
 
-        // ========== FLAT SKELETON HIERARCHY ==========
-        // All bones are direct children of root node
-        // Each bone uses its globalMatrix as the local transform
-        // This way glTF computes: jointMatrix = globalMatrix * inverseBindMatrix = identity (in bind pose)
+        // ========== HIERARCHICAL SKELETON ==========
+        // Build proper parent-child relationships
+        // Each bone uses LOCAL transform (relative to parent)
+
+        std::vector<std::vector<int>> boneChildren(bones.size());
+        std::vector<int> rootBones;
+
+        if (hasSkeleton)
+        {
+            for (size_t i = 0; i < bones.size(); ++i)
+            {
+                int parentId = bones[i].parentId;
+                if (parentId >= 0 && parentId < (int)bones.size())
+                {
+                    boneChildren[parentId].push_back(static_cast<int>(i));
+                }
+                else
+                {
+                    rootBones.push_back(static_cast<int>(i));
+                }
+            }
+
+            std::cout << "[M3Export] Root bones: " << rootBones.size() << std::endl;
+            for (int rb : rootBones)
+            {
+                std::cout << "[M3Export]   Root bone " << rb << ": " << bones[rb].name << std::endl;
+            }
+        }
 
         int rootNode = 0;
         int firstMeshNode = 1;
@@ -639,7 +880,7 @@ namespace M3Export
 
         json += "\"nodes\":[";
 
-        // Root node with mesh nodes and ALL bone nodes as direct children (flat hierarchy)
+        // Root node - contains mesh nodes and ROOT bones only
         json += "{\"name\":\"" + EscapeJsonString(baseName) + "\",\"children\":[";
         for (size_t i = 0; i < meshes.size(); ++i)
         {
@@ -648,9 +889,9 @@ namespace M3Export
         }
         if (hasSkeleton)
         {
-            for (size_t i = 0; i < bones.size(); ++i)
+            for (int rb : rootBones)
             {
-                json += "," + std::to_string(firstBoneNode + i);
+                json += "," + std::to_string(firstBoneNode + rb);
             }
         }
         json += "]}";
@@ -664,8 +905,7 @@ namespace M3Export
             json += "}";
         }
 
-        // Bone nodes - flat hierarchy, each bone uses globalMatrix as its local transform
-        // IMPORTANT: Write matrix in COLUMN-MAJOR order for glTF
+        // Bone nodes - with hierarchy and LOCAL transforms
         if (hasSkeleton)
         {
             for (size_t i = 0; i < bones.size(); ++i)
@@ -673,19 +913,41 @@ namespace M3Export
                 const auto& bone = bones[i];
                 json += ",{\"name\":\"" + EscapeJsonString(bone.name.empty() ? "Bone_" + std::to_string(i) : bone.name) + "\"";
 
-                // Write globalMatrix in column-major order (glTF requirement)
-                // GLM mat[c][r] = column c, row r
-                // Column-major: write column 0, then column 1, etc.
+                // Compute LOCAL transform: localMatrix = inverse(parent.globalMatrix) * bone.globalMatrix
+                glm::mat4 localMatrix;
+                if (bone.parentId >= 0 && bone.parentId < (int)bones.size())
+                {
+                    localMatrix = bones[bone.parentId].inverseGlobalMatrix * bone.globalMatrix;
+                }
+                else
+                {
+                    localMatrix = bone.globalMatrix;
+                }
+
+                // Write matrix in COLUMN-MAJOR order for glTF
                 json += ",\"matrix\":[";
                 for (int c = 0; c < 4; ++c)
                 {
                     for (int r = 0; r < 4; ++r)
                     {
                         if (c > 0 || r > 0) json += ",";
-                        json += FloatStr(bone.globalMatrix[c][r]);  // [c][r] for column-major!
+                        json += FloatStr(localMatrix[c][r]);
                     }
                 }
                 json += "]";
+
+                // Add children
+                if (!boneChildren[i].empty())
+                {
+                    json += ",\"children\":[";
+                    for (size_t ci = 0; ci < boneChildren[i].size(); ++ci)
+                    {
+                        if (ci > 0) json += ",";
+                        json += std::to_string(firstBoneNode + boneChildren[i][ci]);
+                    }
+                    json += "]";
+                }
+
                 json += "}";
             }
         }
@@ -713,11 +975,11 @@ namespace M3Export
         }
         json += "],";
 
-        // Skin - with flat hierarchy, skeleton root is the model root
+        // Skin
         if (hasSkeleton)
         {
             json += "\"skins\":[{\"name\":\"Armature\",\"inverseBindMatrices\":" + std::to_string(inverseBindMatricesAcc);
-            json += ",\"skeleton\":" + std::to_string(rootNode);
+            json += ",\"skeleton\":" + std::to_string(rootBones.empty() ? rootNode : (firstBoneNode + rootBones[0]));
             json += ",\"joints\":[";
             for (size_t i = 0; i < bones.size(); ++i)
             {
@@ -725,6 +987,46 @@ namespace M3Export
                 json += std::to_string(firstBoneNode + i);
             }
             json += "]}],";
+        }
+
+        // Animations
+        if (!gltfAnimations.empty())
+        {
+            json += "\"animations\":[";
+            for (size_t ai = 0; ai < gltfAnimations.size(); ++ai)
+            {
+                const auto& anim = gltfAnimations[ai];
+                if (ai > 0) json += ",";
+
+                json += "{\"name\":\"" + EscapeJsonString(anim.name) + "\"";
+
+                // Samplers
+                json += ",\"samplers\":[";
+                for (size_t ci = 0; ci < anim.channels.size(); ++ci)
+                {
+                    const auto& ch = anim.channels[ci];
+                    if (ci > 0) json += ",";
+                    json += "{\"input\":" + std::to_string(ch.inputAcc);
+                    json += ",\"output\":" + std::to_string(ch.outputAcc);
+                    json += ",\"interpolation\":\"LINEAR\"}";
+                }
+                json += "]";
+
+                // Channels
+                json += ",\"channels\":[";
+                for (size_t ci = 0; ci < anim.channels.size(); ++ci)
+                {
+                    const auto& ch = anim.channels[ci];
+                    if (ci > 0) json += ",";
+                    json += "{\"sampler\":" + std::to_string(ci);
+                    json += ",\"target\":{\"node\":" + std::to_string(firstBoneNode + ch.boneIndex);
+                    json += ",\"path\":\"" + ch.path + "\"}}";
+                }
+                json += "]";
+
+                json += "}";
+            }
+            json += "],";
         }
 
         if (!gltfMaterials.empty())
