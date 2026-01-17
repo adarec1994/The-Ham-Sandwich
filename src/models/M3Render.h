@@ -41,6 +41,14 @@ public:
     void setModelName(const std::string& name) { modelName = name; }
     const std::string& getModelName() const { return modelName; }
     const std::vector<unsigned int>& getGLTextures() const { return glTextures; }
+    const std::vector<M3SubmeshGroup>& getSubmeshGroups() const { return submeshGroups; }
+
+    void setActiveVariant(int variantIndex);
+    int getActiveVariant() const { return activeVariant; }
+
+    void setShowSkeleton(bool show) { showSkeleton = show; }
+    bool getShowSkeleton() const { return showSkeleton; }
+    void renderSkeleton(const glm::mat4& view, const glm::mat4& proj);
 
 private:
     unsigned int VAO = 0, VBO = 0, EBO = 0;
@@ -58,10 +66,17 @@ private:
     std::vector<int> submeshVariantOverride;
 
     std::string modelName;
+    std::vector<M3SubmeshGroup> submeshGroups;
+    int activeVariant = -1;
+    bool showSkeleton = false;
+
+    unsigned int skeletonVAO = 0, skeletonVBO = 0;
+    unsigned int skeletonProgram = 0;
 
     unsigned int fallbackWhiteTex = 0;
 
     void setupShader();
+    void setupSkeletonShader();
     void loadTextures(const M3ModelData& data, const ArchivePtr& arc);
     unsigned int loadTextureFromArchive(const ArchivePtr& arc, const std::string& path);
     unsigned int createFallbackWhite();

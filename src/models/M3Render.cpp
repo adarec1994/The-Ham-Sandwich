@@ -36,6 +36,27 @@ void main() {
 }
 )";
 
+const char* skeletonVertSrc = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+uniform mat4 view, projection;
+out vec3 vColor;
+void main() {
+    gl_Position = projection * view * vec4(aPos, 1.0);
+    vColor = aColor;
+}
+)";
+
+const char* skeletonFragSrc = R"(
+#version 330 core
+in vec3 vColor;
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(vColor, 1.0);
+}
+)";
+
 static unsigned int CompileShader(GLenum type, const char* src) {
     unsigned int s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
@@ -59,6 +80,7 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     bones = data.bones;
     textures = data.textures;
     animations = data.animations;
+    submeshGroups = data.submeshGroups;
 
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
@@ -107,6 +129,7 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneIndices));
 
     setupShader();
+    setupSkeletonShader();
 }
 
 M3Render::~M3Render() {
@@ -114,6 +137,9 @@ M3Render::~M3Render() {
     if (VBO) glDeleteBuffers(1, &VBO);
     if (EBO) glDeleteBuffers(1, &EBO);
     if (shaderProgram) glDeleteProgram(shaderProgram);
+    if (skeletonVAO) glDeleteVertexArrays(1, &skeletonVAO);
+    if (skeletonVBO) glDeleteBuffers(1, &skeletonVBO);
+    if (skeletonProgram) glDeleteProgram(skeletonProgram);
     for (unsigned int tid : glTextures) if (tid != 0) glDeleteTextures(1, &tid);
     if (fallbackWhiteTex) glDeleteTextures(1, &fallbackWhiteTex);
 }
@@ -127,6 +153,20 @@ void M3Render::setupShader() {
     glLinkProgram(shaderProgram);
     glDeleteShader(v);
     glDeleteShader(f);
+}
+
+void M3Render::setupSkeletonShader() {
+    unsigned int v = CompileShader(GL_VERTEX_SHADER, skeletonVertSrc);
+    unsigned int f = CompileShader(GL_FRAGMENT_SHADER, skeletonFragSrc);
+    skeletonProgram = glCreateProgram();
+    glAttachShader(skeletonProgram, v);
+    glAttachShader(skeletonProgram, f);
+    glLinkProgram(skeletonProgram);
+    glDeleteShader(v);
+    glDeleteShader(f);
+
+    glGenVertexArrays(1, &skeletonVAO);
+    glGenBuffers(1, &skeletonVBO);
 }
 
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
@@ -289,4 +329,75 @@ int M3Render::getSubmeshVariantOverride(size_t submeshId) const {
 void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) {
     if (submeshId >= submeshVariantOverride.size()) return;
     submeshVariantOverride[submeshId] = variantOrMinus1;
+}
+
+void M3Render::setActiveVariant(int variantIndex) {
+    activeVariant = variantIndex;
+
+    if (variantIndex < 0 || variantIndex >= (int)submeshGroups.size()) {
+        for (size_t i = 0; i < submeshes.size(); ++i) {
+            submeshVisible[i] = 1;
+        }
+        return;
+    }
+
+    uint16_t targetGroupId = submeshGroups[variantIndex].submeshId;
+    for (size_t i = 0; i < submeshes.size(); ++i) {
+        submeshVisible[i] = (submeshes[i].groupId == targetGroupId) ? 1 : 0;
+    }
+}
+
+void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
+    if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
+
+    struct SkeletonVertex {
+        glm::vec3 pos;
+        glm::vec3 color;
+    };
+
+    std::vector<SkeletonVertex> verts;
+    verts.reserve(bones.size() * 2 + bones.size() * 6);
+
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+        glm::vec3 bonePos = bone.position;
+
+        float ptSize = 0.02f;
+        glm::vec3 jointColor(1.0f, 1.0f, 0.0f);
+        verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, -ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
+
+        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+            glm::vec3 parentPos = bones[bone.parentId].position;
+            glm::vec3 boneColor(0.0f, 1.0f, 1.0f);
+            verts.push_back({bonePos, boneColor});
+            verts.push_back({parentPos, boneColor});
+        }
+    }
+
+    if (verts.empty()) return;
+
+    glBindVertexArray(skeletonVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skeletonVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(SkeletonVertex), verts.data(), GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)offsetof(SkeletonVertex, color));
+
+    glUseProgram(skeletonProgram);
+    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(2.0f);
+    glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
+    glEnable(GL_DEPTH_TEST);
+
+    glBindVertexArray(0);
 }

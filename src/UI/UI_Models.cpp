@@ -52,6 +52,41 @@ namespace UI_Models
 
             ImGui::Separator();
 
+            bool showSkel = render->getShowSkeleton();
+            if (ImGui::Checkbox("Show Skeleton", &showSkel))
+            {
+                render->setShowSkeleton(showSkel);
+            }
+
+            ImGui::Separator();
+
+            const auto& submeshGroups = render->getSubmeshGroups();
+            if (!submeshGroups.empty())
+            {
+                ImGui::Text("Variant:");
+                ImGui::SameLine();
+
+                int currentVariant = render->getActiveVariant();
+
+                if (ImGui::RadioButton("All", currentVariant == -1))
+                {
+                    render->setActiveVariant(-1);
+                }
+
+                for (size_t i = 0; i < submeshGroups.size(); ++i)
+                {
+                    ImGui::SameLine();
+                    char label[32];
+                    snprintf(label, sizeof(label), "%d", submeshGroups[i].submeshId);
+                    if (ImGui::RadioButton(label, currentVariant == (int)i))
+                    {
+                        render->setActiveVariant((int)i);
+                    }
+                }
+
+                ImGui::Separator();
+            }
+
             if (ImGui::CollapsingHeader("Submeshes"))
             {
                 for (size_t i = 0; i < submeshCount; ++i)
@@ -66,7 +101,7 @@ namespace UI_Models
                     }
                     ImGui::SameLine();
 
-                    if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu", i))
+                    if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu (Group %d)", i, sm.groupId))
                     {
                         ImGui::Text("Material ID: %d", sm.materialID);
                         ImGui::Text("Start Index: %u", sm.startIndex);

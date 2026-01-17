@@ -255,6 +255,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
     if (gLoadedModel)
     {
         gLoadedModel->render(view, projection);
+        gLoadedModel->renderSkeleton(view, projection);
     }
     else if (!gLoadedAreas.empty() && state.areaRender)
     {
