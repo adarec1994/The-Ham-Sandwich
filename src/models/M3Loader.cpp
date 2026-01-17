@@ -418,6 +418,48 @@ void M3Loader::ReadBones(const uint8_t* ptr, size_t size, M3ModelData& model) {
     }
 
     BuildBonePaths(model);
+    FixMirroredBones(model);
+}
+
+void M3Loader::FixMirroredBones(M3ModelData& model) {
+    std::vector<int> mirroredBoneList;
+    std::vector<int> mirroredAnimList;
+
+    for (size_t i = 0; i < model.bones.size(); ++i) {
+        auto& bone = model.bones[i];
+
+        glm::mat4 localMatrix = bone.globalMatrix;
+        if (bone.parentId >= 0 && bone.parentId < (int)model.bones.size()) {
+            localMatrix = bone.globalMatrix * model.bones[bone.parentId].inverseGlobalMatrix;
+        }
+
+        float det = glm::determinant(glm::mat3(localMatrix));
+        if (det < 0) {
+            mirroredBoneList.push_back((int)i);
+        }
+
+        if (!bone.tracks[0].keyframes.empty() && bone.tracks[0].keyframes[0].scale.x < 0) {
+            mirroredAnimList.push_back((int)i);
+        }
+        if (!bone.tracks[1].keyframes.empty() && bone.tracks[1].keyframes[0].scale.x < 0) {
+            mirroredAnimList.push_back((int)i);
+        }
+    }
+
+    std::sort(mirroredAnimList.begin(), mirroredAnimList.end());
+    mirroredAnimList.erase(std::unique(mirroredAnimList.begin(), mirroredAnimList.end()), mirroredAnimList.end());
+
+    for (int boneId : mirroredAnimList) {
+        bool isMirroredBone = std::find(mirroredBoneList.begin(), mirroredBoneList.end(), boneId) != mirroredBoneList.end();
+        if (!isMirroredBone) {
+            auto& bone = model.bones[boneId];
+            for (auto& kf : bone.tracks[0].keyframes) {
+                kf.scale.x *= -1;
+                kf.scale.y *= -1;
+                kf.scale.z *= -1;
+            }
+        }
+    }
 }
 
 void M3Loader::BuildBonePaths(M3ModelData& model) {

@@ -39,6 +39,7 @@ private:
     static void ReadBoneAnimationTrack(const uint8_t* data, size_t animStart, M3AnimationTrack& track);
     static void ApplyBoneMapping(M3ModelData& model);
     static void BuildBonePaths(M3ModelData& model);
+    static void FixMirroredBones(M3ModelData& model);
 
     template<typename T>
     static T Read(const uint8_t* data, size_t offset);
