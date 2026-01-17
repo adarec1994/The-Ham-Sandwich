@@ -9,6 +9,8 @@ const char* m3VertexSrc = R"(
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoord;
+layout (location = 3) in vec4 aBoneWeights;
+layout (location = 4) in uvec4 aBoneIndices;
 uniform mat4 model, view, projection;
 out vec3 Normal;
 out vec2 TexCoord;
@@ -41,11 +43,22 @@ static unsigned int CompileShader(GLenum type, const char* src) {
     return s;
 }
 
+struct RenderVertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
+    glm::vec4 boneWeights;
+    glm::uvec4 boneIndices;
+};
+
 M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     if (!data.success) return;
 
-    submeshes = data.submeshes;
+    submeshes = data.geometry.submeshes;
     materials = data.materials;
+    bones = data.bones;
+    textures = data.textures;
+    animations = data.animations;
 
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
@@ -54,6 +67,18 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     loadTextures(data, arc);
     fallbackWhiteTex = createFallbackWhite();
 
+    std::vector<RenderVertex> renderVerts;
+    renderVerts.reserve(data.geometry.vertices.size());
+    for (const auto& v : data.geometry.vertices) {
+        RenderVertex rv;
+        rv.position = v.position;
+        rv.normal = v.normal;
+        rv.uv = v.uv1;
+        rv.boneWeights = v.boneWeights;
+        rv.boneIndices = v.boneIndices;
+        renderVerts.push_back(rv);
+    }
+
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glGenBuffers(1, &EBO);
@@ -61,19 +86,25 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     glBindVertexArray(VAO);
 
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, data.vertices.size() * sizeof(M3Vertex), data.vertices.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, renderVerts.size() * sizeof(RenderVertex), renderVerts.data(), GL_STATIC_DRAW);
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.indices.size() * sizeof(uint32_t), data.indices.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.geometry.indices.size() * sizeof(uint32_t), data.geometry.indices.data(), GL_STATIC_DRAW);
 
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)0);
 
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)offsetof(M3Vertex, normal));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, normal));
 
     glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(M3Vertex), (void*)offsetof(M3Vertex, uv));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, uv));
+
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneWeights));
+
+    glEnableVertexAttribArray(4);
+    glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneIndices));
 
     setupShader();
 }
@@ -101,8 +132,8 @@ void M3Render::setupShader() {
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     glTextures.clear();
     glTextures.reserve(data.textures.size());
-    for (const auto& path : data.textures) {
-        glTextures.push_back(loadTextureFromArchive(arc, path));
+    for (const auto& tex : data.textures) {
+        glTextures.push_back(loadTextureFromArchive(arc, tex.path));
     }
 }
 

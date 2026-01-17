@@ -13,10 +13,12 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <limits>
 
 #include <imgui.h>
 
 extern void SnapCameraToLoaded(AppState& state);
+extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
 
 static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFileSystemEntryPtr& folderEntry)
 {
@@ -97,6 +99,7 @@ static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shar
     gLoadedAreas.clear();
     state.currentArea.reset();
 
+    gLoadedModel = nullptr;
     state.m3Render = nullptr;
     state.show_models_window = false;
 
@@ -106,18 +109,26 @@ static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shar
     M3ModelData data = M3Loader::LoadFromFile(arc, fileEntry);
     if (data.success)
     {
-        state.m3Render = std::make_shared<M3Render>(data, arc);
+        gLoadedModel = std::make_shared<M3Render>(data, arc);
+        gLoadedModel->setModelName(name);
+        state.m3Render = gLoadedModel;
         state.show_models_window = true;
 
-        std::cout << "M3 Loaded. Vertices: " << data.vertices.size() << ", Indices: " << data.indices.size() << std::endl;
+        std::cout << "M3 Loaded. Vertices: " << data.geometry.vertices.size() << ", Indices: " << data.geometry.indices.size() << std::endl;
 
-        state.camera.Position = glm::vec3(0, 1.0f, 3.0f);
-        state.camera.Front = glm::vec3(0, 0, -1.0f);
-        state.camera.Up = glm::vec3(0, 1.0f, 0);
+        glm::vec3 boundsMin(std::numeric_limits<float>::max());
+        glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+        for (const auto& v : data.geometry.vertices)
+        {
+            boundsMin = glm::min(boundsMin, v.position);
+            boundsMax = glm::max(boundsMax, v.position);
+        }
+        SnapCameraToModel(state, boundsMin, boundsMax);
     }
     else
     {
         std::cout << "Failed to parse M3 Model." << std::endl;
+        gLoadedModel = nullptr;
         state.m3Render = nullptr;
         state.show_models_window = false;
     }
@@ -175,6 +186,7 @@ static void RenderEntryRecursive_Impl(
 
                     if (ImGui::Selectable(fname.c_str()))
                     {
+                        std::cout << "File clicked: " << fname << std::endl;
                         if (EndsWithNoCase(fname, ".area"))
                         {
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
@@ -187,8 +199,11 @@ static void RenderEntryRecursive_Impl(
                         }
                         else if (EndsWithNoCase(fname, ".m3"))
                         {
+                            std::cout << "M3 matched: " << fname << std::endl;
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
                                 LoadSingleM3(state, currentArc, fileEntry);
+                            else
+                                std::cout << "fileEntry or currentArc null!" << std::endl;
                         }
                         else if (EndsWithNoCase(fname, ".tbl"))
                         {
@@ -212,6 +227,7 @@ static void RenderEntryRecursive_Impl(
 
         if (ImGui::Selectable(name.c_str()))
         {
+            std::cout << "File clicked (else branch): " << name << std::endl;
             if (EndsWithNoCase(name, ".area"))
             {
                 if (currentArc && parentDir && parentDir->isDirectory())
@@ -231,8 +247,11 @@ static void RenderEntryRecursive_Impl(
             }
             else if (EndsWithNoCase(name, ".m3"))
             {
+                std::cout << "M3 matched (alt path): " << name << std::endl;
                 if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
                     LoadSingleM3(state, currentArc, fileEntry);
+                else
+                    std::cout << "fileEntry or currentArc null!" << std::endl;
             }
             else if (EndsWithNoCase(name, ".tbl"))
             {
@@ -245,6 +264,11 @@ static void RenderEntryRecursive_Impl(
 
 void UI_RenderFileTab(AppState& state, float& outContentWidth)
 {
+    static bool printed = false;
+    if (!printed) {
+        std::cout << "=== UI_FileTree.cpp LOADED (Claude's version) ===" << std::endl;
+        printed = true;
+    }
     ImGui::Text("EXPLORER");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 10));

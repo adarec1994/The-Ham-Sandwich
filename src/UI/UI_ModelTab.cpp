@@ -1,5 +1,6 @@
 #include "UI_ModelTab.h"
 #include "UI_Utils.h"
+#include "UI_Globals.h"
 
 #include "../Archive.h"
 #include "../models/M3Loader.h"
@@ -9,8 +10,11 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <limits>
 
 #include <imgui.h>
+
+extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
 
 static bool EndsWithM3W(const std::wstring& str)
 {
@@ -115,22 +119,34 @@ static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shar
 {
     if (!arc || !fileEntry) return;
 
+    gLoadedAreas.clear();
     state.currentArea.reset();
+    gLoadedModel = nullptr;
     state.m3Render = nullptr;
     state.show_models_window = false;
+
+    std::string name = wstring_to_utf8(fileEntry->getEntryName());
 
     M3ModelData data = M3Loader::LoadFromFile(arc, fileEntry);
     if (data.success)
     {
-        state.m3Render = std::make_shared<M3Render>(data, arc);
+        gLoadedModel = std::make_shared<M3Render>(data, arc);
+        gLoadedModel->setModelName(name);
+        state.m3Render = gLoadedModel;
         state.show_models_window = true;
 
-        state.camera.Position = glm::vec3(0, 1.0f, 3.0f);
-        state.camera.Front = glm::vec3(0, 0, -1.0f);
-        state.camera.Up = glm::vec3(0, 1.0f, 0);
+        glm::vec3 boundsMin(std::numeric_limits<float>::max());
+        glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+        for (const auto& v : data.geometry.vertices)
+        {
+            boundsMin = glm::min(boundsMin, v.position);
+            boundsMax = glm::max(boundsMax, v.position);
+        }
+        SnapCameraToModel(state, boundsMin, boundsMax);
     }
     else
     {
+        gLoadedModel = nullptr;
         state.m3Render = nullptr;
         state.show_models_window = false;
     }

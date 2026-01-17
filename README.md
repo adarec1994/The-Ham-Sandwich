@@ -11,7 +11,6 @@ Browse the Wildstar Index files. Included features:
   You can download Wildstar at: https://arctium.io/wildstar/. It doesn't require an account.
 - Download The Ham Sandwich.exe and run it.
 - To import into Blender, download the blender addon from the Blender Addons folder or in releases.
-- 
 
 ## Preview
  

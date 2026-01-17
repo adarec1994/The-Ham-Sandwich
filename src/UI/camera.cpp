@@ -78,6 +78,36 @@ void SnapCameraToLoaded(AppState& state)
     state.camera.MovementSpeed = std::max(50.0f, maxExtent * 0.25f);
 }
 
+void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax)
+{
+    glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+    glm::vec3 size = boundsMax - boundsMin;
+    float maxExtent = std::max({size.x, size.y, size.z});
+
+    if (maxExtent < 0.001f) maxExtent = 2.0f;
+
+    float distance = maxExtent * 1.5f;
+
+    state.camera.Position = glm::vec3(
+        center.x,
+        center.y + maxExtent * 0.3f,
+        center.z + distance
+    );
+
+    state.camera.Yaw = -90.0f;
+    state.camera.Pitch = -10.0f;
+
+    glm::vec3 front;
+    front.x = cos(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+    front.y = sin(glm::radians(state.camera.Pitch));
+    front.z = sin(glm::radians(state.camera.Yaw)) * cos(glm::radians(state.camera.Pitch));
+    state.camera.Front = glm::normalize(front);
+    state.camera.Right = glm::normalize(glm::cross(state.camera.Front, state.camera.WorldUp));
+    state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
+
+    state.camera.MovementSpeed = std::max(5.0f, maxExtent * 0.5f);
+}
+
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 {
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
