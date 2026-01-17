@@ -5,8 +5,8 @@
 #include <codecvt>
 #include <locale>
 #include <algorithm>
-#include <set>
 #include <cmath>
+#include <set>
 
 const char* m3VertexSrc = R"(
 #version 330 core
@@ -17,23 +17,20 @@ layout (location = 3) in vec4 aBoneWeights;
 layout (location = 4) in uvec4 aBoneIndices;
 uniform mat4 model, view, projection;
 uniform mat4 boneMatrices[200];
-uniform bool useSkinning;
+uniform int useSkinning;
 out vec3 Normal;
 out vec2 TexCoord;
 void main() {
     vec4 pos = vec4(aPos, 1.0);
     vec3 norm = aNormal;
-
-    if (useSkinning && (aBoneWeights.x + aBoneWeights.y + aBoneWeights.z + aBoneWeights.w) > 0.0) {
-        mat4 skinMat = mat4(0.0);
-        skinMat += boneMatrices[aBoneIndices.x] * aBoneWeights.x;
-        skinMat += boneMatrices[aBoneIndices.y] * aBoneWeights.y;
-        skinMat += boneMatrices[aBoneIndices.z] * aBoneWeights.z;
-        skinMat += boneMatrices[aBoneIndices.w] * aBoneWeights.w;
-        pos = skinMat * pos;
-        norm = mat3(skinMat) * norm;
+    if (useSkinning == 1) {
+        mat4 skinMatrix = boneMatrices[aBoneIndices.x] * aBoneWeights.x
+                       + boneMatrices[aBoneIndices.y] * aBoneWeights.y
+                       + boneMatrices[aBoneIndices.z] * aBoneWeights.z
+                       + boneMatrices[aBoneIndices.w] * aBoneWeights.w;
+        pos = skinMatrix * pos;
+        norm = mat3(skinMatrix) * norm;
     }
-
     gl_Position = projection * view * model * pos;
     Normal = norm;
     TexCoord = aTexCoord;
@@ -50,6 +47,7 @@ void main() {
     vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(Normal), lightDir), 0.3);
     vec4 texColor = texture(diffTexture, TexCoord);
+    if(texColor.a < 0.1) discard;
     FragColor = vec4(texColor.rgb * diff, 1.0);
 }
 )";
@@ -105,12 +103,10 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     submeshVariantOverride.assign(submeshes.size(), -1);
 
     std::set<uint8_t> uniqueGroups;
-    for (const auto& sm : submeshes)
-    {
+    for (const auto& sm : submeshes) {
         if (sm.groupId != 255) uniqueGroups.insert(sm.groupId);
     }
-    if (!uniqueGroups.empty())
-    {
+    if (!uniqueGroups.empty()) {
         setActiveVariant(*uniqueGroups.begin());
     }
 
@@ -165,11 +161,11 @@ M3Render::~M3Render() {
     if (VBO) glDeleteBuffers(1, &VBO);
     if (EBO) glDeleteBuffers(1, &EBO);
     if (shaderProgram) glDeleteProgram(shaderProgram);
+    for (unsigned int tid : glTextures) if (tid != 0) glDeleteTextures(1, &tid);
+    if (fallbackWhiteTex) glDeleteTextures(1, &fallbackWhiteTex);
     if (skeletonVAO) glDeleteVertexArrays(1, &skeletonVAO);
     if (skeletonVBO) glDeleteBuffers(1, &skeletonVBO);
     if (skeletonProgram) glDeleteProgram(skeletonProgram);
-    for (unsigned int tid : glTextures) if (tid != 0) glDeleteTextures(1, &tid);
-    if (fallbackWhiteTex) glDeleteTextures(1, &fallbackWhiteTex);
 }
 
 void M3Render::setupShader() {
@@ -372,82 +368,17 @@ void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) 
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
 
-    if (variantIndex < 0) {
+    if (variantIndex < 0 || variantIndex >= (int)submeshGroups.size()) {
         for (size_t i = 0; i < submeshes.size(); ++i) {
             submeshVisible[i] = 1;
         }
         return;
     }
 
-    uint8_t targetGroupId = static_cast<uint8_t>(variantIndex);
-    bool anyMatch = false;
-
+    uint16_t targetGroupId = submeshGroups[variantIndex].submeshId;
     for (size_t i = 0; i < submeshes.size(); ++i) {
-        bool match = (submeshes[i].groupId == targetGroupId);
-        submeshVisible[i] = match ? 1 : 0;
-        if (match) anyMatch = true;
+        submeshVisible[i] = (submeshes[i].groupId == targetGroupId) ? 1 : 0;
     }
-
-    if (!anyMatch) {
-        for (size_t i = 0; i < submeshes.size(); ++i) {
-            submeshVisible[i] = 1;
-        }
-    }
-}
-
-void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
-    if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
-
-    struct SkeletonVertex {
-        glm::vec3 pos;
-        glm::vec3 color;
-    };
-
-    std::vector<SkeletonVertex> verts;
-    verts.reserve(bones.size() * 2 + bones.size() * 6);
-
-    for (size_t i = 0; i < bones.size(); ++i) {
-        const auto& bone = bones[i];
-        glm::vec3 bonePos = bone.position;
-
-        float ptSize = 0.02f;
-        glm::vec3 jointColor(1.0f, 1.0f, 0.0f);
-        verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
-        verts.push_back({bonePos + glm::vec3(ptSize, 0, 0), jointColor});
-        verts.push_back({bonePos + glm::vec3(0, -ptSize, 0), jointColor});
-        verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
-        verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
-        verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
-
-        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
-            glm::vec3 parentPos = bones[bone.parentId].position;
-            glm::vec3 boneColor(0.0f, 1.0f, 1.0f);
-            verts.push_back({bonePos, boneColor});
-            verts.push_back({parentPos, boneColor});
-        }
-    }
-
-    if (verts.empty()) return;
-
-    glBindVertexArray(skeletonVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, skeletonVBO);
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(SkeletonVertex), verts.data(), GL_DYNAMIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)offsetof(SkeletonVertex, color));
-
-    glUseProgram(skeletonProgram);
-    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-
-    glDisable(GL_DEPTH_TEST);
-    glLineWidth(2.0f);
-    glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
-    glEnable(GL_DEPTH_TEST);
-
-    glBindVertexArray(0);
 }
 
 void M3Render::playAnimation(int index) {
@@ -465,14 +396,16 @@ void M3Render::stopAnimation() {
     boneMatrices.clear();
 }
 
-static glm::mat4 interpolateKeyframes(const M3AnimationTrack& track, float timeMs) {
-    if (track.keyframes.empty()) {
-        return glm::mat4(1.0f);
-    }
+float M3Render::getAnimationDuration() const {
+    if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) return 0.0f;
+    const auto& anim = animations[playingAnimation];
+    return (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+}
 
+static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
+    if (track.keyframes.empty()) return glm::vec3(1.0f);
     const M3KeyFrame* prev = &track.keyframes[0];
     const M3KeyFrame* next = prev;
-
     for (size_t i = 0; i < track.keyframes.size(); ++i) {
         if (track.keyframes[i].timestamp <= timeMs) {
             prev = &track.keyframes[i];
@@ -482,22 +415,54 @@ static glm::mat4 interpolateKeyframes(const M3AnimationTrack& track, float timeM
             break;
         }
     }
-
     float t = 0.0f;
     if (next != prev && next->timestamp != prev->timestamp) {
         t = (timeMs - prev->timestamp) / (float)(next->timestamp - prev->timestamp);
         t = glm::clamp(t, 0.0f, 1.0f);
     }
+    return glm::mix(prev->scale, next->scale, t);
+}
 
-    glm::vec3 scale = glm::mix(prev->scale, next->scale, t);
-    glm::quat rotation = glm::slerp(prev->rotation, next->rotation, t);
-    glm::vec3 translation = glm::mix(prev->translation, next->translation, t);
+static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs) {
+    if (track.keyframes.empty()) return glm::quat(1, 0, 0, 0);
+    const M3KeyFrame* prev = &track.keyframes[0];
+    const M3KeyFrame* next = prev;
+    for (size_t i = 0; i < track.keyframes.size(); ++i) {
+        if (track.keyframes[i].timestamp <= timeMs) {
+            prev = &track.keyframes[i];
+            next = (i + 1 < track.keyframes.size()) ? &track.keyframes[i + 1] : prev;
+        } else {
+            next = &track.keyframes[i];
+            break;
+        }
+    }
+    float t = 0.0f;
+    if (next != prev && next->timestamp != prev->timestamp) {
+        t = (timeMs - prev->timestamp) / (float)(next->timestamp - prev->timestamp);
+        t = glm::clamp(t, 0.0f, 1.0f);
+    }
+    return glm::slerp(prev->rotation, next->rotation, t);
+}
 
-    glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
-    glm::mat4 R = glm::mat4_cast(rotation);
-    glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
-
-    return T * R * S;
+static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs) {
+    if (track.keyframes.empty()) return glm::vec3(0.0f);
+    const M3KeyFrame* prev = &track.keyframes[0];
+    const M3KeyFrame* next = prev;
+    for (size_t i = 0; i < track.keyframes.size(); ++i) {
+        if (track.keyframes[i].timestamp <= timeMs) {
+            prev = &track.keyframes[i];
+            next = (i + 1 < track.keyframes.size()) ? &track.keyframes[i + 1] : prev;
+        } else {
+            next = &track.keyframes[i];
+            break;
+        }
+    }
+    float t = 0.0f;
+    if (next != prev && next->timestamp != prev->timestamp) {
+        t = (timeMs - prev->timestamp) / (float)(next->timestamp - prev->timestamp);
+        t = glm::clamp(t, 0.0f, 1.0f);
+    }
+    return glm::mix(prev->translation, next->translation, t);
 }
 
 void M3Render::updateAnimation(float deltaTime) {
@@ -524,14 +489,32 @@ void M3Render::updateAnimation(float deltaTime) {
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
 
-        glm::mat4 localTransform = glm::mat4(1.0f);
+        glm::vec3 scale(1.0f);
+        glm::quat rotation(1, 0, 0, 0);
+        glm::vec3 translation = bone.position;
 
-        for (int t = 0; t < 8; ++t) {
+        for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
-                localTransform = interpolateKeyframes(bone.tracks[t], currentTimeMs);
+                scale = interpolateScale(bone.tracks[t], currentTimeMs);
                 break;
             }
         }
+
+        for (int t = 4; t <= 5; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) {
+                rotation = interpolateRotation(bone.tracks[t], currentTimeMs);
+                break;
+            }
+        }
+
+        if (!bone.tracks[6].keyframes.empty()) {
+            translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
+        }
+
+        glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+        glm::mat4 R = glm::mat4_cast(rotation);
+        glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 localTransform = T * R * S;
 
         if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
@@ -543,8 +526,67 @@ void M3Render::updateAnimation(float deltaTime) {
     }
 }
 
-float M3Render::getAnimationDuration() const {
-    if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) return 0.0f;
-    const auto& anim = animations[playingAnimation];
-    return (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
+    if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
+
+    struct SkeletonVertex {
+        glm::vec3 pos;
+        glm::vec3 color;
+    };
+
+    std::vector<SkeletonVertex> verts;
+    verts.reserve(bones.size() * 8);
+
+    std::vector<glm::vec3> boneWorldPos(bones.size());
+
+    if (playingAnimation >= 0 && !boneMatrices.empty()) {
+        for (size_t i = 0; i < bones.size(); ++i) {
+            glm::mat4 worldTransform = boneMatrices[i] * bones[i].globalMatrix;
+            boneWorldPos[i] = glm::vec3(worldTransform[3]);
+        }
+    } else {
+        for (size_t i = 0; i < bones.size(); ++i) {
+            boneWorldPos[i] = glm::vec3(bones[i].globalMatrix[3]);
+        }
+    }
+
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+        glm::vec3 bonePos = boneWorldPos[i];
+
+        float ptSize = 0.02f;
+        glm::vec3 jointColor(1.0f, 1.0f, 0.0f);
+        verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, -ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
+
+        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+            glm::vec3 parentPos = boneWorldPos[bone.parentId];
+            glm::vec3 boneColor(0.0f, 1.0f, 1.0f);
+            verts.push_back({bonePos, boneColor});
+            verts.push_back({parentPos, boneColor});
+        }
+    }
+
+    if (verts.empty()) return;
+
+    glBindVertexArray(skeletonVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skeletonVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(SkeletonVertex), verts.data(), GL_DYNAMIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)offsetof(SkeletonVertex, color));
+
+    glUseProgram(skeletonProgram);
+    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+
+    glDisable(GL_DEPTH_TEST);
+    glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
+    glEnable(GL_DEPTH_TEST);
 }
