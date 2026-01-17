@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cfloat>
 #include <set>
+#include <iostream>
 
 const char* m3VertexSrc = R"(
 #version 330 core
@@ -102,6 +103,22 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     textures = data.textures;
     animations = data.animations;
     submeshGroups = data.submeshGroups;
+
+    // DEBUG: Print bone info on load
+    std::cout << "\n=== MODEL LOADED: " << bones.size() << " bones ===" << std::endl;
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& b = bones[i];
+        glm::vec3 globalPos = glm::vec3(b.globalMatrix[3]);
+        std::cout << "Bone " << i << ": parentId=" << b.parentId
+                  << " pos=(" << b.position.x << "," << b.position.y << "," << b.position.z << ")"
+                  << " globalMat[3]=(" << globalPos.x << "," << globalPos.y << "," << globalPos.z << ")"
+                  << " tracks: ";
+        for (int t = 0; t < 8; ++t) {
+            if (!b.tracks[t].keyframes.empty()) std::cout << "T" << t << "(" << b.tracks[t].keyframes.size() << ") ";
+        }
+        std::cout << std::endl;
+    }
+    std::cout << "=== END BONE LIST ===\n" << std::endl;
 
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
@@ -511,8 +528,16 @@ void M3Render::updateAnimation(float deltaTime) {
     boneMatrices.resize(bones.size());
     std::vector<glm::mat4> worldTransforms(bones.size());
 
+    // DEBUG: Print once per animation start
+    static int debugFrame = 0;
+    bool doDebug = (debugFrame++ % 300 == 0); // Print every ~5 seconds at 60fps
+    if (doDebug) {
+        std::cout << "\n=== ANIMATION FRAME (time=" << animationTime << "s, timeMs=" << currentTimeMs << ") ===" << std::endl;
+    }
+
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
+        bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
 
         glm::vec3 scale(1.0f);
         glm::quat rotation(1, 0, 0, 0);
@@ -532,8 +557,18 @@ void M3Render::updateAnimation(float deltaTime) {
             }
         }
 
-        if (!bone.tracks[6].keyframes.empty()) {
+        // Skip translation tracks on root bones to keep model anchored at origin
+        // Root motion data is typically locomotion data, not for in-place playback
+        // Also skip for "locomotion bones" - bones at origin with T6 animation (root motion carriers)
+        bool isLocomotionBone = (glm::length(bone.position) < 0.001f &&
+                                 glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f &&
+                                 bone.tracks[6].keyframes.size() > 10);
+        if (!bone.tracks[6].keyframes.empty() && !isRootBone && !isLocomotionBone) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
+        }
+
+        if (doDebug && isLocomotionBone) {
+            std::cout << "  Bone " << i << " detected as LOCOMOTION bone (skipping T6)" << std::endl;
         }
 
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
@@ -541,13 +576,28 @@ void M3Render::updateAnimation(float deltaTime) {
         glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
         glm::mat4 localTransform = T * R * S;
 
-        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+        if (!isRootBone) {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
         } else {
             worldTransforms[i] = localTransform;
         }
 
         boneMatrices[i] = worldTransforms[i] * bone.inverseGlobalMatrix;
+
+        // DEBUG
+        if (doDebug && i < 5) { // Print first 5 bones
+            glm::vec3 worldPos = glm::vec3(worldTransforms[i][3]);
+            glm::vec3 finalPos = glm::vec3(boneMatrices[i][3]);
+            std::cout << "Bone " << i << " (root=" << isRootBone << "): "
+                      << "trans=(" << translation.x << "," << translation.y << "," << translation.z << ") "
+                      << "worldPos=(" << worldPos.x << "," << worldPos.y << "," << worldPos.z << ") "
+                      << "finalMat[3]=(" << finalPos.x << "," << finalPos.y << "," << finalPos.z << ")"
+                      << std::endl;
+        }
+    }
+
+    if (doDebug) {
+        std::cout << "=== END FRAME ===\n" << std::endl;
     }
 }
 

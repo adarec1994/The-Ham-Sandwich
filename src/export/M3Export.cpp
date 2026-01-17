@@ -660,6 +660,7 @@ namespace M3Export
                 for (size_t boneIdx = 0; boneIdx < bones.size(); ++boneIdx)
                 {
                     const auto& bone = bones[boneIdx];
+                    bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
 
                     // Check for scale track (tracks 0, 1, or 2)
                     const M3AnimationTrack* scaleTrack = nullptr;
@@ -684,8 +685,13 @@ namespace M3Export
                     }
 
                     // Check for translation track (track 6)
+                    // Skip root bones and locomotion bones (bones at origin with lots of T6 keyframes)
+                    // These contain root motion data that would cause the model to drift
+                    bool isLocomotionBone = (glm::length(bone.position) < 0.001f &&
+                                             glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f &&
+                                             bone.tracks[6].keyframes.size() > 10);
                     const M3AnimationTrack* transTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty())
+                    if (!bone.tracks[6].keyframes.empty() && !isRootBone && !isLocomotionBone)
                     {
                         transTrack = &bone.tracks[6];
                     }
