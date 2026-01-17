@@ -232,10 +232,340 @@ namespace M3Export
         }
         return EncodePNG(img.rgba.data(), img.width, img.height);
     }
+    static int64_t gFbxIdCounter = 1000000000;
+    static int64_t GenFbxId() { return gFbxIdCounter++; }
+    static std::string FbxF(double v) {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6) << v;
+        return oss.str();
+    }
     ExportResult ExportToFBX(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
     {
         ExportResult result;
-        result.errorMessage = "FBX export not implemented";
+        if (!render) { result.errorMessage = "No model"; return result; }
+        std::string outputDir = settings.outputPath;
+        if (outputDir.empty()) { result.errorMessage = "No output path"; return result; }
+        std::filesystem::create_directories(outputDir);
+        std::string baseName = settings.customName.empty() ? ExtractModelName(render->getModelName()) : SanitizeFilename(settings.customName);
+        std::string fbxPath = outputDir + "/" + baseName + ".fbx";
+        if (progress) progress(0, 100, "Collecting geometry...");
+        const auto& allVertices = render->getVertices();
+        const auto& allIndices = render->getIndices();
+        const auto& submeshes = render->getAllSubmeshes();
+        const auto& bones = render->getAllBones();
+        const auto& animations = render->getAllAnimations();
+        struct SubmeshData {
+            std::vector<glm::vec3> positions;
+            std::vector<glm::vec3> normals;
+            std::vector<glm::vec2> uvs;
+            std::vector<glm::uvec4> joints;
+            std::vector<glm::vec4> weights;
+            std::vector<uint32_t> indices;
+            uint16_t materialId;
+            std::string name;
+        };
+        std::vector<SubmeshData> meshList;
+        size_t totalVerts = 0, totalTris = 0;
+        for (size_t si = 0; si < submeshes.size(); ++si) {
+            if (!render->getSubmeshVisible(si)) continue;
+            const auto& sm = submeshes[si];
+            SubmeshData sd;
+            sd.materialId = sm.materialID;
+            sd.name = "Mesh_" + std::to_string(si);
+            std::unordered_map<uint32_t, uint32_t> remap;
+            for (uint32_t i = 0; i < sm.indexCount; ++i) {
+                uint32_t idx = allIndices[sm.startIndex + i] + sm.startVertex;
+                if (idx >= allVertices.size()) continue;
+                auto it = remap.find(idx);
+                if (it != remap.end()) {
+                    sd.indices.push_back(it->second);
+                } else {
+                    uint32_t ni = static_cast<uint32_t>(sd.positions.size());
+                    remap[idx] = ni;
+                    const auto& v = allVertices[idx];
+                    sd.positions.push_back(v.position);
+                    sd.normals.push_back(v.normal);
+                    sd.uvs.push_back(v.uv1);
+                    sd.joints.push_back(v.boneIndices);
+                    sd.weights.push_back(v.boneWeights);
+                    sd.indices.push_back(ni);
+                }
+            }
+            if (!sd.positions.empty() && !sd.indices.empty()) {
+                totalVerts += sd.positions.size();
+                totalTris += sd.indices.size() / 3;
+                meshList.push_back(std::move(sd));
+            }
+        }
+        if (meshList.empty()) { result.errorMessage = "No visible submeshes"; return result; }
+        result.vertexCount = static_cast<int>(totalVerts);
+        result.triangleCount = static_cast<int>(totalTris);
+        result.boneCount = static_cast<int>(bones.size());
+        result.animationCount = settings.exportAnimations ? static_cast<int>(animations.size()) : 0;
+        bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
+        bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
+        if (progress) progress(20, 100, "Building FBX...");
+        gFbxIdCounter = 1000000000;
+        std::vector<int64_t> meshIds, meshGeoIds, materialIds, boneIds, boneAttrIds, clusterIds, skinIds;
+        int64_t rootId = GenFbxId();
+        for (size_t i = 0; i < meshList.size(); ++i) { meshIds.push_back(GenFbxId()); meshGeoIds.push_back(GenFbxId()); }
+        for (size_t i = 0; i < meshList.size(); ++i) materialIds.push_back(GenFbxId());
+        if (hasSkeleton) {
+            for (size_t i = 0; i < bones.size(); ++i) { boneIds.push_back(GenFbxId()); boneAttrIds.push_back(GenFbxId()); }
+            for (size_t i = 0; i < meshList.size(); ++i) skinIds.push_back(GenFbxId());
+            for (size_t m = 0; m < meshList.size(); ++m)
+                for (size_t b = 0; b < bones.size(); ++b) clusterIds.push_back(GenFbxId());
+        }
+        std::ostringstream fbx;
+        fbx << std::fixed << std::setprecision(6);
+        fbx << "; FBX 7.5.0 project file\n";
+        fbx << "; Created by WildStar M3 Exporter\n";
+        fbx << "FBXHeaderExtension:  {\n\tFBXHeaderVersion: 1003\n\tFBXVersion: 7500\n";
+        fbx << "\tCreationTimeStamp:  {\n\t\tVersion: 1000\n\t\tYear: 2025\n\t\tMonth: 1\n\t\tDay: 1\n";
+        fbx << "\t\tHour: 0\n\t\tMinute: 0\n\t\tSecond: 0\n\t\tMillisecond: 0\n\t}\n";
+        fbx << "\tCreator: \"WildStar M3 Exporter\"\n}\n\n";
+        fbx << "GlobalSettings:  {\n\tVersion: 1000\n\tProperties70:  {\n";
+        fbx << "\t\tP: \"UpAxis\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"UpAxisSign\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"FrontAxis\", \"int\", \"Integer\", \"\", 2\n";
+        fbx << "\t\tP: \"FrontAxisSign\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"CoordAxis\", \"int\", \"Integer\", \"\", 0\n";
+        fbx << "\t\tP: \"CoordAxisSign\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"OriginalUpAxis\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"OriginalUpAxisSign\", \"int\", \"Integer\", \"\", 1\n";
+        fbx << "\t\tP: \"UnitScaleFactor\", \"double\", \"Number\", \"\", 1\n";
+        fbx << "\t\tP: \"OriginalUnitScaleFactor\", \"double\", \"Number\", \"\", 1\n";
+        fbx << "\t}\n}\n\n";
+        fbx << "Documents:  {\n\tCount: 1\n\tDocument: 1000000000, \"\", \"Scene\" {\n";
+        fbx << "\t\tProperties70:  {\n\t\t\tP: \"SourceObject\", \"object\", \"\", \"\"\n";
+        fbx << "\t\t\tP: \"ActiveAnimStackName\", \"KString\", \"\", \"\", \"\"\n\t\t}\n";
+        fbx << "\t\tRootNode: 0\n\t}\n}\n\n";
+        fbx << "References:  {\n}\n\n";
+        int defCount = 1 + (int)meshList.size() * 2 + (int)meshList.size();
+        if (hasSkeleton) defCount += (int)bones.size() + (int)bones.size() + (int)meshList.size() + (int)meshList.size() * (int)bones.size();
+        fbx << "Definitions:  {\n\tVersion: 100\n\tCount: " << defCount << "\n";
+        fbx << "\tObjectType: \"GlobalSettings\" {\n\t\tCount: 1\n\t}\n";
+        fbx << "\tObjectType: \"Model\" {\n\t\tCount: " << (1 + meshList.size() + (hasSkeleton ? bones.size() : 0)) << "\n";
+        fbx << "\t\tPropertyTemplate: \"FbxNode\" {\n\t\t\tProperties70:  {\n";
+        fbx << "\t\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", 0,0,0\n";
+        fbx << "\t\t\t\tP: \"Lcl Rotation\", \"Lcl Rotation\", \"\", \"A\", 0,0,0\n";
+        fbx << "\t\t\t\tP: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"A\", 1,1,1\n";
+        fbx << "\t\t\t}\n\t\t}\n\t}\n";
+        fbx << "\tObjectType: \"Geometry\" {\n\t\tCount: " << meshList.size() << "\n\t}\n";
+        fbx << "\tObjectType: \"Material\" {\n\t\tCount: " << meshList.size() << "\n\t}\n";
+        if (hasSkeleton) {
+            fbx << "\tObjectType: \"Deformer\" {\n\t\tCount: " << (meshList.size() + meshList.size() * bones.size()) << "\n\t}\n";
+            fbx << "\tObjectType: \"NodeAttribute\" {\n\t\tCount: " << bones.size() << "\n\t}\n";
+        }
+        fbx << "}\n\n";
+        if (progress) progress(40, 100, "Writing objects...");
+        fbx << "Objects:  {\n";
+        fbx << "\tModel: " << rootId << ", \"Model::" << baseName << "\", \"Null\" {\n";
+        fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
+        fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", 0,0,0\n";
+        fbx << "\t\t}\n\t\tShading: Y\n\t\tCulling: \"CullingOff\"\n\t}\n";
+        for (size_t mi = 0; mi < meshList.size(); ++mi) {
+            const auto& mesh = meshList[mi];
+            fbx << "\tModel: " << meshIds[mi] << ", \"Model::" << mesh.name << "\", \"Mesh\" {\n";
+            fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
+            fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", 0,0,0\n";
+            fbx << "\t\t}\n\t\tShading: Y\n\t\tCulling: \"CullingOff\"\n\t}\n";
+        }
+        if (hasSkeleton) {
+            for (size_t bi = 0; bi < bones.size(); ++bi) {
+                const auto& bone = bones[bi];
+                std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
+                fbx << "\tNodeAttribute: " << boneAttrIds[bi] << ", \"NodeAttribute::" << boneName << "\", \"LimbNode\" {\n";
+                fbx << "\t\tTypeFlags: \"Skeleton\"\n";
+                fbx << "\t}\n";
+            }
+            for (size_t bi = 0; bi < bones.size(); ++bi) {
+                const auto& bone = bones[bi];
+                std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
+                glm::mat4 localMat;
+                if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+                    localMat = glm::inverse(bones[bone.parentId].globalMatrix) * bone.globalMatrix;
+                } else {
+                    localMat = bone.globalMatrix;
+                }
+                glm::vec3 t = glm::vec3(localMat[3]);
+                glm::vec3 s(glm::length(glm::vec3(localMat[0])), glm::length(glm::vec3(localMat[1])), glm::length(glm::vec3(localMat[2])));
+                glm::mat3 rotMat(glm::vec3(localMat[0])/s.x, glm::vec3(localMat[1])/s.y, glm::vec3(localMat[2])/s.z);
+                float rx = atan2(rotMat[2][1], rotMat[2][2]) * 57.2957795f;
+                float ry = atan2(-rotMat[2][0], sqrt(rotMat[2][1]*rotMat[2][1] + rotMat[2][2]*rotMat[2][2])) * 57.2957795f;
+                float rz = atan2(rotMat[1][0], rotMat[0][0]) * 57.2957795f;
+                fbx << "\tModel: " << boneIds[bi] << ", \"Model::" << boneName << "\", \"LimbNode\" {\n";
+                fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
+                fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", " << FbxF(t.x) << "," << FbxF(t.y) << "," << FbxF(t.z) << "\n";
+                fbx << "\t\t\tP: \"Lcl Rotation\", \"Lcl Rotation\", \"\", \"A\", " << FbxF(rx) << "," << FbxF(ry) << "," << FbxF(rz) << "\n";
+                fbx << "\t\t\tP: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"A\", " << FbxF(s.x) << "," << FbxF(s.y) << "," << FbxF(s.z) << "\n";
+                fbx << "\t\t}\n\t\tShading: Y\n\t\tCulling: \"CullingOff\"\n\t}\n";
+            }
+        }
+        for (size_t mi = 0; mi < meshList.size(); ++mi) {
+            const auto& mesh = meshList[mi];
+            fbx << "\tGeometry: " << meshGeoIds[mi] << ", \"Geometry::" << mesh.name << "\", \"Mesh\" {\n";
+            fbx << "\t\tVertices: *" << (mesh.positions.size() * 3) << " {\n\t\t\ta: ";
+            for (size_t i = 0; i < mesh.positions.size(); ++i) {
+                if (i > 0) fbx << ",";
+                fbx << FbxF(mesh.positions[i].x) << "," << FbxF(mesh.positions[i].y) << "," << FbxF(mesh.positions[i].z);
+            }
+            fbx << "\n\t\t}\n";
+            fbx << "\t\tPolygonVertexIndex: *" << mesh.indices.size() << " {\n\t\t\ta: ";
+            for (size_t i = 0; i < mesh.indices.size(); i += 3) {
+                if (i > 0) fbx << ",";
+                fbx << mesh.indices[i] << "," << mesh.indices[i+1] << "," << (int)(-(int)mesh.indices[i+2] - 1);
+            }
+            fbx << "\n\t\t}\n";
+            fbx << "\t\tGeometryVersion: 124\n";
+            fbx << "\t\tLayerElementNormal: 0 {\n\t\t\tVersion: 102\n\t\t\tName: \"\"\n";
+            fbx << "\t\t\tMappingInformationType: \"ByVertice\"\n\t\t\tReferenceInformationType: \"Direct\"\n";
+            fbx << "\t\t\tNormals: *" << (mesh.normals.size() * 3) << " {\n\t\t\t\ta: ";
+            for (size_t i = 0; i < mesh.normals.size(); ++i) {
+                if (i > 0) fbx << ",";
+                fbx << FbxF(mesh.normals[i].x) << "," << FbxF(mesh.normals[i].y) << "," << FbxF(mesh.normals[i].z);
+            }
+            fbx << "\n\t\t\t}\n\t\t}\n";
+            fbx << "\t\tLayerElementUV: 0 {\n\t\t\tVersion: 101\n\t\t\tName: \"UVMap\"\n";
+            fbx << "\t\t\tMappingInformationType: \"ByVertice\"\n\t\t\tReferenceInformationType: \"Direct\"\n";
+            fbx << "\t\t\tUV: *" << (mesh.uvs.size() * 2) << " {\n\t\t\t\ta: ";
+            for (size_t i = 0; i < mesh.uvs.size(); ++i) {
+                if (i > 0) fbx << ",";
+                fbx << FbxF(mesh.uvs[i].x) << "," << FbxF(1.0f - mesh.uvs[i].y);
+            }
+            fbx << "\n\t\t\t}\n\t\t}\n";
+            fbx << "\t\tLayerElementMaterial: 0 {\n\t\t\tVersion: 101\n\t\t\tName: \"\"\n";
+            fbx << "\t\t\tMappingInformationType: \"AllSame\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n";
+            fbx << "\t\t\tMaterials: *1 {\n\t\t\t\ta: 0\n\t\t\t}\n\t\t}\n";
+            fbx << "\t\tLayer: 0 {\n\t\t\tVersion: 100\n";
+            fbx << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementNormal\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
+            fbx << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementUV\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
+            fbx << "\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementMaterial\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n";
+            fbx << "\t\t}\n\t}\n";
+        }
+        for (size_t mi = 0; mi < meshList.size(); ++mi) {
+            fbx << "\tMaterial: " << materialIds[mi] << ", \"Material::Material_" << mi << "\", \"\" {\n";
+            fbx << "\t\tVersion: 102\n\t\tShadingModel: \"lambert\"\n\t\tMultiLayer: 0\n";
+            fbx << "\t\tProperties70:  {\n";
+            fbx << "\t\t\tP: \"DiffuseColor\", \"Color\", \"\", \"A\", 0.8,0.8,0.8\n";
+            fbx << "\t\t}\n\t}\n";
+        }
+        if (hasSkeleton) {
+            if (progress) progress(50, 100, "Writing skinning...");
+            for (size_t mi = 0; mi < meshList.size(); ++mi) {
+                fbx << "\tDeformer: " << skinIds[mi] << ", \"Deformer::" << meshList[mi].name << "_Skin\", \"Skin\" {\n";
+                fbx << "\t\tVersion: 101\n\t\tLink_DeformAcuracy: 50\n\t}\n";
+            }
+            for (size_t mi = 0; mi < meshList.size(); ++mi) {
+                const auto& mesh = meshList[mi];
+                for (size_t bi = 0; bi < bones.size(); ++bi) {
+                    const auto& bone = bones[bi];
+                    std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
+                    std::vector<int> vertIndices;
+                    std::vector<double> vertWeights;
+                    for (size_t vi = 0; vi < mesh.positions.size(); ++vi) {
+                        const auto& j = mesh.joints[vi];
+                        const auto& w = mesh.weights[vi];
+                        float sum = w.x + w.y + w.z + w.w;
+                        if (sum < 0.0001f) continue;
+                        float wn[4] = {w.x/sum, w.y/sum, w.z/sum, w.w/sum};
+                        uint32_t ji[4] = {j.x, j.y, j.z, j.w};
+                        for (int k = 0; k < 4; ++k) {
+                            if (ji[k] == bi && wn[k] > 0.0001f) {
+                                vertIndices.push_back((int)vi);
+                                vertWeights.push_back(wn[k]);
+                            }
+                        }
+                    }
+                    int64_t cid = clusterIds[mi * bones.size() + bi];
+                    fbx << "\tDeformer: " << cid << ", \"SubDeformer::" << boneName << "\", \"Cluster\" {\n";
+                    fbx << "\t\tVersion: 100\n\t\tUserData: \"\", \"\"\n";
+                    if (!vertIndices.empty()) {
+                        fbx << "\t\tIndexes: *" << vertIndices.size() << " {\n\t\t\ta: ";
+                        for (size_t i = 0; i < vertIndices.size(); ++i) {
+                            if (i > 0) fbx << ",";
+                            fbx << vertIndices[i];
+                        }
+                        fbx << "\n\t\t}\n";
+                        fbx << "\t\tWeights: *" << vertWeights.size() << " {\n\t\t\ta: ";
+                        for (size_t i = 0; i < vertWeights.size(); ++i) {
+                            if (i > 0) fbx << ",";
+                            fbx << FbxF(vertWeights[i]);
+                        }
+                        fbx << "\n\t\t}\n";
+                    }
+                    glm::mat4 ibm = glm::inverse(bone.globalMatrix);
+                    fbx << "\t\tTransform: *16 {\n\t\t\ta: ";
+                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
+                        if (c > 0 || r > 0) fbx << ",";
+                        fbx << FbxF(ibm[c][r]);
+                    }
+                    fbx << "\n\t\t}\n";
+                    fbx << "\t\tTransformLink: *16 {\n\t\t\ta: ";
+                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
+                        if (c > 0 || r > 0) fbx << ",";
+                        fbx << FbxF(bone.globalMatrix[c][r]);
+                    }
+                    fbx << "\n\t\t}\n\t}\n";
+                }
+            }
+        }
+        fbx << "}\n\n";
+        if (progress) progress(70, 100, "Writing connections...");
+        fbx << "Connections:  {\n";
+        fbx << "\tC: \"OO\"," << rootId << ",0\n";
+        for (size_t mi = 0; mi < meshList.size(); ++mi) {
+            fbx << "\tC: \"OO\"," << meshIds[mi] << "," << rootId << "\n";
+            fbx << "\tC: \"OO\"," << meshGeoIds[mi] << "," << meshIds[mi] << "\n";
+            fbx << "\tC: \"OO\"," << materialIds[mi] << "," << meshIds[mi] << "\n";
+        }
+        if (hasSkeleton) {
+            for (size_t bi = 0; bi < bones.size(); ++bi) {
+                fbx << "\tC: \"OO\"," << boneAttrIds[bi] << "," << boneIds[bi] << "\n";
+            }
+            for (size_t bi = 0; bi < bones.size(); ++bi) {
+                int pid = bones[bi].parentId;
+                if (pid >= 0 && pid < (int)bones.size()) {
+                    fbx << "\tC: \"OO\"," << boneIds[bi] << "," << boneIds[pid] << "\n";
+                } else {
+                    fbx << "\tC: \"OO\"," << boneIds[bi] << "," << rootId << "\n";
+                }
+            }
+            for (size_t mi = 0; mi < meshList.size(); ++mi) {
+                fbx << "\tC: \"OO\"," << skinIds[mi] << "," << meshGeoIds[mi] << "\n";
+                for (size_t bi = 0; bi < bones.size(); ++bi) {
+                    int64_t cid = clusterIds[mi * bones.size() + bi];
+                    fbx << "\tC: \"OO\"," << cid << "," << skinIds[mi] << "\n";
+                    fbx << "\tC: \"OO\"," << boneIds[bi] << "," << cid << "\n";
+                }
+            }
+        }
+        fbx << "}\n\n";
+        if (hasAnimations) {
+            if (progress) progress(80, 100, "Writing animations...");
+            fbx << "Takes:  {\n\tCurrent: \"Take 001\"\n";
+            for (size_t ai = 0; ai < animations.size(); ++ai) {
+                const auto& anim = animations[ai];
+                float startSec = anim.timestampStart / 1000.0f;
+                float endSec = anim.timestampEnd / 1000.0f;
+                int64_t startFbx = (int64_t)(startSec * 46186158000.0);
+                int64_t endFbx = (int64_t)(endSec * 46186158000.0);
+                fbx << "\tTake: \"Animation_" << anim.sequenceId << "\" {\n";
+                fbx << "\t\tFileName: \"Animation_" << anim.sequenceId << ".tak\"\n";
+                fbx << "\t\tLocalTime: " << startFbx << "," << endFbx << "\n";
+                fbx << "\t\tReferenceTime: " << startFbx << "," << endFbx << "\n";
+                fbx << "\t}\n";
+            }
+            fbx << "}\n";
+        }
+        if (progress) progress(90, 100, "Writing file...");
+        std::ofstream out(fbxPath);
+        if (!out) { result.errorMessage = "Can't write file"; return result; }
+        out << fbx.str();
+        out.close();
+        if (progress) progress(100, 100, "Done!");
+        result.success = true;
+        result.outputFile = fbxPath;
         return result;
     }
     ExportResult ExportToGLB(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
@@ -503,9 +833,7 @@ namespace M3Export
         }
         const auto& animations = render->getAllAnimations();
         bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
-        struct AnimChannelData {
-            int boneIndex;
-        };
+        struct AnimChannelData { int boneIndex; std::string path; int inputAcc; int outputAcc; };
         struct AnimData {
             std::string name;
             std::vector<AnimChannelData> channels;
