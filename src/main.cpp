@@ -2,6 +2,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "UI/UI.h"
+#include "resource.h"
 #include "Area/AreaFile.h"
 
 #define GL_SILENCE_DEPRECATION
@@ -9,10 +10,28 @@
 #include <GLFW/glfw3.h>
 #include "stb_image.h"
 
+#ifdef _WIN32
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <Windows.h>
+#endif
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 
 bool gCharacterIconLoaded = false;
 unsigned int gCharacterIconTexture = 0;
+
+static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize)
+{
+    HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
+    if (!hRes) return false;
+    HGLOBAL hMem = LoadResource(nullptr, hRes);
+    if (!hMem) return false;
+    *outSize = SizeofResource(nullptr, hRes);
+    *outData = LockResource(hMem);
+    return *outData != nullptr;
+}
 
 int main()
 {
@@ -36,31 +55,39 @@ int main()
     }
 
     {
-        int w, h, nrChannels;
-        stbi_set_flip_vertically_on_load(false);
-        unsigned char* data = stbi_load("../Assets/Icons/Character.png", &w, &h, &nrChannels, 4);
-        if (data)
+        const void* data = nullptr;
+        DWORD dataSize = 0;
+        if (GetResourceData(IDR_ICON_CHARACTER, &data, &dataSize))
         {
-            for (int i = 0; i < w * h * 4; i += 4)
+            int w, h;
+            unsigned char* imageData = stbi_load_from_memory(
+                static_cast<const unsigned char*>(data),
+                static_cast<int>(dataSize),
+                &w, &h, nullptr, 4);
+
+            if (imageData)
             {
-                data[i + 0] = 255 - data[i + 0];
-                data[i + 1] = 255 - data[i + 1];
-                data[i + 2] = 255 - data[i + 2];
+                for (int i = 0; i < w * h * 4; i += 4)
+                {
+                    imageData[i + 0] = 255 - imageData[i + 0];
+                    imageData[i + 1] = 255 - imageData[i + 1];
+                    imageData[i + 2] = 255 - imageData[i + 2];
+                }
+
+                glGenTextures(1, &gCharacterIconTexture);
+                glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
+
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData);
+                glGenerateMipmap(GL_TEXTURE_2D);
+
+                gCharacterIconLoaded = true;
+                stbi_image_free(imageData);
             }
-
-            glGenTextures(1, &gCharacterIconTexture);
-            glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-            glGenerateMipmap(GL_TEXTURE_2D);
-
-            gCharacterIconLoaded = true;
-            stbi_image_free(data);
         }
     }
 

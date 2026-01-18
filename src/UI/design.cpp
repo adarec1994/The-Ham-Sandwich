@@ -1,5 +1,6 @@
-    #include "UI.h"
+#include "UI.h"
 #include "../Area/AreaRender.h"
+#include "../resource.h"
 
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
@@ -22,6 +23,17 @@ bool   gAreaIconLoaded = false;
 unsigned int gAreaIconTexture = 0;
 int    gAreaIconWidth = 0;
 int    gAreaIconHeight = 0;
+
+static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize)
+{
+    HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
+    if (!hRes) return false;
+    HGLOBAL hMem = LoadResource(nullptr, hRes);
+    if (!hMem) return false;
+    *outSize = SizeofResource(nullptr, hRes);
+    *outData = LockResource(hMem);
+    return *outData != nullptr;
+}
 
 static GLuint CompileShader(GLenum type, const char* source)
 {
@@ -144,6 +156,54 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    stbi_image_free(image_data);
+
+    *out_width = image_width;
+    *out_height = image_height;
+
+    return true;
+}
+
+static bool LoadTextureFromResource(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
+{
+    const void* data = nullptr;
+    DWORD dataSize = 0;
+    if (!GetResourceData(resourceId, &data, &dataSize))
+        return false;
+
+    int image_width = 0;
+    int image_height = 0;
+    unsigned char* image_data = stbi_load_from_memory(
+        static_cast<const unsigned char*>(data),
+        static_cast<int>(dataSize),
+        &image_width, &image_height, nullptr, 4);
+
+    if (image_data == nullptr)
+        return false;
+
+    for (int i = 0; i < image_width * image_height * 4; i += 4)
+    {
+        unsigned char alpha = image_data[i + 3];
+        if (alpha > 0)
+        {
+            image_data[i]     = 255 - image_data[i];
+            image_data[i + 1] = 255 - image_data[i + 1];
+            image_data[i + 2] = 255 - image_data[i + 2];
+        }
+    }
+
+    glGenTextures(1, out_texture);
+    glBindTexture(GL_TEXTURE_2D, *out_texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     glTexImage2D(
         GL_TEXTURE_2D,
         0,
@@ -221,20 +281,25 @@ void InitUI(AppState& state)
     ApplyBrainwaveStyle();
 
     ImGuiIO& io = ImGui::GetIO();
-    ImFont* font = io.Fonts->AddFontFromFileTTF("./assets/fonts/Roboto-Regular.ttf", 18.0f);
-    if (font == nullptr) io.Fonts->AddFontDefault();
 
-    state.iconLoaded = LoadTextureFromFile("./assets/icons/FileTree.png", &state.iconTexture, &state.iconWidth, &state.iconHeight);
-    if (!state.iconLoaded) printf("Failed to load FileTree icon.\n");
+    const void* fontData = nullptr;
+    DWORD fontDataSize = 0;
+    if (GetResourceData(IDR_FONT_ROBOTO, &fontData, &fontDataSize))
+    {
+        void* fontDataCopy = IM_ALLOC(fontDataSize);
+        memcpy(fontDataCopy, fontData, fontDataSize);
+        ImFont* font = io.Fonts->AddFontFromMemoryTTF(fontDataCopy, static_cast<int>(fontDataSize), 18.0f);
+        if (font == nullptr) io.Fonts->AddFontDefault();
+    }
+    else
+    {
+        io.Fonts->AddFontDefault();
+    }
 
-    gAreaIconLoaded = LoadTextureFromFile("./assets/icons/Area.png", &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
-    if (!gAreaIconLoaded) printf("Failed to load Area icon.\n");
-
-    state.settingsIconLoaded = LoadTextureFromFile("./assets/icons/Settings.png", &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
-    if (!state.settingsIconLoaded) printf("Failed to load Settings icon.\n");
-
-    state.aboutIconLoaded = LoadTextureFromFile("./assets/icons/About.png", &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
-    if (!state.aboutIconLoaded) printf("Failed to load About icon.\n");
+    state.iconLoaded = LoadTextureFromResource(IDR_ICON_FILETREE, &state.iconTexture, &state.iconWidth, &state.iconHeight);
+    gAreaIconLoaded = LoadTextureFromResource(IDR_ICON_AREA, &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
+    state.settingsIconLoaded = LoadTextureFromResource(IDR_ICON_SETTINGS, &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
+    state.aboutIconLoaded = LoadTextureFromResource(IDR_ICON_ABOUT, &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
 
     state.areaRender = std::make_shared<AreaRender>();
     state.areaRender->init();

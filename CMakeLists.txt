@@ -270,6 +270,8 @@ add_executable(The_Ham_Sandwich
         src/export/TerrainExport.h
         src/export/M3Export.cpp
         src/export/M3Export.h
+        src/resource.h
+        src/resources.rc
 )
 
 target_include_directories(The_Ham_Sandwich PRIVATE
