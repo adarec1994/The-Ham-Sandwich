@@ -39,17 +39,10 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
         const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(child);
         if (!fileEntry) continue;
 
-        std::cout << "Loading Area: " << childName << std::endl;
-
         const auto af = std::make_shared<AreaFile>(arc, fileEntry);
         if (af->load())
         {
-            std::cout << "Area Loaded Successfully." << std::endl;
             gLoadedAreas.push_back(af);
-        }
-        else
-        {
-            std::cout << "Failed to load Area." << std::endl;
         }
     }
 
@@ -74,20 +67,15 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
     gSelectedChunk = nullptr;
     gLoadedModel = nullptr;
 
-    std::string name = wstring_to_utf8(fileEntry->getEntryName());
-    std::cout << "Loading Area: " << name << std::endl;
-
     auto af = std::make_shared<AreaFile>(arc, fileEntry);
     if (af->load())
     {
-        std::cout << "Area Loaded Successfully." << std::endl;
         gLoadedAreas.push_back(af);
         state.currentArea = af;
         SnapCameraToLoaded(state);
     }
     else
     {
-        std::cout << "Failed to load Area." << std::endl;
         state.currentArea.reset();
     }
 }
@@ -158,7 +146,6 @@ static void RenderEntryRecursive_Impl(
 
                     if (ImGui::Selectable(fname.c_str()))
                     {
-                        std::cout << "File clicked: " << fname << std::endl;
                         if (EndsWithNoCase(fname, ".area"))
                         {
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
@@ -171,11 +158,8 @@ static void RenderEntryRecursive_Impl(
                         }
                         else if (EndsWithNoCase(fname, ".m3"))
                         {
-                            std::cout << "M3 matched: " << fname << std::endl;
                             if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
                                 LoadSingleM3(state, currentArc, fileEntry);
-                            else
-                                std::cout << "fileEntry or currentArc null!" << std::endl;
                         }
                         else if (EndsWithNoCase(fname, ".tbl"))
                         {
@@ -199,7 +183,6 @@ static void RenderEntryRecursive_Impl(
 
         if (ImGui::Selectable(name.c_str()))
         {
-            std::cout << "File clicked (else branch): " << name << std::endl;
             if (EndsWithNoCase(name, ".area"))
             {
                 if (currentArc && parentDir && parentDir->isDirectory())
@@ -219,11 +202,8 @@ static void RenderEntryRecursive_Impl(
             }
             else if (EndsWithNoCase(name, ".m3"))
             {
-                std::cout << "M3 matched (alt path): " << name << std::endl;
                 if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
                     LoadSingleM3(state, currentArc, fileEntry);
-                else
-                    std::cout << "fileEntry or currentArc null!" << std::endl;
             }
             else if (EndsWithNoCase(name, ".tbl"))
             {
@@ -236,11 +216,6 @@ static void RenderEntryRecursive_Impl(
 
 void UI_RenderFileTab(AppState& state, float& outContentWidth)
 {
-    static bool printed = false;
-    if (!printed) {
-        std::cout << "=== UI_FileTree.cpp LOADED (Claude's version) ===" << std::endl;
-        printed = true;
-    }
     ImGui::Text("EXPLORER");
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 5));

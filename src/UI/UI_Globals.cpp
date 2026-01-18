@@ -75,8 +75,6 @@ void ProcessModelLoading(AppState& state)
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
 
-    std::cout << "Loading M3 Model: " << gLoadingModelName << std::endl;
-
     if (gLoadedModelData.success)
     {
         gLoadedModel = std::make_shared<M3Render>(gLoadedModelData, gPendingModelArchive);
@@ -84,14 +82,10 @@ void ProcessModelLoading(AppState& state)
         state.m3Render = gLoadedModel;
         state.show_models_window = true;
 
-        std::cout << "M3 Loaded. Vertices: " << gLoadedModelData.geometry.vertices.size()
-                  << ", Indices: " << gLoadedModelData.geometry.indices.size() << std::endl;
-
         SnapCameraToLoaded(state);
     }
     else
     {
-        std::cerr << "Failed to load M3: " << gLoadingModelName << std::endl;
         gLoadedModel = nullptr;
         state.m3Render = nullptr;
         state.show_models_window = false;

@@ -5,6 +5,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
@@ -260,6 +263,23 @@ namespace M3Export
         const auto& materials = render->getAllMaterials();
         const auto& textures = render->getAllTextures();
         const auto& animations = render->getAllAnimations();
+        std::vector<glm::mat4> effectiveBindGlobal(bones.size());
+        for (size_t i = 0; i < bones.size(); ++i) {
+            const auto& bone = bones[i];
+            bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
+            bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+            if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
+                glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
+                glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
+                if (!isRootBone) {
+                    effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
+                } else {
+                    effectiveBindGlobal[i] = localT;
+                }
+            } else {
+                effectiveBindGlobal[i] = bone.globalMatrix;
+            }
+        }
         struct SubmeshData {
             std::vector<glm::vec3> positions;
             std::vector<glm::vec3> normals;
@@ -397,20 +417,11 @@ namespace M3Export
                 stack.layer.id = stack.layerId;
                 for (size_t bi = 0; bi < bones.size(); ++bi) {
                     const auto& bone = bones[bi];
-                    bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-                    glm::mat4 bindLocalMatrix;
-                    if (!isRootBone) {
-                        bindLocalMatrix = glm::inverse(bones[bone.parentId].globalMatrix) * bone.globalMatrix;
-                    } else {
-                        bindLocalMatrix = bone.globalMatrix;
-                    }
-                    glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
-                    bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
-                    bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
+                    bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
                     const M3AnimationTrack* transTrack = nullptr;
                     const M3AnimationTrack* rotTrack = nullptr;
                     const M3AnimationTrack* scaleTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin) {
+                    if (!bone.tracks[6].keyframes.empty() && boneAtOrigin) {
                         transTrack = &bone.tracks[6];
                     }
                     for (int t = 4; t <= 5; ++t) if (!bone.tracks[t].keyframes.empty()) { rotTrack = &bone.tracks[t]; break; }
@@ -432,7 +443,7 @@ namespace M3Export
                                 cz.times.push_back(fbxTime); cz.values.push_back(kf.translation.z);
                             }
                         }
-                        if (cx.times.size() >= 1) {
+                        if (cx.times.size() >= 2) {
                             node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
                             stack.layer.curveNodes.push_back(node);
                             stack.layer.curves.push_back(std::move(cx));
@@ -458,7 +469,7 @@ namespace M3Export
                                 cz.times.push_back(fbxTime); cz.values.push_back(euler.z);
                             }
                         }
-                        if (cx.times.size() >= 1) {
+                        if (cx.times.size() >= 2) {
                             node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
                             stack.layer.curveNodes.push_back(node);
                             stack.layer.curves.push_back(std::move(cx));
@@ -483,7 +494,7 @@ namespace M3Export
                                 cz.times.push_back(fbxTime); cz.values.push_back(kf.scale.z);
                             }
                         }
-                        if (cx.times.size() >= 1) {
+                        if (cx.times.size() >= 2) {
                             node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
                             stack.layer.curveNodes.push_back(node);
                             stack.layer.curves.push_back(std::move(cx));
@@ -575,33 +586,33 @@ namespace M3Export
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
                 fbx << "\tNodeAttribute: " << boneAttrIds[bi] << ", \"NodeAttribute::" << boneName << "\", \"LimbNode\" {\n";
                 fbx << "\t\tProperties70:  {\n";
-                fbx << "\t\t\tP: \"Size\", \"double\", \"Number\", \"\", 0.01\n";
+                fbx << "\t\t\tP: \"Size\", \"double\", \"Number\", \"\", 0.001\n";
                 fbx << "\t\t}\n";
                 fbx << "\t\tTypeFlags: \"Skeleton\"\n\t}\n";
             }
             for (size_t bi = 0; bi < bones.size(); ++bi) {
                 const auto& bone = bones[bi];
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
-                glm::mat4 boneGlobal = bone.globalMatrix;
-                glm::mat4 parentGlobal = glm::mat4(1.0f);
+                glm::mat4 localMat;
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
-                    parentGlobal = bones[bone.parentId].globalMatrix;
+                    glm::mat4 parentEffectiveInv = glm::inverse(effectiveBindGlobal[bone.parentId]);
+                    localMat = parentEffectiveInv * effectiveBindGlobal[bi];
+                } else {
+                    localMat = effectiveBindGlobal[bi];
                 }
-                glm::mat4 localMat = glm::inverse(parentGlobal) * boneGlobal;
-                glm::vec3 t = glm::vec3(localMat[3]);
-                glm::vec3 s(glm::length(glm::vec3(localMat[0])), glm::length(glm::vec3(localMat[1])), glm::length(glm::vec3(localMat[2])));
-                if (s.x < 0.0001f) s.x = 1.0f;
-                if (s.y < 0.0001f) s.y = 1.0f;
-                if (s.z < 0.0001f) s.z = 1.0f;
-                glm::mat3 rotMat(glm::vec3(localMat[0])/s.x, glm::vec3(localMat[1])/s.y, glm::vec3(localMat[2])/s.z);
-                float rx = atan2(rotMat[1][2], rotMat[2][2]) * 57.2957795f;
-                float ry = atan2(-rotMat[0][2], sqrt(rotMat[1][2]*rotMat[1][2] + rotMat[2][2]*rotMat[2][2])) * 57.2957795f;
-                float rz = atan2(rotMat[0][1], rotMat[0][0]) * 57.2957795f;
+                glm::vec3 scale, translation, skew;
+                glm::quat rotation;
+                glm::vec4 perspective;
+                glm::decompose(localMat, scale, rotation, translation, skew, perspective);
+                glm::mat3 rm = glm::mat3_cast(rotation);
+                float rx = atan2(rm[1][2], rm[2][2]) * 57.2957795f;
+                float ry = atan2(-rm[0][2], sqrt(rm[1][2]*rm[1][2] + rm[2][2]*rm[2][2])) * 57.2957795f;
+                float rz = atan2(rm[0][1], rm[0][0]) * 57.2957795f;
                 fbx << "\tModel: " << boneIds[bi] << ", \"Model::" << boneName << "\", \"LimbNode\" {\n";
                 fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
-                fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", " << FbxF(t.x) << "," << FbxF(t.y) << "," << FbxF(t.z) << "\n";
+                fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", " << FbxF(translation.x) << "," << FbxF(translation.y) << "," << FbxF(translation.z) << "\n";
                 fbx << "\t\t\tP: \"Lcl Rotation\", \"Lcl Rotation\", \"\", \"A\", " << FbxF(rx) << "," << FbxF(ry) << "," << FbxF(rz) << "\n";
-                fbx << "\t\t\tP: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"A\", " << FbxF(s.x) << "," << FbxF(s.y) << "," << FbxF(s.z) << "\n";
+                fbx << "\t\t\tP: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"A\", " << FbxF(scale.x) << "," << FbxF(scale.y) << "," << FbxF(scale.z) << "\n";
                 fbx << "\t\t}\n\t\tShading: Y\n\t\tCulling: \"CullingOff\"\n\t}\n";
             }
         }
@@ -733,7 +744,7 @@ namespace M3Export
                         }
                         fbx << "\n\t\t}\n";
                     }
-                    glm::mat4 ibm = glm::inverse(bone.globalMatrix);
+                    glm::mat4 ibm = glm::inverse(effectiveBindGlobal[bi]);
                     fbx << "\t\tTransform: *16 {\n\t\t\ta: ";
                     for (int c = 0; c < 4; ++c) {
                         for (int r = 0; r < 4; ++r) {
@@ -746,7 +757,7 @@ namespace M3Export
                     for (int c = 0; c < 4; ++c) {
                         for (int r = 0; r < 4; ++r) {
                             if (c > 0 || r > 0) fbx << ",";
-                            fbx << FbxF(bone.globalMatrix[c][r]);
+                            fbx << FbxF(effectiveBindGlobal[bi][c][r]);
                         }
                     }
                     fbx << "\n\t\t}\n\t}\n";
@@ -1033,6 +1044,23 @@ namespace M3Export
         std::vector<MeshData> meshes;
         const auto& bones = render->getAllBones();
         bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
+        std::vector<glm::mat4> effectiveBindGlobal(bones.size());
+        for (size_t i = 0; i < bones.size(); ++i) {
+            const auto& bone = bones[i];
+            bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
+            bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+            if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
+                glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
+                glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
+                if (!isRootBone) {
+                    effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
+                } else {
+                    effectiveBindGlobal[i] = localT;
+                }
+            } else {
+                effectiveBindGlobal[i] = bone.globalMatrix;
+            }
+        }
         for (const auto& se : exportList)
         {
             MeshData md;
@@ -1166,37 +1194,17 @@ namespace M3Export
                 for (size_t boneIdx = 0; boneIdx < bones.size(); ++boneIdx)
                 {
                     const auto& bone = bones[boneIdx];
-                    bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-                    glm::mat4 bindLocalMatrix;
-                    if (!isRootBone) {
-                        glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
-                        bindLocalMatrix = parentGlobalInv * bone.globalMatrix;
-                    } else {
-                        bindLocalMatrix = bone.globalMatrix;
-                    }
-                    glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
-                    bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
+                    bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
                     const M3AnimationTrack* scaleTrack = nullptr;
-                    for (int t = 0; t <= 2; ++t)
-                    {
-                        if (!bone.tracks[t].keyframes.empty())
-                        {
-                            scaleTrack = &bone.tracks[t];
-                            break;
-                        }
+                    for (int t = 0; t <= 2; ++t) {
+                        if (!bone.tracks[t].keyframes.empty()) { scaleTrack = &bone.tracks[t]; break; }
                     }
                     const M3AnimationTrack* rotTrack = nullptr;
-                    for (int t = 4; t <= 5; ++t)
-                    {
-                        if (!bone.tracks[t].keyframes.empty())
-                        {
-                            rotTrack = &bone.tracks[t];
-                            break;
-                        }
+                    for (int t = 4; t <= 5; ++t) {
+                        if (!bone.tracks[t].keyframes.empty()) { rotTrack = &bone.tracks[t]; break; }
                     }
-                    bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
                     const M3AnimationTrack* transTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin)
+                    if (!bone.tracks[6].keyframes.empty() && boneAtOrigin)
                     {
                         transTrack = &bone.tracks[6];
                     }
@@ -1378,12 +1386,12 @@ namespace M3Export
                 glm::mat4 localMatrix;
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size())
                 {
-                    glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
-                    localMatrix = parentGlobalInv * bone.globalMatrix;
+                    glm::mat4 parentEffectiveInv = glm::inverse(effectiveBindGlobal[bone.parentId]);
+                    localMatrix = parentEffectiveInv * effectiveBindGlobal[i];
                 }
                 else
                 {
-                    localMatrix = bone.globalMatrix;
+                    localMatrix = effectiveBindGlobal[i];
                 }
                 json += ",\"matrix\":[";
                 for (int c = 0; c < 4; ++c)

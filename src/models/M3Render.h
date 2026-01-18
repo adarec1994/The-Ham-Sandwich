@@ -58,6 +58,9 @@ public:
     int getSelectedSubmesh() const { return selectedSubmesh; }
     int rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const;
 
+    void setSelectedBone(int idx) { selectedBone = idx; }
+    int getSelectedBone() const { return selectedBone; }
+
     void playAnimation(int index);
     void stopAnimation();
     void pauseAnimation();
@@ -90,6 +93,7 @@ private:
     int activeVariant = -1;
     bool showSkeleton = false;
     int selectedSubmesh = -1;
+    int selectedBone = -1;
     int playingAnimation = -1;
     float animationTime = 0.0f;
     bool animationPaused = false;

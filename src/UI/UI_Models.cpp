@@ -292,15 +292,47 @@ namespace UI_Models
             if (ImGui::CollapsingHeader("Bones"))
             {
                 const auto& bones = render->getAllBones();
+                int selectedBone = render->getSelectedBone();
+
+                // Deselect button
+                if (selectedBone >= 0)
+                {
+                    if (ImGui::Button("Deselect"))
+                        render->setSelectedBone(-1);
+                    ImGui::Separator();
+                }
+
                 for (size_t i = 0; i < bones.size(); ++i)
                 {
                     const auto& bone = bones[i];
                     ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::TreeNode((void*)(intptr_t)i, "[%d] %s", bone.id, bone.name.c_str()))
+
+                    bool isSelected = (selectedBone == static_cast<int>(i));
+
+                    // Highlight selected bone
+                    if (isSelected)
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
+
+                    char label[128];
+                    snprintf(label, sizeof(label), "[%d] %s", bone.id, bone.name.c_str());
+
+                    if (ImGui::Selectable(label, isSelected))
                     {
-                        ImGui::Text("Parent: %d  Flags: 0x%04X", bone.parentId, bone.flags);
-                        ImGui::TreePop();
+                        render->setSelectedBone(isSelected ? -1 : static_cast<int>(i));
                     }
+
+                    if (isSelected)
+                        ImGui::PopStyleColor();
+
+                    // Show tooltip with bone info on hover
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::BeginTooltip();
+                        ImGui::Text("Parent: %d", bone.parentId);
+                        ImGui::Text("Flags: 0x%04X", bone.flags);
+                        ImGui::EndTooltip();
+                    }
+
                     ImGui::PopID();
                 }
             }

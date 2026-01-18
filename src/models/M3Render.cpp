@@ -2,13 +2,14 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
 #include <codecvt>
 #include <locale>
 #include <algorithm>
 #include <cmath>
 #include <cfloat>
 #include <set>
-#include <iostream>
 const char* m3VertexSrc = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -338,6 +339,7 @@ void M3Render::playAnimation(int index) {
     playingAnimation = index;
     animationTime = 0.0f;
     animationPaused = false;
+    updateAnimation(0.0f);
 }
 void M3Render::stopAnimation() {
     playingAnimation = -1;
@@ -432,19 +434,41 @@ void M3Render::updateAnimation(float deltaTime) {
     float currentTimeMs = anim.timestampStart + animationTime * 1000.0f;
     boneMatrices.resize(bones.size());
     std::vector<glm::mat4> worldTransforms(bones.size());
+    std::vector<glm::mat4> effectiveBindGlobal(bones.size());
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+        bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
+        bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+        if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
+            glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
+            glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
+            if (!isRootBone) {
+                effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
+            } else {
+                effectiveBindGlobal[i] = localT;
+            }
+        } else {
+            effectiveBindGlobal[i] = bone.globalMatrix;
+        }
+    }
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
         bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
         glm::mat4 bindLocalMatrix;
         if (!isRootBone) {
-            glm::mat4 parentGlobalInv = glm::inverse(bones[bone.parentId].globalMatrix);
-            bindLocalMatrix = parentGlobalInv * bone.globalMatrix;
+            glm::mat4 parentEffectiveInv = glm::inverse(effectiveBindGlobal[bone.parentId]);
+            bindLocalMatrix = parentEffectiveInv * effectiveBindGlobal[i];
         } else {
-            bindLocalMatrix = bone.globalMatrix;
+            bindLocalMatrix = effectiveBindGlobal[i];
         }
-        glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
-        glm::vec3 scale(1.0f);
-        glm::quat rotation(1, 0, 0, 0);
+        glm::vec3 bindScale;
+        glm::quat bindRotation;
+        glm::vec3 bindTranslation;
+        glm::vec3 skew;
+        glm::vec4 perspective;
+        glm::decompose(bindLocalMatrix, bindScale, bindRotation, bindTranslation, skew, perspective);
+        glm::vec3 scale = bindScale;
+        glm::quat rotation = bindRotation;
         glm::vec3 translation = bindTranslation;
         for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
@@ -458,9 +482,8 @@ void M3Render::updateAnimation(float deltaTime) {
                 break;
             }
         }
-        bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
-        bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
-        if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin) {
+        bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+        if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
@@ -475,6 +498,7 @@ void M3Render::updateAnimation(float deltaTime) {
         boneMatrices[i] = worldTransforms[i] * bone.inverseGlobalMatrix;
     }
 }
+
 void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
     struct SkeletonVertex {
@@ -497,17 +521,44 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
         glm::vec3 bonePos = boneWorldPos[i];
-        float ptSize = 0.02f;
-        glm::vec3 jointColor(1.0f, 1.0f, 0.0f);
+
+        bool isSelected = (selectedBone == static_cast<int>(i));
+        float ptSize = isSelected ? 0.06f : 0.02f;
+        glm::vec3 jointColor = isSelected ? glm::vec3(1.0f, 0.3f, 0.0f) : glm::vec3(1.0f, 1.0f, 0.0f);
+
         verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
         verts.push_back({bonePos + glm::vec3(ptSize, 0, 0), jointColor});
         verts.push_back({bonePos + glm::vec3(0, -ptSize, 0), jointColor});
         verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
+
+        // Draw octahedron for selected bone
+        if (isSelected) {
+            float s = ptSize * 0.8f;
+            glm::vec3 top = bonePos + glm::vec3(0, s, 0);
+            glm::vec3 bot = bonePos + glm::vec3(0, -s, 0);
+            glm::vec3 corners[4] = {
+                bonePos + glm::vec3(s, 0, 0),
+                bonePos + glm::vec3(0, 0, s),
+                bonePos + glm::vec3(-s, 0, 0),
+                bonePos + glm::vec3(0, 0, -s)
+            };
+            for (int j = 0; j < 4; ++j) {
+                int next = (j + 1) % 4;
+                verts.push_back({top, jointColor});
+                verts.push_back({corners[j], jointColor});
+                verts.push_back({corners[j], jointColor});
+                verts.push_back({corners[next], jointColor});
+                verts.push_back({bot, jointColor});
+                verts.push_back({corners[j], jointColor});
+            }
+        }
+
         if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
             glm::vec3 parentPos = boneWorldPos[bone.parentId];
-            glm::vec3 boneColor(0.0f, 1.0f, 1.0f);
+            bool parentSelected = (selectedBone == bone.parentId);
+            glm::vec3 boneColor = (isSelected || parentSelected) ? glm::vec3(1.0f, 0.5f, 0.0f) : glm::vec3(0.0f, 1.0f, 1.0f);
             verts.push_back({bonePos, boneColor});
             verts.push_back({parentPos, boneColor});
         }
@@ -524,7 +575,9 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
     glDisable(GL_DEPTH_TEST);
+    glLineWidth(2.0f);
     glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
+    glLineWidth(1.0f);
     glEnable(GL_DEPTH_TEST);
 }
 static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
