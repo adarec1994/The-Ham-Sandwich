@@ -370,6 +370,138 @@ namespace M3Export
             for (size_t m = 0; m < meshList.size(); ++m)
                 for (size_t b = 0; b < bones.size(); ++b) clusterIds.push_back(GenFbxId());
         }
+        struct FbxAnimCurve { int64_t id; std::vector<int64_t> times; std::vector<float> values; };
+        struct FbxAnimCurveNode { int64_t id; std::string prop; int64_t curveX, curveY, curveZ; size_t boneIdx; };
+        struct FbxAnimLayer { int64_t id; std::vector<FbxAnimCurveNode> curveNodes; std::vector<FbxAnimCurve> curves; };
+        struct FbxAnimStack { int64_t id; std::string name; int64_t layerId; int64_t startTime; int64_t endTime; FbxAnimLayer layer; };
+        std::vector<FbxAnimStack> animStacks;
+        auto QuatToEulerXYZ = [](const glm::quat& q) -> glm::vec3 {
+            glm::mat3 m = glm::mat3_cast(q);
+            float rx = atan2(m[1][2], m[2][2]) * 57.2957795f;
+            float ry = atan2(-m[0][2], sqrt(m[1][2]*m[1][2] + m[2][2]*m[2][2])) * 57.2957795f;
+            float rz = atan2(m[0][1], m[0][0]) * 57.2957795f;
+            return glm::vec3(rx, ry, rz);
+        };
+        if (hasAnimations) {
+            for (size_t ai = 0; ai < animations.size(); ++ai) {
+                const auto& anim = animations[ai];
+                FbxAnimStack stack;
+                stack.id = GenFbxId();
+                stack.name = "Animation_" + std::to_string(anim.sequenceId);
+                stack.layerId = GenFbxId();
+                float startMs = (float)anim.timestampStart;
+                float endMs = (float)anim.timestampEnd;
+                float durationMs = endMs - startMs;
+                stack.startTime = 0;
+                stack.endTime = (int64_t)((durationMs / 1000.0f) * 46186158000.0);
+                stack.layer.id = stack.layerId;
+                for (size_t bi = 0; bi < bones.size(); ++bi) {
+                    const auto& bone = bones[bi];
+                    bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
+                    glm::mat4 bindLocalMatrix;
+                    if (!isRootBone) {
+                        bindLocalMatrix = glm::inverse(bones[bone.parentId].globalMatrix) * bone.globalMatrix;
+                    } else {
+                        bindLocalMatrix = bone.globalMatrix;
+                    }
+                    glm::vec3 bindTranslation = glm::vec3(bindLocalMatrix[3]);
+                    bool hasBindPoseOffset = (glm::length(bindTranslation) > 0.001f);
+                    bool isAtGlobalOrigin = (glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f);
+                    const M3AnimationTrack* transTrack = nullptr;
+                    const M3AnimationTrack* rotTrack = nullptr;
+                    const M3AnimationTrack* scaleTrack = nullptr;
+                    if (!bone.tracks[6].keyframes.empty() && !hasBindPoseOffset && !isAtGlobalOrigin) {
+                        transTrack = &bone.tracks[6];
+                    }
+                    for (int t = 4; t <= 5; ++t) if (!bone.tracks[t].keyframes.empty()) { rotTrack = &bone.tracks[t]; break; }
+                    for (int t = 0; t <= 2; ++t) if (!bone.tracks[t].keyframes.empty()) { scaleTrack = &bone.tracks[t]; break; }
+                    if (transTrack && !transTrack->keyframes.empty()) {
+                        FbxAnimCurveNode node;
+                        node.id = GenFbxId();
+                        node.prop = "Lcl Translation";
+                        node.boneIdx = bi;
+                        FbxAnimCurve cx, cy, cz;
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
+                        for (const auto& kf : transTrack->keyframes) {
+                            float ktMs = (float)kf.timestamp;
+                            if (ktMs >= startMs && ktMs <= endMs) {
+                                float relativeMs = ktMs - startMs;
+                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
+                                cx.times.push_back(fbxTime); cx.values.push_back(kf.translation.x);
+                                cy.times.push_back(fbxTime); cy.values.push_back(kf.translation.y);
+                                cz.times.push_back(fbxTime); cz.values.push_back(kf.translation.z);
+                            }
+                        }
+                        if (cx.times.size() >= 1) {
+                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
+                            stack.layer.curveNodes.push_back(node);
+                            stack.layer.curves.push_back(std::move(cx));
+                            stack.layer.curves.push_back(std::move(cy));
+                            stack.layer.curves.push_back(std::move(cz));
+                        }
+                    }
+                    if (rotTrack && !rotTrack->keyframes.empty()) {
+                        FbxAnimCurveNode node;
+                        node.id = GenFbxId();
+                        node.prop = "Lcl Rotation";
+                        node.boneIdx = bi;
+                        FbxAnimCurve cx, cy, cz;
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
+                        for (const auto& kf : rotTrack->keyframes) {
+                            float ktMs = (float)kf.timestamp;
+                            if (ktMs >= startMs && ktMs <= endMs) {
+                                float relativeMs = ktMs - startMs;
+                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
+                                glm::vec3 euler = QuatToEulerXYZ(kf.rotation);
+                                cx.times.push_back(fbxTime); cx.values.push_back(euler.x);
+                                cy.times.push_back(fbxTime); cy.values.push_back(euler.y);
+                                cz.times.push_back(fbxTime); cz.values.push_back(euler.z);
+                            }
+                        }
+                        if (cx.times.size() >= 1) {
+                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
+                            stack.layer.curveNodes.push_back(node);
+                            stack.layer.curves.push_back(std::move(cx));
+                            stack.layer.curves.push_back(std::move(cy));
+                            stack.layer.curves.push_back(std::move(cz));
+                        }
+                    }
+                    if (scaleTrack && !scaleTrack->keyframes.empty()) {
+                        FbxAnimCurveNode node;
+                        node.id = GenFbxId();
+                        node.prop = "Lcl Scaling";
+                        node.boneIdx = bi;
+                        FbxAnimCurve cx, cy, cz;
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
+                        for (const auto& kf : scaleTrack->keyframes) {
+                            float ktMs = (float)kf.timestamp;
+                            if (ktMs >= startMs && ktMs <= endMs) {
+                                float relativeMs = ktMs - startMs;
+                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
+                                cx.times.push_back(fbxTime); cx.values.push_back(kf.scale.x);
+                                cy.times.push_back(fbxTime); cy.values.push_back(kf.scale.y);
+                                cz.times.push_back(fbxTime); cz.values.push_back(kf.scale.z);
+                            }
+                        }
+                        if (cx.times.size() >= 1) {
+                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
+                            stack.layer.curveNodes.push_back(node);
+                            stack.layer.curves.push_back(std::move(cx));
+                            stack.layer.curves.push_back(std::move(cy));
+                            stack.layer.curves.push_back(std::move(cz));
+                        }
+                    }
+                }
+                if (!stack.layer.curveNodes.empty()) animStacks.push_back(std::move(stack));
+            }
+        }
+        int animStackCount = (int)animStacks.size();
+        int animLayerCount = animStackCount;
+        int animCurveNodeCount = 0, animCurveCount = 0;
+        for (const auto& stack : animStacks) {
+            animCurveNodeCount += (int)stack.layer.curveNodes.size();
+            animCurveCount += (int)stack.layer.curves.size();
+        }
         std::ostringstream fbx;
         fbx << std::fixed << std::setprecision(6);
         fbx << "; FBX 7.5.0 project file\n; Created by WildStar M3 Exporter\n";
@@ -391,12 +523,14 @@ namespace M3Export
         fbx << "\t}\n}\n\n";
         fbx << "Documents:  {\n\tCount: 1\n\tDocument: 1000000000, \"\", \"Scene\" {\n";
         fbx << "\t\tProperties70:  {\n\t\t\tP: \"SourceObject\", \"object\", \"\", \"\"\n";
-        fbx << "\t\t\tP: \"ActiveAnimStackName\", \"KString\", \"\", \"\", \"\"\n\t\t}\n";
+        std::string activeAnimName = animStacks.empty() ? "" : animStacks[0].name;
+        fbx << "\t\t\tP: \"ActiveAnimStackName\", \"KString\", \"\", \"\", \"" << activeAnimName << "\"\n\t\t}\n";
         fbx << "\t\tRootNode: 0\n\t}\n}\n\n";
         fbx << "References:  {\n}\n\n";
         int defCount = 1 + (int)meshList.size() * 2 + (int)meshList.size();
         if (hasSkeleton) defCount += (int)bones.size() * 2 + (int)meshList.size() + (int)meshList.size() * (int)bones.size();
         if (!fbxTextures.empty()) defCount += (int)fbxTextures.size() * 2;
+        defCount += animStackCount + animLayerCount + animCurveNodeCount + animCurveCount;
         fbx << "Definitions:  {\n\tVersion: 100\n\tCount: " << defCount << "\n";
         fbx << "\tObjectType: \"GlobalSettings\" {\n\t\tCount: 1\n\t}\n";
         fbx << "\tObjectType: \"Model\" {\n\t\tCount: " << (1 + meshList.size() + (hasSkeleton ? bones.size() : 0)) << "\n";
@@ -414,6 +548,12 @@ namespace M3Export
         if (hasSkeleton) {
             fbx << "\tObjectType: \"Deformer\" {\n\t\tCount: " << (meshList.size() + meshList.size() * bones.size()) << "\n\t}\n";
             fbx << "\tObjectType: \"NodeAttribute\" {\n\t\tCount: " << bones.size() << "\n\t}\n";
+        }
+        if (animStackCount > 0) {
+            fbx << "\tObjectType: \"AnimationStack\" {\n\t\tCount: " << animStackCount << "\n\t}\n";
+            fbx << "\tObjectType: \"AnimationLayer\" {\n\t\tCount: " << animLayerCount << "\n\t}\n";
+            fbx << "\tObjectType: \"AnimationCurveNode\" {\n\t\tCount: " << animCurveNodeCount << "\n\t}\n";
+            fbx << "\tObjectType: \"AnimationCurve\" {\n\t\tCount: " << animCurveCount << "\n\t}\n";
         }
         fbx << "}\n\n";
         if (progress) progress(40, 100, "Writing objects...");
@@ -434,32 +574,29 @@ namespace M3Export
                 const auto& bone = bones[bi];
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
                 fbx << "\tNodeAttribute: " << boneAttrIds[bi] << ", \"NodeAttribute::" << boneName << "\", \"LimbNode\" {\n";
+                fbx << "\t\tProperties70:  {\n";
+                fbx << "\t\t\tP: \"Size\", \"double\", \"Number\", \"\", 0.01\n";
+                fbx << "\t\t}\n";
                 fbx << "\t\tTypeFlags: \"Skeleton\"\n\t}\n";
             }
             for (size_t bi = 0; bi < bones.size(); ++bi) {
                 const auto& bone = bones[bi];
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
-                glm::mat4 scaledGlobal = bone.globalMatrix;
-                scaledGlobal[3][0] *= SCALE;
-                scaledGlobal[3][1] *= SCALE;
-                scaledGlobal[3][2] *= SCALE;
-                glm::mat4 parentScaledGlobal = glm::mat4(1.0f);
+                glm::mat4 boneGlobal = bone.globalMatrix;
+                glm::mat4 parentGlobal = glm::mat4(1.0f);
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
-                    parentScaledGlobal = bones[bone.parentId].globalMatrix;
-                    parentScaledGlobal[3][0] *= SCALE;
-                    parentScaledGlobal[3][1] *= SCALE;
-                    parentScaledGlobal[3][2] *= SCALE;
+                    parentGlobal = bones[bone.parentId].globalMatrix;
                 }
-                glm::mat4 localMat = glm::inverse(parentScaledGlobal) * scaledGlobal;
+                glm::mat4 localMat = glm::inverse(parentGlobal) * boneGlobal;
                 glm::vec3 t = glm::vec3(localMat[3]);
                 glm::vec3 s(glm::length(glm::vec3(localMat[0])), glm::length(glm::vec3(localMat[1])), glm::length(glm::vec3(localMat[2])));
                 if (s.x < 0.0001f) s.x = 1.0f;
                 if (s.y < 0.0001f) s.y = 1.0f;
                 if (s.z < 0.0001f) s.z = 1.0f;
                 glm::mat3 rotMat(glm::vec3(localMat[0])/s.x, glm::vec3(localMat[1])/s.y, glm::vec3(localMat[2])/s.z);
-                float rx = atan2(rotMat[2][1], rotMat[2][2]) * 57.2957795f;
-                float ry = atan2(-rotMat[2][0], sqrt(rotMat[2][1]*rotMat[2][1] + rotMat[2][2]*rotMat[2][2])) * 57.2957795f;
-                float rz = atan2(rotMat[1][0], rotMat[0][0]) * 57.2957795f;
+                float rx = atan2(rotMat[1][2], rotMat[2][2]) * 57.2957795f;
+                float ry = atan2(-rotMat[0][2], sqrt(rotMat[1][2]*rotMat[1][2] + rotMat[2][2]*rotMat[2][2])) * 57.2957795f;
+                float rz = atan2(rotMat[0][1], rotMat[0][0]) * 57.2957795f;
                 fbx << "\tModel: " << boneIds[bi] << ", \"Model::" << boneName << "\", \"LimbNode\" {\n";
                 fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
                 fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", " << FbxF(t.x) << "," << FbxF(t.y) << "," << FbxF(t.z) << "\n";
@@ -474,7 +611,7 @@ namespace M3Export
             fbx << "\t\tVertices: *" << (mesh.positions.size() * 3) << " {\n\t\t\ta: ";
             for (size_t i = 0; i < mesh.positions.size(); ++i) {
                 if (i > 0) fbx << ",";
-                fbx << FbxF(mesh.positions[i].x * SCALE) << "," << FbxF(mesh.positions[i].y * SCALE) << "," << FbxF(mesh.positions[i].z * SCALE);
+                fbx << FbxF(mesh.positions[i].x) << "," << FbxF(mesh.positions[i].y) << "," << FbxF(mesh.positions[i].z);
             }
             fbx << "\n\t\t}\n";
             fbx << "\t\tPolygonVertexIndex: *" << mesh.indices.size() << " {\n\t\t\ta: ";
@@ -596,28 +733,78 @@ namespace M3Export
                         }
                         fbx << "\n\t\t}\n";
                     }
-                    glm::mat4 scaledGlobal = bone.globalMatrix;
-                    scaledGlobal[3][0] *= SCALE;
-                    scaledGlobal[3][1] *= SCALE;
-                    scaledGlobal[3][2] *= SCALE;
-                    glm::mat4 ibm = glm::inverse(scaledGlobal);
+                    glm::mat4 ibm = glm::inverse(bone.globalMatrix);
                     fbx << "\t\tTransform: *16 {\n\t\t\ta: ";
-                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
-                        if (c > 0 || r > 0) fbx << ",";
-                        fbx << FbxF(ibm[c][r]);
+                    for (int c = 0; c < 4; ++c) {
+                        for (int r = 0; r < 4; ++r) {
+                            if (c > 0 || r > 0) fbx << ",";
+                            fbx << FbxF(ibm[c][r]);
+                        }
                     }
                     fbx << "\n\t\t}\n";
                     fbx << "\t\tTransformLink: *16 {\n\t\t\ta: ";
-                    for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) {
-                        if (c > 0 || r > 0) fbx << ",";
-                        fbx << FbxF(scaledGlobal[c][r]);
+                    for (int c = 0; c < 4; ++c) {
+                        for (int r = 0; r < 4; ++r) {
+                            if (c > 0 || r > 0) fbx << ",";
+                            fbx << FbxF(bone.globalMatrix[c][r]);
+                        }
                     }
                     fbx << "\n\t\t}\n\t}\n";
                 }
             }
         }
+        if (progress) progress(80, 100, "Writing animations...");
+        for (const auto& stack : animStacks) {
+            fbx << "\tAnimationStack: " << stack.id << ", \"AnimStack::" << stack.name << "\", \"\" {\n";
+            fbx << "\t\tProperties70:  {\n";
+            fbx << "\t\t\tP: \"LocalStart\", \"KTime\", \"Time\", \"\"," << stack.startTime << "\n";
+            fbx << "\t\t\tP: \"LocalStop\", \"KTime\", \"Time\", \"\"," << stack.endTime << "\n";
+            fbx << "\t\t\tP: \"ReferenceStart\", \"KTime\", \"Time\", \"\"," << stack.startTime << "\n";
+            fbx << "\t\t\tP: \"ReferenceStop\", \"KTime\", \"Time\", \"\"," << stack.endTime << "\n";
+            fbx << "\t\t}\n\t}\n";
+            fbx << "\tAnimationLayer: " << stack.layer.id << ", \"AnimLayer::" << stack.name << "_Layer\", \"\" {\n\t}\n";
+            for (const auto& node : stack.layer.curveNodes) {
+                std::string boneName = bones[node.boneIdx].name.empty() ? ("Bone_" + std::to_string(node.boneIdx)) : bones[node.boneIdx].name;
+                fbx << "\tAnimationCurveNode: " << node.id << ", \"AnimCurveNode::" << node.prop << "\", \"\" {\n";
+                fbx << "\t\tProperties70:  {\n";
+                if (node.prop == "Lcl Translation") {
+                    fbx << "\t\t\tP: \"d|X\", \"Number\", \"\", \"A\",0\n";
+                    fbx << "\t\t\tP: \"d|Y\", \"Number\", \"\", \"A\",0\n";
+                    fbx << "\t\t\tP: \"d|Z\", \"Number\", \"\", \"A\",0\n";
+                } else if (node.prop == "Lcl Rotation") {
+                    fbx << "\t\t\tP: \"d|X\", \"Number\", \"\", \"A\",0\n";
+                    fbx << "\t\t\tP: \"d|Y\", \"Number\", \"\", \"A\",0\n";
+                    fbx << "\t\t\tP: \"d|Z\", \"Number\", \"\", \"A\",0\n";
+                } else {
+                    fbx << "\t\t\tP: \"d|X\", \"Number\", \"\", \"A\",1\n";
+                    fbx << "\t\t\tP: \"d|Y\", \"Number\", \"\", \"A\",1\n";
+                    fbx << "\t\t\tP: \"d|Z\", \"Number\", \"\", \"A\",1\n";
+                }
+                fbx << "\t\t}\n\t}\n";
+            }
+            for (const auto& curve : stack.layer.curves) {
+                fbx << "\tAnimationCurve: " << curve.id << ", \"AnimCurve::\", \"\" {\n";
+                fbx << "\t\tDefault: " << (curve.values.empty() ? 0.0f : curve.values[0]) << "\n";
+                fbx << "\t\tKeyVer: 4008\n";
+                fbx << "\t\tKeyTime: *" << curve.times.size() << " {\n\t\t\ta: ";
+                for (size_t i = 0; i < curve.times.size(); ++i) {
+                    if (i > 0) fbx << ",";
+                    fbx << curve.times[i];
+                }
+                fbx << "\n\t\t}\n";
+                fbx << "\t\tKeyValueFloat: *" << curve.values.size() << " {\n\t\t\ta: ";
+                for (size_t i = 0; i < curve.values.size(); ++i) {
+                    if (i > 0) fbx << ",";
+                    fbx << FbxF(curve.values[i]);
+                }
+                fbx << "\n\t\t}\n";
+                fbx << "\t\tKeyAttrFlags: *1 {\n\t\t\ta: 24840\n\t\t}\n";
+                fbx << "\t\tKeyAttrDataFloat: *4 {\n\t\t\ta: 0,0,0,0\n\t\t}\n";
+                fbx << "\t\tKeyAttrRefCount: *1 {\n\t\t\ta: " << curve.times.size() << "\n\t\t}\n";
+                fbx << "\t}\n";
+            }
+        }
         fbx << "}\n\n";
-        if (progress) progress(70, 100, "Writing connections...");
         fbx << "Connections:  {\n";
         fbx << "\tC: \"OO\"," << rootId << ",0\n";
         for (size_t mi = 0; mi < meshList.size(); ++mi) {
@@ -658,20 +845,28 @@ namespace M3Export
                 }
             }
         }
-        fbx << "}\n\n";
-        if (hasAnimations) {
-            if (progress) progress(80, 100, "Writing animations...");
-            fbx << "Takes:  {\n\tCurrent: \"Take 001\"\n";
-            for (size_t ai = 0; ai < animations.size(); ++ai) {
-                const auto& anim = animations[ai];
-                float startSec = anim.timestampStart / 1000.0f;
-                float endSec = anim.timestampEnd / 1000.0f;
-                int64_t startFbx = (int64_t)(startSec * 46186158000.0);
-                int64_t endFbx = (int64_t)(endSec * 46186158000.0);
-                fbx << "\tTake: \"Animation_" << anim.sequenceId << "\" {\n";
-                fbx << "\t\tFileName: \"Animation_" << anim.sequenceId << ".tak\"\n";
-                fbx << "\t\tLocalTime: " << startFbx << "," << endFbx << "\n";
-                fbx << "\t\tReferenceTime: " << startFbx << "," << endFbx << "\n";
+        for (const auto& stack : animStacks) {
+            fbx << "\tC: \"OO\"," << stack.layer.id << "," << stack.id << "\n";
+            for (const auto& node : stack.layer.curveNodes) {
+                fbx << "\tC: \"OO\"," << node.id << "," << stack.layer.id << "\n";
+                fbx << "\tC: \"OP\"," << node.id << "," << boneIds[node.boneIdx] << ", \"" << node.prop << "\"\n";
+            }
+            size_t curveIdx = 0;
+            for (const auto& node : stack.layer.curveNodes) {
+                fbx << "\tC: \"OP\"," << stack.layer.curves[curveIdx].id << "," << node.id << ", \"d|X\"\n";
+                fbx << "\tC: \"OP\"," << stack.layer.curves[curveIdx+1].id << "," << node.id << ", \"d|Y\"\n";
+                fbx << "\tC: \"OP\"," << stack.layer.curves[curveIdx+2].id << "," << node.id << ", \"d|Z\"\n";
+                curveIdx += 3;
+            }
+        }
+        fbx << "}\n";
+        if (!animStacks.empty()) {
+            fbx << "\nTakes:  {\n\tCurrent: \"" << animStacks[0].name << "\"\n";
+            for (const auto& stack : animStacks) {
+                fbx << "\tTake: \"" << stack.name << "\" {\n";
+                fbx << "\t\tFileName: \"" << stack.name << ".tak\"\n";
+                fbx << "\t\tLocalTime: " << stack.startTime << "," << stack.endTime << "\n";
+                fbx << "\t\tReferenceTime: " << stack.startTime << "," << stack.endTime << "\n";
                 fbx << "\t}\n";
             }
             fbx << "}\n";
