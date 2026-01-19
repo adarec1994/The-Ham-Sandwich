@@ -1,7 +1,5 @@
 #pragma once
-
 #include "../Tbl.h"
-#include <cstdint>
 
 namespace Tbl
 {
