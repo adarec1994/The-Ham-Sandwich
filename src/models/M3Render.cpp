@@ -238,12 +238,14 @@ unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) c
     return fallbackWhiteTex;
 }
 void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
+    render(view, proj, glm::mat4(1.0f));
+}
+void M3Render::render(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model) {
     if (!shaderProgram || !VAO) return;
     glDisable(GL_BLEND);
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-    glm::mat4 model = glm::mat4(1.0f);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
     glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
     GLint highlightColorLoc = glGetUniformLocation(shaderProgram, "highlightColor");
@@ -533,7 +535,6 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
         verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
 
-        // Draw octahedron for selected bone
         if (isSelected) {
             float s = ptSize * 0.8f;
             glm::vec3 top = bonePos + glm::vec3(0, s, 0);

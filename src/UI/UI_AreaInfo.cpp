@@ -530,6 +530,63 @@ namespace UI_AreaInfo
 
                 ImGui::Spacing();
                 ImGui::Separator();
+                ImGui::Text("Props");
+                ImGui::Separator();
+
+                size_t totalProps = 0;
+                size_t loadedProps = 0;
+                for (const auto& a : gLoadedAreas)
+                {
+                    if (!a) continue;
+                    totalProps += a->getPropCount();
+                    loadedProps += a->getLoadedPropCount();
+                }
+
+                ImGui::Text("Total: %zu", totalProps);
+                ImGui::Text("Loaded (with render): %zu", loadedProps);
+
+                if (totalProps > 0 && ImGui::TreeNode("Prop Details"))
+                {
+                    int displayCount = 0;
+                    const int maxDisplay = 50;
+                    for (const auto& a : gLoadedAreas)
+                    {
+                        if (!a) continue;
+                        const auto& props = a->getProps();
+                        for (size_t i = 0; i < props.size() && displayCount < maxDisplay; i++)
+                        {
+                            const auto& prop = props[i];
+                            ImVec4 color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+                            if (prop.loaded && prop.render)
+                                color = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+                            else if (prop.loaded && !prop.render)
+                                color = ImVec4(1.0f, 0.5f, 0.0f, 1.0f);
+                            else
+                                color = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+
+                            ImGui::PushStyleColor(ImGuiCol_Text, color);
+                            ImGui::Text("[%u] %s", prop.uniqueID, prop.path.empty() ? "(no path)" : prop.path.c_str());
+                            ImGui::PopStyleColor();
+
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::BeginTooltip();
+                                ImGui::Text("Position: %.1f, %.1f, %.1f", prop.position.x, prop.position.y, prop.position.z);
+                                ImGui::Text("Scale: %.3f", prop.scale);
+                                ImGui::Text("ModelType: %d", static_cast<int>(prop.modelType));
+                                ImGui::Text("Loaded: %s, Has Render: %s", prop.loaded ? "Yes" : "No", prop.render ? "Yes" : "No");
+                                ImGui::EndTooltip();
+                            }
+                            displayCount++;
+                        }
+                    }
+                    if (totalProps > maxDisplay)
+                        ImGui::Text("... and %zu more", totalProps - maxDisplay);
+                    ImGui::TreePop();
+                }
+
+                ImGui::Spacing();
+                ImGui::Separator();
                 ImGui::Spacing();
 
                 if (ImGui::Button("Display Heightmap", ImVec2(ImGui::GetContentRegionAvail().x, 26)))

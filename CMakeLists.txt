@@ -272,6 +272,10 @@ add_executable(The_Ham_Sandwich
         src/export/M3Export.h
         src/resource.h
         src/resources.rc
+        src/Area/Props.cpp
+        src/Area/Props.h
+        src/models/M3LoaderV95.cpp
+        src/models/M3LoaderV95.h
 )
 
 target_include_directories(The_Ham_Sandwich PRIVATE

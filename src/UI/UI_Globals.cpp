@@ -142,6 +142,7 @@ void ProcessAreaLoading(AppState& state)
         const auto af = std::make_shared<AreaFile>(arc, fileEntry);
         if (af->load())
         {
+            af->loadAllProps();
             gLoadedAreas.push_back(af);
         }
 

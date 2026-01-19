@@ -1,7 +1,9 @@
 #include "M3Loader.h"
+#include "M3LoaderV95.h"
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <iostream>
 
 template<typename T>
 T M3Loader::Read(const uint8_t* data, size_t offset) {
@@ -84,6 +86,19 @@ M3ModelData M3Loader::LoadFromFile(const ArchivePtr& arc, const std::shared_ptr<
     std::vector<uint8_t> buffer;
     arc->getFileData(entry, buffer);
     if (buffer.empty()) return {};
+
+    // Check version and use appropriate loader
+    if (buffer.size() >= 8) {
+        uint32_t version = 0;
+        std::memcpy(&version, buffer.data() + 4, sizeof(version));
+
+        // Use V95 loader for older versions
+        if (version >= 90 && version < 100) {
+            std::cout << "[M3Loader] Using V95 loader for version " << version << std::endl;
+            return M3LoaderV95::Load(buffer);
+        }
+    }
+
     return Load(buffer);
 }
 
@@ -92,7 +107,11 @@ bool M3Loader::ReadHeader(const uint8_t* ptr, size_t size, M3Header& h) {
 
     std::memcpy(h.signature, ptr, 4);
     h.version = Read<uint32_t>(ptr, 4);
-    if (h.version != 100) return false;
+
+    // Only version 100 is supported - version 95 has different structure
+    if (h.version != 100) {
+        return false;
+    }
 
     h.unk008 = Read<uint32_t>(ptr, 8);
 

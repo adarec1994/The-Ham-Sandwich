@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
+#include "Props.h"
 
 typedef glm::mat4 Matrix;
 typedef glm::vec3 Vector3;
@@ -55,6 +56,15 @@ namespace ChnkCellFlags
     constexpr uint32 Unk0x20000000   = 0x20000000;
     constexpr uint32 Unk0x40000000   = 0x40000000;
     constexpr uint32 UnkMap4DXT      = 0x80000000;
+}
+
+namespace AreaChunkID
+{
+    constexpr uint32 CHNK = 0x43484E4B;
+    constexpr uint32 PROp = 0x50524F70;
+    constexpr uint32 CURT = 0x43555254;
+    constexpr uint32 area = 0x61726561;
+    constexpr uint32 AREA = 0x41524541;
 }
 
 constexpr float UnitSize = 2.0f;
@@ -246,6 +256,8 @@ struct ParsedArea
     int tileX = 0;
     int tileY = 0;
     std::vector<ParsedChunk> chunks;
+    std::vector<Prop> props;
+    std::vector<CurtData> curts;
     float maxHeight = -100000.0f;
     float avgHeight = 0.0f;
     glm::vec3 minBounds{std::numeric_limits<float>::max()};
@@ -278,6 +290,11 @@ class AreaFile
     unsigned int mTextureID = 0;
     bool mHasTexture = false;
 
+    std::vector<Prop> mProps;
+    std::unordered_map<uint32_t, size_t> mPropLookup;
+    std::vector<CurtData> mCurts;
+    std::unordered_map<uint32_t, std::shared_ptr<M3Render>> mPropRenderers;
+
     void parseTileXYFromFilename();
     bool loadTexture();
     void calculateWorldOffset();
@@ -293,6 +310,10 @@ public:
     [[nodiscard]] int getTileY() const { return mTileY; }
 
     void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk);
+    void renderProps(const Matrix& matView, const Matrix& matProj);
+    bool loadProp(uint32_t uniqueID);
+    void loadAllProps();
+    void loadPropsInView(const glm::vec3& cameraPos, float radius);
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
     [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }
@@ -315,6 +336,11 @@ public:
     [[nodiscard]] float getRotation() const { return mGlobalRotation; }
 
     [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
+    [[nodiscard]] const std::vector<Prop>& getProps() const { return mProps; }
+    [[nodiscard]] size_t getPropCount() const { return mProps.size(); }
+    [[nodiscard]] const Prop* getPropByID(uint32_t uniqueID) const;
+    [[nodiscard]] size_t getLoadedPropCount() const;
+    [[nodiscard]] const std::vector<CurtData>& getCurts() const { return mCurts; }
 
     static const float UnitSize;
     static ParsedArea parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file);

@@ -191,6 +191,7 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
     auto af = std::make_shared<AreaFile>(arc, fileEntry);
     if (af->load())
     {
+        af->loadAllProps();
         gLoadedAreas.push_back(af);
         state.currentArea = af;
         SnapCameraToLoaded(state);

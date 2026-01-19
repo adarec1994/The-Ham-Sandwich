@@ -12,6 +12,7 @@ public:
     ~M3Render();
 
     void render(const glm::mat4& view, const glm::mat4& proj);
+    void render(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model);
 
     size_t getSubmeshCount() const;
     const M3Submesh& getSubmesh(size_t i) const;

@@ -1,5 +1,8 @@
 #include "AreaFile.h"
 #include "TerrainTexture.h"
+#include "Props.h"
+#include "../models/M3Loader.h"
+#include "../models/M3Render.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <cmath>
@@ -9,6 +12,19 @@
 #include <cstring>
 #include <limits>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <iostream>
+
+static std::string NormalizePropPath(const std::string& path) {
+    std::string result = path;
+    for (char& c : result) {
+        if (c == '\\') c = '/';
+    }
+    while (!result.empty() && result[0] == '/') {
+        result.erase(0, 1);
+    }
+    return result;
+}
 
 const float AreaFile::UnitSize = 2.0f;
 const float AreaFile::GRID_SIZE = 512.0f;
@@ -19,16 +35,9 @@ static int gReferenceTileY = -1;
 std::vector<uint32> AreaChunkRender::indices;
 AreaChunkRender::Uniforms AreaChunkRender::uniforms;
 
-const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms()
-{
-    return uniforms;
-}
+const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms() { return uniforms; }
 
-void ResetAreaReferencePosition()
-{
-    gReferenceTileX = -1;
-    gReferenceTileY = -1;
-}
+void ResetAreaReferencePosition() { gReferenceTileX = -1; gReferenceTileY = -1; }
 
 static inline int hexNibble(wchar_t c) {
     if (c >= L'0' && c <= L'9') return static_cast<int>(c - L'0');
@@ -69,8 +78,7 @@ static void EnsureFallbackTextures() {
     }
 }
 
-void AreaFile::parseTileXYFromFilename()
-{
+void AreaFile::parseTileXYFromFilename() {
     if (mPath.empty()) return;
     std::wstring name = mPath;
     size_t ext = name.rfind(L".area");
@@ -84,8 +92,7 @@ void AreaFile::parseTileXYFromFilename()
     mTileY = by;
 }
 
-void AreaFile::calculateWorldOffset()
-{
+void AreaFile::calculateWorldOffset() {
     if (gReferenceTileX < 0 || gReferenceTileY < 0) {
         gReferenceTileX = mTileX;
         gReferenceTileY = mTileY;
@@ -96,12 +103,10 @@ void AreaFile::calculateWorldOffset()
 }
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
-    : mArchive(std::move(archive))
-    , mFile(std::move(file))
+    : mArchive(std::move(archive)), mFile(std::move(file))
     , mMinBounds(std::numeric_limits<float>::max())
-    , mMaxBounds(std::numeric_limits<float>::lowest())
-{
-    mBaseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+    , mMaxBounds(std::numeric_limits<float>::lowest()) {
+    mBaseColor = glm::vec4(1.0f);
     if (mArchive && mFile) {
         mPath = mFile->getFullPath();
         try {
@@ -109,28 +114,19 @@ AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
             mStream = std::make_shared<BinStream>(mContent);
             parseTileXYFromFilename();
             calculateWorldOffset();
-        } catch (...) {
-        }
+        } catch (...) {}
     }
 }
 
-AreaFile::~AreaFile() {
-    if (mTextureID != 0) glDeleteTextures(1, &mTextureID);
-}
+AreaFile::~AreaFile() { if (mTextureID != 0) glDeleteTextures(1, &mTextureID); }
 
-bool AreaFile::loadTexture() {
-    return false;
-}
+bool AreaFile::loadTexture() { return false; }
 
-ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file)
-{
+ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file) {
     ParsedArea result;
     result.file = file;
-
     if (!archive || !file) return result;
-
     result.path = file->getFullPath();
-
     size_t ext = result.path.rfind(L".area");
     if (ext != std::wstring::npos && ext >= 5) {
         size_t dot = ext - 5;
@@ -142,92 +138,67 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
             }
         }
     }
-
     std::vector<uint8_t> content;
-    if (!archive->getFileData(file, content) || content.size() < 8) {
-        return result;
-    }
-
+    if (!archive->getFileData(file, content) || content.size() < 8) return result;
     const uint8* base = content.data();
     const uint8* end = base + content.size();
     const uint8* ptr = base;
-
     auto canRead = [&](size_t n) { return static_cast<size_t>(end - ptr) >= n; };
     auto readU32 = [&]() -> uint32 {
-        uint32 v = static_cast<uint32>(ptr[0]) |
-                  (static_cast<uint32>(ptr[1]) << 8) |
-                  (static_cast<uint32>(ptr[2]) << 16) |
-                  (static_cast<uint32>(ptr[3]) << 24);
+        uint32 v = static_cast<uint32>(ptr[0]) | (static_cast<uint32>(ptr[1]) << 8) |
+                  (static_cast<uint32>(ptr[2]) << 16) | (static_cast<uint32>(ptr[3]) << 24);
         ptr += 4;
         return v;
     };
-
     uint32 sig = readU32();
-    if (sig != 0x61726561u && sig != 0x41524541u) {
-        return result;
-    }
-
+    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return result;
     readU32();
-
-    std::vector<uint8> chnkData;
-
+    std::vector<uint8> chnkData, propData, curtData;
     while (canRead(8)) {
         uint32 magic = readU32();
         uint32 size = readU32();
         if (!canRead(size)) break;
-
-        if (magic == 0x43484E4Bu) {
-            chnkData.resize(size);
-            memcpy(chnkData.data(), ptr, size);
+        switch (magic) {
+            case AreaChunkID::CHNK: chnkData.resize(size); memcpy(chnkData.data(), ptr, size); break;
+            case AreaChunkID::PROp: propData.resize(size); memcpy(propData.data(), ptr, size); break;
+            case AreaChunkID::CURT: curtData.resize(size); memcpy(curtData.data(), ptr, size); break;
         }
         ptr += size;
     }
-
+    if (!propData.empty()) {
+        std::unordered_map<uint32_t, size_t> lookup;
+        ParsePropsChunk(propData.data(), propData.size(), result.props, lookup);
+    }
+    if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), result.curts);
     if (chnkData.empty()) {
         result.valid = true;
         result.minBounds = glm::vec3(0, 0, 0);
         result.maxBounds = glm::vec3(512, 50, 512);
         return result;
     }
-
     result.chunks.resize(256);
-
     const uint8* cptr = chnkData.data();
     const uint8* cend = cptr + chnkData.size();
     uint32 lastIndex = 0;
-
     float totalH = 0.0f;
     uint32 validCount = 0;
-
     while (static_cast<size_t>(cend - cptr) >= 4) {
-        uint32 cellInfo = static_cast<uint32>(cptr[0]) |
-                         (static_cast<uint32>(cptr[1]) << 8) |
-                         (static_cast<uint32>(cptr[2]) << 16) |
-                         (static_cast<uint32>(cptr[3]) << 24);
+        uint32 cellInfo = static_cast<uint32>(cptr[0]) | (static_cast<uint32>(cptr[1]) << 8) |
+                         (static_cast<uint32>(cptr[2]) << 16) | (static_cast<uint32>(cptr[3]) << 24);
         cptr += 4;
-
         uint32 idxDelta = (cellInfo >> 24) & 0xFF;
         uint32 size = cellInfo & 0x00FFFFFF;
-
         uint32 index = idxDelta + lastIndex;
         lastIndex = index + 1;
-
         if (index >= 256) break;
         if (static_cast<size_t>(cend - cptr) < size) break;
-        if (size < 4) {
-            cptr += size;
-            continue;
-        }
-
+        if (size < 4) { cptr += size; continue; }
         std::vector<uint8> cellData(size);
         memcpy(cellData.data(), cptr, size);
         cptr += size;
-
         uint32 cellX = index % 16;
         uint32 cellY = index / 16;
-
         auto chunk = AreaChunkRender::parseChunkData(cellData, cellX, cellY);
-
         if (chunk.valid) {
             totalH += chunk.avgHeight;
             validCount++;
@@ -235,105 +206,65 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
             result.minBounds = glm::min(result.minBounds, chunk.minBounds);
             result.maxBounds = glm::max(result.maxBounds, chunk.maxBounds);
         }
-
         result.chunks[index] = std::move(chunk);
     }
-
-    if (validCount > 0) {
-        result.avgHeight = totalH / static_cast<float>(validCount);
-    } else {
-        result.minBounds = glm::vec3(0, 0, 0);
-        result.maxBounds = glm::vec3(512, 50, 512);
-    }
-
+    if (validCount > 0) result.avgHeight = totalH / static_cast<float>(validCount);
+    else { result.minBounds = glm::vec3(0, 0, 0); result.maxBounds = glm::vec3(512, 50, 512); }
     result.valid = true;
     return result;
 }
 
-bool AreaFile::load()
-{
-    if (mContent.size() < 8) {
-        return false;
-    }
-
+bool AreaFile::load() {
+    if (mContent.size() < 8) return false;
     struct R {
-        const uint8* p;
-        const uint8* e;
+        const uint8* p; const uint8* e;
         bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
         uint32 u32le() {
-            uint32 v = static_cast<uint32>(p[0]) |
-                      (static_cast<uint32>(p[1]) << 8) |
-                      (static_cast<uint32>(p[2]) << 16) |
-                      (static_cast<uint32>(p[3]) << 24);
-            p += 4;
-            return v;
+            uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) |
+                      (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24);
+            p += 4; return v;
         }
         void bytes(void* out, size_t n) { memcpy(out, p, n); p += n; }
         void skip(size_t n) { p += n; }
     };
-
     const uint8* base = mContent.data();
     R r{ base, base + mContent.size() };
-
     uint32 sig = r.u32le();
-    if (sig != 0x61726561u && sig != 0x41524541u) {
-        return false;
-    }
-
+    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return false;
     r.u32le();
-
-    std::vector<uint8> chnkData;
-
+    std::vector<uint8> chnkData, propData, curtData;
     while (r.can(8)) {
         uint32 magic = r.u32le();
         uint32 size = r.u32le();
         if (!r.can(size)) break;
-
-        if (magic == 0x43484E4Bu) {
-            chnkData.resize(size);
-            r.bytes(chnkData.data(), size);
-        } else {
-            r.skip(size);
+        switch (magic) {
+            case AreaChunkID::CHNK: chnkData.resize(size); r.bytes(chnkData.data(), size); break;
+            case AreaChunkID::PROp: propData.resize(size); r.bytes(propData.data(), size); break;
+            case AreaChunkID::CURT: curtData.resize(size); r.bytes(curtData.data(), size); break;
+            default: r.skip(size); break;
         }
     }
-
-    if (chnkData.empty()) {
-        mMinBounds = glm::vec3(0, 0, 0);
-        mMaxBounds = glm::vec3(512, 50, 512);
-        return true;
-    }
-
+    if (!propData.empty()) ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
+    if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
+    if (chnkData.empty()) { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); return true; }
     mChunks.assign(256, nullptr);
     R cr{ chnkData.data(), chnkData.data() + chnkData.size() };
-
-    uint32 validCount = 0;
-    float totalH = 0.0f;
-    uint32 lastIndex = 0;
-
+    uint32 validCount = 0; float totalH = 0.0f; uint32 lastIndex = 0;
     while (cr.can(4)) {
         uint32 cellInfo = cr.u32le();
         uint32 idxDelta = (cellInfo >> 24) & 0xFF;
         uint32 size = cellInfo & 0x00FFFFFF;
-
         uint32 index = idxDelta + lastIndex;
         lastIndex = index + 1;
-
         if (index >= 256) break;
         if (!cr.can(size)) break;
-        if (size < 4) {
-            cr.skip(size);
-            continue;
-        }
-
+        if (size < 4) { cr.skip(size); continue; }
         std::vector<uint8> cellData(size);
         cr.bytes(cellData.data(), size);
-
         uint32 cellX = index % 16;
         uint32 cellY = index / 16;
-
         auto chunk = std::make_shared<AreaChunkRender>(cellData, cellX, cellY, mArchive);
         mChunks[index] = chunk;
-
         if (chunk && chunk->isFullyInitialized()) {
             totalH += chunk->getAverageHeight();
             validCount++;
@@ -342,35 +273,26 @@ bool AreaFile::load()
             mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
         }
     }
-
-    if (validCount > 0) {
-        mAverageHeight = totalH / static_cast<float>(validCount);
-    } else {
-        mMinBounds = glm::vec3(0, 0, 0);
-        mMaxBounds = glm::vec3(512, 50, 512);
-    }
-
+    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
+    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
     return true;
 }
 
-bool AreaFile::loadFromParsed(ParsedArea&& parsed)
-{
+bool AreaFile::loadFromParsed(ParsedArea&& parsed) {
     mPath = parsed.path;
     mTileX = parsed.tileX;
     mTileY = parsed.tileY;
     calculateWorldOffset();
-
+    mProps = std::move(parsed.props);
+    mCurts = std::move(parsed.curts);
+    mPropLookup.clear();
+    for (size_t i = 0; i < mProps.size(); i++) mPropLookup[mProps[i].uniqueID] = i;
     mChunks.assign(256, nullptr);
-
-    float totalH = 0.0f;
-    uint32 validCount = 0;
-
+    float totalH = 0.0f; uint32 validCount = 0;
     for (size_t i = 0; i < parsed.chunks.size() && i < 256; i++) {
         if (!parsed.chunks[i].valid) continue;
-
         auto chunk = std::make_shared<AreaChunkRender>(std::move(parsed.chunks[i]), mArchive);
         mChunks[i] = chunk;
-
         if (chunk && chunk->isFullyInitialized()) {
             totalH += chunk->getAverageHeight();
             validCount++;
@@ -379,319 +301,263 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
             mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
         }
     }
-
-    if (validCount > 0) {
-        mAverageHeight = totalH / static_cast<float>(validCount);
-    } else {
-        mMinBounds = glm::vec3(0, 0, 0);
-        mMaxBounds = glm::vec3(512, 50, 512);
-    }
-
+    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
+    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
     return true;
 }
 
-void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk)
-{
+void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk) {
     glUseProgram(shaderProgram);
     GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
     GLint projLoc = glGetUniformLocation(shaderProgram, "projection");
     if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &matView[0][0]);
     if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, &matProj[0][0]);
-
     EnsureFallbackTextures();
-    if (gLastTerrainProgram != shaderProgram) {
-        AreaChunkRender::geometryInit(shaderProgram);
-        gLastTerrainProgram = shaderProgram;
-    }
-
+    if (gLastTerrainProgram != shaderProgram) { AreaChunkRender::geometryInit(shaderProgram); gLastTerrainProgram = shaderProgram; }
     glm::mat4 worldModel(1.0f);
     worldModel = glm::translate(worldModel, mWorldOffset);
     worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
-
     const auto& u = AreaChunkRender::getUniforms();
-
     if (u.model != static_cast<uint32>(-1)) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
     if (u.baseColor != static_cast<uint32>(-1)) glUniform4f(u.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
-
     for (auto& c : mChunks) {
         if (!c || !c->isFullyInitialized()) continue;
-
         c->loadTextures(mArchive);
-
         GLint highlightLoc = glGetUniformLocation(shaderProgram, "highlightColor");
         if (highlightLoc != -1) {
-            if (c == selectedChunk)
-                glUniform4f(highlightLoc, 1.0f, 1.0f, 0.0f, 0.5f);
-            else
-                glUniform4f(highlightLoc, 0.0f, 0.0f, 0.0f, 0.0f);
+            if (c == selectedChunk) glUniform4f(highlightLoc, 1.0f, 1.0f, 0.0f, 0.5f);
+            else glUniform4f(highlightLoc, 0.0f, 0.0f, 0.0f, 0.0f);
         }
-
         c->bindTextures(shaderProgram);
         c->render();
     }
 }
 
-void AreaChunkRender::loadTextures(const ArchivePtr& archive)
-{
+bool AreaFile::loadProp(uint32_t uniqueID) {
+    auto it = mPropLookup.find(uniqueID);
+    if (it == mPropLookup.end() || it->second >= mProps.size()) return false;
+
+    Prop& prop = mProps[it->second];
+    if (prop.loaded) return true;
+    if (prop.loadRequested) return false;
+    prop.loadRequested = true;
+
+    if (prop.modelType == PropModelType::Unk_2 || prop.modelType == PropModelType::Unk_4) {
+        prop.loaded = true;
+        return true;
+    }
+
+    if (prop.path.empty()) {
+        prop.loaded = true;
+        return true;
+    }
+
+    if (!mArchive) {
+        std::cerr << "[Prop] No archive for prop " << uniqueID << std::endl;
+        return false;
+    }
+
+    std::string normalizedPath = NormalizePropPath(prop.path);
+
+    auto fileEntry = mArchive->findFileCached(normalizedPath);
+    if (!fileEntry) {
+        std::string pathWithExt = normalizedPath;
+        if (pathWithExt.find(".m3") == std::string::npos && pathWithExt.find(".M3") == std::string::npos) {
+            pathWithExt += ".m3";
+            fileEntry = mArchive->findFileCached(pathWithExt);
+        }
+    }
+
+    if (!fileEntry) {
+        fileEntry = mArchive->findFileByNameCached(normalizedPath);
+        if (!fileEntry) {
+            size_t lastSlash = normalizedPath.rfind('/');
+            if (lastSlash != std::string::npos) {
+                std::string filename = normalizedPath.substr(lastSlash + 1);
+                fileEntry = mArchive->findFileByNameCached(filename);
+                if (!fileEntry && filename.find(".m3") == std::string::npos) {
+                    fileEntry = mArchive->findFileByNameCached(filename + ".m3");
+                }
+            }
+        }
+    }
+
+    if (!fileEntry) {
+        std::cerr << "[Prop] Failed to find file for prop " << uniqueID << ": " << normalizedPath << std::endl;
+        prop.loaded = true;
+        return false;
+    }
+
+    std::cout << "[Prop] Found file for prop " << uniqueID << ": " << fileEntry->getFullPathNarrow() << std::endl;
+
+    std::vector<uint8_t> testBuffer;
+    if (!mArchive->getFileData(fileEntry, testBuffer)) {
+        std::cerr << "[Prop] Failed to read file data for prop " << uniqueID << std::endl;
+        prop.loaded = true;
+        return false;
+    }
+    std::cout << "[Prop] File buffer size: " << testBuffer.size() << " bytes" << std::endl;
+
+    if (testBuffer.size() >= 8) {
+        char sig[5] = {0};
+        memcpy(sig, testBuffer.data(), 4);
+        uint32_t version = *reinterpret_cast<uint32_t*>(testBuffer.data() + 4);
+        std::cout << "[Prop] File signature: " << sig << ", version: " << version << std::endl;
+    }
+
+    M3ModelData modelData = M3Loader::LoadFromFile(mArchive, fileEntry);
+    if (!modelData.success) {
+        std::cerr << "[Prop] Failed to load M3 for prop " << uniqueID << ": " << normalizedPath << " (file may be unsupported version)" << std::endl;
+        prop.loaded = true;
+        return false;
+    }
+
+    std::cout << "[Prop] Successfully loaded M3 for prop " << uniqueID << std::endl;
+
+    prop.render = std::make_shared<M3Render>(modelData, mArchive);
+    prop.render->setModelName(prop.path);
+    mPropRenderers[uniqueID] = prop.render;
+    prop.loaded = true;
+    return true;
+}
+
+void AreaFile::loadAllProps() {
+    std::cout << "[Prop] Loading all " << mProps.size() << " props..." << std::endl;
+    int loaded = 0;
+    int failed = 0;
+    for (auto& prop : mProps) {
+        if (loadProp(prop.uniqueID)) {
+            if (prop.render) loaded++;
+            else failed++;
+        } else {
+            failed++;
+        }
+    }
+    std::cout << "[Prop] Load complete. With render: " << loaded << ", Failed/skipped: " << failed << std::endl;
+}
+
+void AreaFile::loadPropsInView(const glm::vec3& cameraPos, float radius) {
+    float radiusSq = radius * radius;
+    for (auto& prop : mProps) {
+        if (prop.loaded) continue;
+        glm::vec3 propWorldPos = prop.position + mWorldOffset;
+        float distSq = glm::dot(propWorldPos - cameraPos, propWorldPos - cameraPos);
+        if (distSq <= radiusSq) loadProp(prop.uniqueID);
+    }
+}
+
+void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj) {
+    for (const auto& prop : mProps) {
+        if (!prop.loaded || !prop.render) continue;
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, prop.position + mWorldOffset);
+        model = model * glm::mat4_cast(prop.rotation);
+        model = glm::scale(model, glm::vec3(prop.scale));
+        if (mGlobalRotation != 0.0f) {
+            glm::mat4 areaRotation = glm::rotate(glm::mat4(1.0f), glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+            model = areaRotation * model;
+        }
+        prop.render->render(matView, matProj, model);
+    }
+}
+
+const Prop* AreaFile::getPropByID(uint32_t uniqueID) const {
+    auto it = mPropLookup.find(uniqueID);
+    if (it != mPropLookup.end() && it->second < mProps.size()) return &mProps[it->second];
+    return nullptr;
+}
+
+size_t AreaFile::getLoadedPropCount() const {
+    size_t count = 0;
+    for (const auto& prop : mProps) if (prop.loaded && prop.render) count++;
+    return count;
+}
+void AreaChunkRender::loadTextures(const ArchivePtr& archive) {
     if (mTexturesLoaded) return;
-
     auto& texMgr = TerrainTexture::Manager::Instance();
-
     texMgr.LoadWorldLayerTable(archive);
-
-    if (!mBlendMap.empty())
-    {
-        mBlendMapTexture = texMgr.CreateBlendMapTexture(mBlendMap.data(), 65, 65);
-    }
-    else if (!mBlendMapDXT.empty())
-    {
-        mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
-    }
-    else
-    {
-        uint8_t defaultBlend[4] = {255, 0, 0, 0};
-        mBlendMapTexture = texMgr.CreateBlendMapTexture(defaultBlend, 1, 1);
-    }
-
-    if (!mColorMap.empty())
-    {
-        mColorMapTextureGPU = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
-    }
-    else if (!mColorMapDXT.empty())
-    {
-        mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
-    }
-
-    for (int i = 0; i < 4; ++i)
-    {
+    if (!mBlendMap.empty()) mBlendMapTexture = texMgr.CreateBlendMapTexture(mBlendMap.data(), 65, 65);
+    else if (!mBlendMapDXT.empty()) mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
+    else { uint8_t defaultBlend[4] = {255, 0, 0, 0}; mBlendMapTexture = texMgr.CreateBlendMapTexture(defaultBlend, 1, 1); }
+    if (!mColorMap.empty()) mColorMapTextureGPU = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
+    else if (!mColorMapDXT.empty()) mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
+    for (int i = 0; i < 4; ++i) {
         uint32_t layerId = mWorldLayerIDs[i];
-        if (layerId == 0)
-        {
-            mLayerDiffuse[i] = gFallbackWhite;
-            mLayerNormal[i] = gFallbackNormal;
-            mLayerScale[i] = 4.0f;
-            continue;
-        }
-
+        if (layerId == 0) { mLayerDiffuse[i] = gFallbackWhite; mLayerNormal[i] = gFallbackNormal; mLayerScale[i] = 4.0f; continue; }
         const auto* cached = texMgr.GetLayerTexture(archive, layerId);
-        if (cached && cached->loaded)
-        {
-            mLayerDiffuse[i] = cached->diffuse;
-            mLayerNormal[i] = cached->normal ? cached->normal : gFallbackNormal;
-        }
-        else
-        {
-            mLayerDiffuse[i] = gFallbackWhite;
-            mLayerNormal[i] = gFallbackNormal;
-        }
-
+        if (cached && cached->loaded) { mLayerDiffuse[i] = cached->diffuse; mLayerNormal[i] = cached->normal ? cached->normal : gFallbackNormal; }
+        else { mLayerDiffuse[i] = gFallbackWhite; mLayerNormal[i] = gFallbackNormal; }
         const auto* layerEntry = texMgr.GetLayerEntry(layerId);
-        if (layerEntry && layerEntry->scaleU > 0.0f)
-        {
-            mLayerScale[i] = layerEntry->scaleU;
-        }
-        else
-        {
-            mLayerScale[i] = 4.0f;
-        }
+        if (layerEntry && layerEntry->scaleU > 0.0f) mLayerScale[i] = layerEntry->scaleU;
+        else mLayerScale[i] = 4.0f;
     }
-
     mTexturesLoaded = true;
 }
 
-void AreaChunkRender::bindTextures(unsigned int program) const
-{
+void AreaChunkRender::bindTextures(unsigned int program) const {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, mBlendMapTexture ? mBlendMapTexture : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "blendMap"), 0);
-
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, mColorMapTextureGPU ? mColorMapTextureGPU : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "colorMap"), 1);
     glUniform1i(glGetUniformLocation(program, "hasColorMap"), mColorMapTextureGPU ? 1 : 0);
-
-    for (int i = 0; i < 4; ++i)
-    {
+    for (int i = 0; i < 4; ++i) {
         glActiveTexture(GL_TEXTURE2 + i);
         glBindTexture(GL_TEXTURE_2D, mLayerDiffuse[i] ? mLayerDiffuse[i] : gFallbackWhite);
-
         const char* names[] = {"layer0", "layer1", "layer2", "layer3"};
         glUniform1i(glGetUniformLocation(program, names[i]), 2 + i);
     }
-
-    for (int i = 0; i < 4; ++i)
-    {
+    for (int i = 0; i < 4; ++i) {
         glActiveTexture(GL_TEXTURE6 + i);
         glBindTexture(GL_TEXTURE_2D, mLayerNormal[i] ? mLayerNormal[i] : gFallbackNormal);
-
         const char* names[] = {"layer0Normal", "layer1Normal", "layer2Normal", "layer3Normal"};
         glUniform1i(glGetUniformLocation(program, names[i]), 6 + i);
     }
-
     float s0 = mLayerScale[0] > 0.0f ? 32.0f / mLayerScale[0] : 8.0f;
     float s1 = mLayerScale[1] > 0.0f ? 32.0f / mLayerScale[1] : 8.0f;
     float s2 = mLayerScale[2] > 0.0f ? 32.0f / mLayerScale[2] : 8.0f;
     float s3 = mLayerScale[3] > 0.0f ? 32.0f / mLayerScale[3] : 8.0f;
     glUniform4f(glGetUniformLocation(program, "texScale"), s0, s1, s2, s3);
-
     glActiveTexture(GL_TEXTURE0);
 }
 
-ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY)
-{
+ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY) {
     ParsedChunk result;
     result.cellX = cellX;
     result.cellY = cellY;
-
     if (cellData.size() < 4) return result;
-
     struct R {
-        const uint8* p;
-        const uint8* e;
+        const uint8* p; const uint8* e;
         bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
-        uint32 u32le() {
-            uint32 v = static_cast<uint32>(p[0]) |
-                      (static_cast<uint32>(p[1]) << 8) |
-                      (static_cast<uint32>(p[2]) << 16) |
-                      (static_cast<uint32>(p[3]) << 24);
-            p += 4;
-            return v;
-        }
-        uint16 u16le() {
-            uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8);
-            p += 2;
-            return v;
-        }
+        uint32 u32le() { uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) | (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24); p += 4; return v; }
+        uint16 u16le() { uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8); p += 2; return v; }
         uint8 u8() { return *p++; }
         void skip(size_t n) { p += n; }
     };
-
     R r{ cellData.data(), cellData.data() + cellData.size() };
-
     result.flags = r.u32le();
-
     std::vector<uint16> heightmap;
     bool hasHeightmap = false;
-
-    if ((result.flags & ChnkCellFlags::HeightMap) && r.can(722)) {
-        hasHeightmap = true;
-        heightmap.resize(19 * 19);
-        for (int j = 0; j < 19 * 19; j++) {
-            heightmap[j] = r.u16le();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) {
-        for (int j = 0; j < 4; j++) {
-            result.worldLayerIDs[j] = r.u32le();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::BlendMap) && r.can(8450)) {
-        result.blendMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            uint16 val = r.u16le();
-            result.blendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15);
-            result.blendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15);
-            result.blendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15);
-            result.blendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15);
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::ColorMap) && r.can(8450)) {
-        result.colorMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            uint16 val = r.u16le();
-            uint8 r5 = (val >> 0) & 0x1F;
-            uint8 g6 = (val >> 5) & 0x3F;
-            uint8 b5 = (val >> 11) & 0x1F;
-            result.colorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31);
-            result.colorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63);
-            result.colorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31);
-            result.colorMap[i * 4 + 3] = 255;
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::UnkMap) && r.can(8450)) {
-        result.unknownMap.resize(65 * 65);
-        for (int j = 0; j < 65 * 65; j++) {
-            result.unknownMap[j] = r.u16le();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::Unk0x20) && r.can(4)) {
-        result.unk0x20 = static_cast<int32>(r.u32le());
-    }
-
-    if ((result.flags & ChnkCellFlags::SkyIDs) && r.can(64)) {
-        for (int corner = 0; corner < 4; corner++) {
-            for (int skyIdx = 0; skyIdx < 4; skyIdx++) {
-                result.skyCorners[corner].worldSkyIDs[skyIdx] = r.u32le();
-            }
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::SkyWeights) && r.can(16)) {
-        for (int corner = 0; corner < 4; corner++) {
-            for (int weightIdx = 0; weightIdx < 4; weightIdx++) {
-                result.skyCorners[corner].worldSkyWeights[weightIdx] = r.u8();
-            }
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::ShadowMap) && r.can(4225)) {
-        result.shadowMap.resize(65 * 65);
-        for (int j = 0; j < 65 * 65; j++) {
-            result.shadowMap[j] = r.u8();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) {
-        result.lodHeightMap.resize(33 * 33);
-        for (int j = 0; j < 33 * 33; j++) {
-            result.lodHeightMap[j] = r.u16le();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::LoDHeightRange) && r.can(4)) {
-        result.lodHeightRange[0] = r.u16le();
-        result.lodHeightRange[1] = r.u16le();
-    }
-
+    if ((result.flags & ChnkCellFlags::HeightMap) && r.can(722)) { hasHeightmap = true; heightmap.resize(19 * 19); for (int j = 0; j < 19 * 19; j++) heightmap[j] = r.u16le(); }
+    if ((result.flags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) { for (int j = 0; j < 4; j++) result.worldLayerIDs[j] = r.u32le(); }
+    if ((result.flags & ChnkCellFlags::BlendMap) && r.can(8450)) { result.blendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); result.blendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15); result.blendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15); result.blendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15); result.blendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15); } }
+    if ((result.flags & ChnkCellFlags::ColorMap) && r.can(8450)) { result.colorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); uint8 r5 = (val >> 0) & 0x1F; uint8 g6 = (val >> 5) & 0x3F; uint8 b5 = (val >> 11) & 0x1F; result.colorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31); result.colorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63); result.colorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31); result.colorMap[i * 4 + 3] = 255; } }
+    if ((result.flags & ChnkCellFlags::UnkMap) && r.can(8450)) { result.unknownMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) result.unknownMap[j] = r.u16le(); }
+    if ((result.flags & ChnkCellFlags::Unk0x20) && r.can(4)) result.unk0x20 = static_cast<int32>(r.u32le());
+    if ((result.flags & ChnkCellFlags::SkyIDs) && r.can(64)) { for (int corner = 0; corner < 4; corner++) for (int skyIdx = 0; skyIdx < 4; skyIdx++) result.skyCorners[corner].worldSkyIDs[skyIdx] = r.u32le(); }
+    if ((result.flags & ChnkCellFlags::SkyWeights) && r.can(16)) { for (int corner = 0; corner < 4; corner++) for (int weightIdx = 0; weightIdx < 4; weightIdx++) result.skyCorners[corner].worldSkyWeights[weightIdx] = r.u8(); }
+    if ((result.flags & ChnkCellFlags::ShadowMap) && r.can(4225)) { result.shadowMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) result.shadowMap[j] = r.u8(); }
+    if ((result.flags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) { result.lodHeightMap.resize(33 * 33); for (int j = 0; j < 33 * 33; j++) result.lodHeightMap[j] = r.u16le(); }
+    if ((result.flags & ChnkCellFlags::LoDHeightRange) && r.can(4)) { result.lodHeightRange[0] = r.u16le(); result.lodHeightRange[1] = r.u16le(); }
     if ((result.flags & ChnkCellFlags::Unk0x800) && r.can(578)) r.skip(578);
     if ((result.flags & ChnkCellFlags::Unk0x1000) && r.can(1)) r.skip(1);
-
-    if ((result.flags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) {
-        result.colorMapDXT.resize(4624);
-        for (int j = 0; j < 4624; j++) {
-            result.colorMapDXT[j] = r.u8();
-        }
-    }
-
+    if ((result.flags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) { result.colorMapDXT.resize(4624); for (int j = 0; j < 4624; j++) result.colorMapDXT[j] = r.u8(); }
     if ((result.flags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) r.skip(2312);
     if ((result.flags & ChnkCellFlags::Unk0x8000) && r.can(8450)) r.skip(8450);
-
-    if ((result.flags & ChnkCellFlags::ZoneBound) && r.can(4096)) {
-        result.zoneBounds.resize(64 * 64);
-        for (int j = 0; j < 64 * 64; j++) {
-            result.zoneBounds[j] = r.u8();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) {
-        result.blendMapDXT.resize(2312);
-        for (int j = 0; j < 2312; j++) {
-            result.blendMapDXT[j] = r.u8();
-        }
-    }
-
-    if ((result.flags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) {
-        result.unkMap1.resize(2312);
-        for (int j = 0; j < 2312; j++) {
-            result.unkMap1[j] = r.u8();
-        }
-    }
-
+    if ((result.flags & ChnkCellFlags::ZoneBound) && r.can(4096)) { result.zoneBounds.resize(64 * 64); for (int j = 0; j < 64 * 64; j++) result.zoneBounds[j] = r.u8(); }
+    if ((result.flags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) { result.blendMapDXT.resize(2312); for (int j = 0; j < 2312; j++) result.blendMapDXT[j] = r.u8(); }
+    if ((result.flags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) { result.unkMap1.resize(2312); for (int j = 0; j < 2312; j++) result.unkMap1[j] = r.u8(); }
     if ((result.flags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) r.skip(2312);
     if ((result.flags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) r.skip(2312);
     if ((result.flags & ChnkCellFlags::Unk0x200000) && r.can(1)) r.skip(1);
@@ -701,177 +567,75 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     if ((result.flags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) r.skip(21316);
     if ((result.flags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) r.skip(4096);
-
-    if ((result.flags & ChnkCellFlags::Zone) && r.can(16)) {
-        for (int j = 0; j < 4; j++) {
-            result.zoneIds[j] = r.u32le();
-        }
-    }
-
+    if ((result.flags & ChnkCellFlags::Zone) && r.can(16)) { for (int j = 0; j < 4; j++) result.zoneIds[j] = r.u32le(); }
     if ((result.flags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
-
     while (r.can(8)) {
         uint32 chunkID = r.u32le();
         uint32 chunkSize = r.u32le();
-
         if (!r.can(chunkSize)) break;
-
         switch (chunkID) {
-            case 0x504F5250:
-            {
-                uint32 propCount = chunkSize / 4;
-                result.props.uniqueIDs.resize(propCount);
-                for (uint32 i = 0; i < propCount; i++) {
-                    result.props.uniqueIDs[i] = r.u32le();
-                }
-                break;
-            }
-            case 0x44727563:
-            {
-                result.curd.rawData.resize(chunkSize);
-                for (uint32 i = 0; i < chunkSize; i++) {
-                    result.curd.rawData[i] = r.u8();
-                }
-                break;
-            }
-            case 0x47744157:
-            {
-                if (chunkSize >= 4) {
-                    uint32 waterCount = r.u32le();
-                    if (waterCount > 0 && waterCount < 1000) {
-                        result.waters.resize(waterCount);
-                        uint32 remainingBytes = chunkSize - 4;
-                        uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0;
-                        for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) {
-                            result.waters[i].rawData.resize(bytesPerWater);
-                            for (uint32 j = 0; j < bytesPerWater; j++) {
-                                result.waters[i].rawData[j] = r.u8();
-                            }
-                        }
-                        result.hasWater = true;
-                    }
-                }
-                break;
-            }
-            default:
-                r.skip(chunkSize);
-                break;
+            case 0x504F5250: { uint32 propCount = chunkSize / 4; result.props.uniqueIDs.resize(propCount); for (uint32 i = 0; i < propCount; i++) result.props.uniqueIDs[i] = r.u32le(); break; }
+            case 0x44727563: { result.curd.rawData.resize(chunkSize); for (uint32 i = 0; i < chunkSize; i++) result.curd.rawData[i] = r.u8(); break; }
+            case 0x47744157: { if (chunkSize >= 4) { uint32 waterCount = r.u32le(); if (waterCount > 0 && waterCount < 1000) { result.waters.resize(waterCount); uint32 remainingBytes = chunkSize - 4; uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0; for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) { result.waters[i].rawData.resize(bytesPerWater); for (uint32 j = 0; j < bytesPerWater; j++) result.waters[i].rawData[j] = r.u8(); } result.hasWater = true; } } break; }
+            default: r.skip(chunkSize); break;
         }
     }
-
-    if (result.blendMap.empty() && result.blendMapDXT.empty()) {
-        result.blendMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            result.blendMap[i * 4 + 0] = 255;
-            result.blendMap[i * 4 + 1] = 0;
-            result.blendMap[i * 4 + 2] = 0;
-            result.blendMap[i * 4 + 3] = 0;
-        }
-    }
-
-    if (result.colorMap.empty() && result.colorMapDXT.empty()) {
-        result.colorMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            result.colorMap[i * 4 + 0] = 128;
-            result.colorMap[i * 4 + 1] = 128;
-            result.colorMap[i * 4 + 2] = 128;
-            result.colorMap[i * 4 + 3] = 255;
-        }
-    }
-
-    if (!hasHeightmap) {
-        return result;
-    }
-
+    if (result.blendMap.empty() && result.blendMapDXT.empty()) { result.blendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.blendMap[i * 4 + 0] = 255; result.blendMap[i * 4 + 1] = 0; result.blendMap[i * 4 + 2] = 0; result.blendMap[i * 4 + 3] = 0; } }
+    if (result.colorMap.empty() && result.colorMapDXT.empty()) { result.colorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.colorMap[i * 4 + 0] = 128; result.colorMap[i * 4 + 1] = 128; result.colorMap[i * 4 + 2] = 128; result.colorMap[i * 4 + 3] = 255; } }
+    if (!hasHeightmap) return result;
     float baseX = static_cast<float>(cellY) * 32.0f;
     float baseZ = static_cast<float>(cellX) * 32.0f;
-
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
-
     result.vertices.resize(17 * 17);
-
     for (int y = 0; y < 17; y++) {
         for (int x = 0; x < 17; x++) {
             uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
-
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
             v.u = static_cast<float>(y) / 16.0f;
             v.v = static_cast<float>(x) / 16.0f;
-            v.nx = 0.0f;
-            v.ny = 1.0f;
-            v.nz = 0.0f;
-            v.tanx = 1.0f;
-            v.tany = 0.0f;
-            v.tanz = 0.0f;
-            v.tanw = 1.0f;
-
+            v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
+            v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > result.maxHeight) result.maxHeight = height;
             totalHeight += height;
             validHeights++;
-
             glm::vec3 pos(v.x, v.y, v.z);
             result.minBounds = glm::min(result.minBounds, pos);
             result.maxBounds = glm::max(result.maxBounds, pos);
-
             result.vertices[y * 17 + x] = v;
         }
     }
-
-    if (validHeights > 0) {
-        result.avgHeight = totalHeight / static_cast<float>(validHeights);
-    }
-
+    if (validHeights > 0) result.avgHeight = totalHeight / static_cast<float>(validHeights);
     for (int y = 0; y < 17; y++) {
         for (int x = 0; x < 17; x++) {
-            auto getPos = [&](int px, int py) -> glm::vec3 {
-                px = std::clamp(px, 0, 16);
-                py = std::clamp(py, 0, 16);
-                auto& vtx = result.vertices[py * 17 + px];
-                return glm::vec3(vtx.x, vtx.y, vtx.z);
-            };
-
+            auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& vtx = result.vertices[py * 17 + px]; return glm::vec3(vtx.x, vtx.y, vtx.z); };
             glm::vec3 left = getPos(x - 1, y);
             glm::vec3 right = getPos(x + 1, y);
             glm::vec3 up = getPos(x, y - 1);
             glm::vec3 down = getPos(x, y + 1);
-
             glm::vec3 dx = right - left;
             glm::vec3 dz = down - up;
             glm::vec3 normal = glm::normalize(glm::cross(dz, dx));
-
             result.vertices[y * 17 + x].nx = normal.x;
             result.vertices[y * 17 + x].ny = normal.y;
             result.vertices[y * 17 + x].nz = normal.z;
         }
     }
-
     result.valid = true;
     return result;
 }
 
 AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
-    : mFlags(parsed.flags)
-    , mMinBounds(parsed.minBounds)
-    , mMaxBounds(parsed.maxBounds)
-    , mSplatTexture(0)
-    , mColorMapTexture(0)
-{
+    : mFlags(parsed.flags), mMinBounds(parsed.minBounds), mMaxBounds(parsed.maxBounds), mSplatTexture(0), mColorMapTexture(0) {
     mMaxHeight = parsed.maxHeight;
     mAverageHeight = parsed.avgHeight;
-
-    for (int i = 0; i < 4; i++) {
-        mWorldLayerIDs[i] = parsed.worldLayerIDs[i];
-        mZoneIds[i] = parsed.zoneIds[i];
-        mLayerScale[i] = 0.0f;
-    }
-
+    for (int i = 0; i < 4; i++) { mWorldLayerIDs[i] = parsed.worldLayerIDs[i]; mZoneIds[i] = parsed.zoneIds[i]; mLayerScale[i] = 0.0f; }
     mVertices = std::move(parsed.vertices);
     mBlendMap = std::move(parsed.blendMap);
     mBlendMapDXT = std::move(parsed.blendMapDXT);
@@ -890,172 +654,46 @@ AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
     mCurd = std::move(parsed.curd);
     mWaters = std::move(parsed.waters);
     mHasWater = parsed.hasWater;
-
     if (mVertices.empty()) return;
-
     uploadGPU();
 }
 
 AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr)
-    : mChunkData(cellData)
-    , mFlags(0)
-    , mMinBounds(std::numeric_limits<float>::max())
-    , mMaxBounds(std::numeric_limits<float>::lowest())
-    , mSplatTexture(0)
-    , mColorMapTexture(0)
-{
+    : mChunkData(cellData), mFlags(0), mMinBounds(std::numeric_limits<float>::max()), mMaxBounds(std::numeric_limits<float>::lowest()), mSplatTexture(0), mColorMapTexture(0) {
     for (int i = 0; i < 4; ++i) mLayerScale[i] = 0.0f;
-
     if (cellData.size() < 4) return;
-
     struct R {
-        const uint8* p;
-        const uint8* e;
+        const uint8* p; const uint8* e;
         bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
-        uint32 u32le() {
-            uint32 v = static_cast<uint32>(p[0]) |
-                      (static_cast<uint32>(p[1]) << 8) |
-                      (static_cast<uint32>(p[2]) << 16) |
-                      (static_cast<uint32>(p[3]) << 24);
-            p += 4;
-            return v;
-        }
-        uint16 u16le() {
-            uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8);
-            p += 2;
-            return v;
-        }
+        uint32 u32le() { uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) | (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24); p += 4; return v; }
+        uint16 u16le() { uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8); p += 2; return v; }
         uint8 u8() { return *p++; }
         void skip(size_t n) { p += n; }
         size_t remaining() const { return static_cast<size_t>(e - p); }
     };
-
     R r{ cellData.data(), cellData.data() + cellData.size() };
-
     mFlags = r.u32le();
-
     std::vector<uint16> heightmap;
     bool hasHeightmap = false;
-
-    if ((mFlags & ChnkCellFlags::HeightMap) && r.can(722)) {
-        hasHeightmap = true;
-        heightmap.resize(19 * 19);
-        for (int j = 0; j < 19 * 19; j++) {
-            heightmap[j] = r.u16le();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) {
-        for (int j = 0; j < 4; j++) {
-            mWorldLayerIDs[j] = r.u32le();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::BlendMap) && r.can(8450)) {
-        mBlendMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            uint16 val = r.u16le();
-            mBlendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15);
-            mBlendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15);
-            mBlendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15);
-            mBlendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15);
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::ColorMap) && r.can(8450)) {
-        mColorMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            uint16 val = r.u16le();
-            uint8 r5 = (val >> 0) & 0x1F;
-            uint8 g6 = (val >> 5) & 0x3F;
-            uint8 b5 = (val >> 11) & 0x1F;
-            mColorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31);
-            mColorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63);
-            mColorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31);
-            mColorMap[i * 4 + 3] = 255;
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::UnkMap) && r.can(8450)) {
-        mUnknownMap.resize(65 * 65);
-        for (int j = 0; j < 65 * 65; j++) {
-            mUnknownMap[j] = r.u16le();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::Unk0x20) && r.can(4)) {
-        mUnk0x20 = static_cast<int32>(r.u32le());
-    }
-
-    if ((mFlags & ChnkCellFlags::SkyIDs) && r.can(64)) {
-        for (int corner = 0; corner < 4; corner++) {
-            for (int skyIdx = 0; skyIdx < 4; skyIdx++) {
-                mSkyCorners[corner].worldSkyIDs[skyIdx] = r.u32le();
-            }
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::SkyWeights) && r.can(16)) {
-        for (int corner = 0; corner < 4; corner++) {
-            for (int weightIdx = 0; weightIdx < 4; weightIdx++) {
-                mSkyCorners[corner].worldSkyWeights[weightIdx] = r.u8();
-            }
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::ShadowMap) && r.can(4225)) {
-        mShadowMap.resize(65 * 65);
-        for (int j = 0; j < 65 * 65; j++) {
-            mShadowMap[j] = r.u8();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) {
-        mLodHeightMap.resize(33 * 33);
-        for (int j = 0; j < 33 * 33; j++) {
-            mLodHeightMap[j] = r.u16le();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::LoDHeightRange) && r.can(4)) {
-        mLodHeightRange[0] = r.u16le();
-        mLodHeightRange[1] = r.u16le();
-    }
-
+    if ((mFlags & ChnkCellFlags::HeightMap) && r.can(722)) { hasHeightmap = true; heightmap.resize(19 * 19); for (int j = 0; j < 19 * 19; j++) heightmap[j] = r.u16le(); }
+    if ((mFlags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) { for (int j = 0; j < 4; j++) mWorldLayerIDs[j] = r.u32le(); }
+    if ((mFlags & ChnkCellFlags::BlendMap) && r.can(8450)) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); mBlendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15); mBlendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15); mBlendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15); mBlendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15); } }
+    if ((mFlags & ChnkCellFlags::ColorMap) && r.can(8450)) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); uint8 r5 = (val >> 0) & 0x1F; uint8 g6 = (val >> 5) & 0x3F; uint8 b5 = (val >> 11) & 0x1F; mColorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31); mColorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63); mColorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31); mColorMap[i * 4 + 3] = 255; } }
+    if ((mFlags & ChnkCellFlags::UnkMap) && r.can(8450)) { mUnknownMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) mUnknownMap[j] = r.u16le(); }
+    if ((mFlags & ChnkCellFlags::Unk0x20) && r.can(4)) mUnk0x20 = static_cast<int32>(r.u32le());
+    if ((mFlags & ChnkCellFlags::SkyIDs) && r.can(64)) { for (int corner = 0; corner < 4; corner++) for (int skyIdx = 0; skyIdx < 4; skyIdx++) mSkyCorners[corner].worldSkyIDs[skyIdx] = r.u32le(); }
+    if ((mFlags & ChnkCellFlags::SkyWeights) && r.can(16)) { for (int corner = 0; corner < 4; corner++) for (int weightIdx = 0; weightIdx < 4; weightIdx++) mSkyCorners[corner].worldSkyWeights[weightIdx] = r.u8(); }
+    if ((mFlags & ChnkCellFlags::ShadowMap) && r.can(4225)) { mShadowMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) mShadowMap[j] = r.u8(); }
+    if ((mFlags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) { mLodHeightMap.resize(33 * 33); for (int j = 0; j < 33 * 33; j++) mLodHeightMap[j] = r.u16le(); }
+    if ((mFlags & ChnkCellFlags::LoDHeightRange) && r.can(4)) { mLodHeightRange[0] = r.u16le(); mLodHeightRange[1] = r.u16le(); }
     if ((mFlags & ChnkCellFlags::Unk0x800) && r.can(578)) r.skip(578);
     if ((mFlags & ChnkCellFlags::Unk0x1000) && r.can(1)) r.skip(1);
-
-    if ((mFlags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) {
-        mColorMapDXT.resize(4624);
-        for (int j = 0; j < 4624; j++) {
-            mColorMapDXT[j] = r.u8();
-        }
-    }
-
+    if ((mFlags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) { mColorMapDXT.resize(4624); for (int j = 0; j < 4624; j++) mColorMapDXT[j] = r.u8(); }
     if ((mFlags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) r.skip(2312);
     if ((mFlags & ChnkCellFlags::Unk0x8000) && r.can(8450)) r.skip(8450);
-
-    if ((mFlags & ChnkCellFlags::ZoneBound) && r.can(4096)) {
-        mZoneBounds.resize(64 * 64);
-        for (int j = 0; j < 64 * 64; j++) {
-            mZoneBounds[j] = r.u8();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) {
-        mBlendMapDXT.resize(2312);
-        for (int j = 0; j < 2312; j++) {
-            mBlendMapDXT[j] = r.u8();
-        }
-    }
-
-    if ((mFlags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) {
-        mUnkMap1.resize(2312);
-        for (int j = 0; j < 2312; j++) {
-            mUnkMap1[j] = r.u8();
-        }
-    }
-
+    if ((mFlags & ChnkCellFlags::ZoneBound) && r.can(4096)) { mZoneBounds.resize(64 * 64); for (int j = 0; j < 64 * 64; j++) mZoneBounds[j] = r.u8(); }
+    if ((mFlags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) { mBlendMapDXT.resize(2312); for (int j = 0; j < 2312; j++) mBlendMapDXT[j] = r.u8(); }
+    if ((mFlags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) { mUnkMap1.resize(2312); for (int j = 0; j < 2312; j++) mUnkMap1[j] = r.u8(); }
     if ((mFlags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) r.skip(2312);
     if ((mFlags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) r.skip(2312);
     if ((mFlags & ChnkCellFlags::Unk0x200000) && r.can(1)) r.skip(1);
@@ -1065,139 +703,56 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     if ((mFlags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) r.skip(8450);
     if ((mFlags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) r.skip(21316);
     if ((mFlags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) r.skip(4096);
-
-    if ((mFlags & ChnkCellFlags::Zone) && r.can(16)) {
-        for (int j = 0; j < 4; j++) {
-            mZoneIds[j] = r.u32le();
-        }
-    }
-
+    if ((mFlags & ChnkCellFlags::Zone) && r.can(16)) { for (int j = 0; j < 4; j++) mZoneIds[j] = r.u32le(); }
     if ((mFlags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
     if ((mFlags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
     if ((mFlags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
-
     while (r.can(8)) {
         uint32 chunkID = r.u32le();
         uint32 chunkSize = r.u32le();
-
         if (!r.can(chunkSize)) break;
-
         switch (chunkID) {
-            case 0x504F5250:
-            {
-                uint32 propCount = chunkSize / 4;
-                mProps.uniqueIDs.resize(propCount);
-                for (uint32 i = 0; i < propCount; i++) {
-                    mProps.uniqueIDs[i] = r.u32le();
-                }
-                break;
-            }
-            case 0x44727563:
-            {
-                mCurd.rawData.resize(chunkSize);
-                for (uint32 i = 0; i < chunkSize; i++) {
-                    mCurd.rawData[i] = r.u8();
-                }
-                break;
-            }
-            case 0x47744157:
-            {
-                if (chunkSize >= 4) {
-                    uint32 waterCount = r.u32le();
-                    if (waterCount > 0 && waterCount < 1000) {
-                        mWaters.resize(waterCount);
-                        uint32 remainingBytes = chunkSize - 4;
-                        uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0;
-                        for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) {
-                            mWaters[i].rawData.resize(bytesPerWater);
-                            for (uint32 j = 0; j < bytesPerWater; j++) {
-                                mWaters[i].rawData[j] = r.u8();
-                            }
-                        }
-                        mHasWater = true;
-                    }
-                }
-                break;
-            }
-            default:
-                r.skip(chunkSize);
-                break;
+            case 0x504F5250: { uint32 propCount = chunkSize / 4; mProps.uniqueIDs.resize(propCount); for (uint32 i = 0; i < propCount; i++) mProps.uniqueIDs[i] = r.u32le(); break; }
+            case 0x44727563: { mCurd.rawData.resize(chunkSize); for (uint32 i = 0; i < chunkSize; i++) mCurd.rawData[i] = r.u8(); break; }
+            case 0x47744157: { if (chunkSize >= 4) { uint32 waterCount = r.u32le(); if (waterCount > 0 && waterCount < 1000) { mWaters.resize(waterCount); uint32 remainingBytes = chunkSize - 4; uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0; for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) { mWaters[i].rawData.resize(bytesPerWater); for (uint32 j = 0; j < bytesPerWater; j++) mWaters[i].rawData[j] = r.u8(); } mHasWater = true; } } break; }
+            default: r.skip(chunkSize); break;
         }
     }
-
-    if (mBlendMap.empty() && mBlendMapDXT.empty()) {
-        mBlendMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            mBlendMap[i * 4 + 0] = 255;
-            mBlendMap[i * 4 + 1] = 0;
-            mBlendMap[i * 4 + 2] = 0;
-            mBlendMap[i * 4 + 3] = 0;
-        }
-    }
-
-    if (mColorMap.empty() && mColorMapDXT.empty()) {
-        mColorMap.resize(65 * 65 * 4);
-        for (int i = 0; i < 65 * 65; i++) {
-            mColorMap[i * 4 + 0] = 128;
-            mColorMap[i * 4 + 1] = 128;
-            mColorMap[i * 4 + 2] = 128;
-            mColorMap[i * 4 + 3] = 255;
-        }
-    }
-
-    if (!hasHeightmap) {
-        return;
-    }
-
+    if (mBlendMap.empty() && mBlendMapDXT.empty()) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mBlendMap[i * 4 + 0] = 255; mBlendMap[i * 4 + 1] = 0; mBlendMap[i * 4 + 2] = 0; mBlendMap[i * 4 + 3] = 0; } }
+    if (mColorMap.empty() && mColorMapDXT.empty()) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mColorMap[i * 4 + 0] = 128; mColorMap[i * 4 + 1] = 128; mColorMap[i * 4 + 2] = 128; mColorMap[i * 4 + 3] = 255; } }
+    if (!hasHeightmap) return;
     float baseX = static_cast<float>(cellY) * 32.0f;
     float baseZ = static_cast<float>(cellX) * 32.0f;
-
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
-
     mVertices.resize(17 * 17);
-
     for (int y = 0; y < 17; y++) {
         for (int x = 0; x < 17; x++) {
             uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
-
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
             v.u = static_cast<float>(y) / 16.0f;
             v.v = static_cast<float>(x) / 16.0f;
-            v.nx = 0.0f;
-            v.ny = 1.0f;
-            v.nz = 0.0f;
-            v.tanx = 1.0f;
-            v.tany = 0.0f;
-            v.tanz = 0.0f;
-            v.tanw = 1.0f;
-
+            v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
+            v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > mMaxHeight) mMaxHeight = height;
             totalHeight += height;
             validHeights++;
-
             glm::vec3 pos(v.x, v.y, v.z);
             mMinBounds = glm::min(mMinBounds, pos);
             mMaxBounds = glm::max(mMaxBounds, pos);
-
             mVertices[y * 17 + x] = v;
         }
     }
-
-    if (validHeights > 0) {
-        mAverageHeight = totalHeight / static_cast<float>(validHeights);
-    }
-
+    if (validHeights > 0) mAverageHeight = totalHeight / static_cast<float>(validHeights);
     calcNormals();
     uploadGPU();
 }
 
-void AreaChunkRender::uploadGPU()
-{
+void AreaChunkRender::uploadGPU() {
     if (indices.empty()) {
         indices.reserve(16 * 16 * 6);
         for (uint32 y = 0; y < 16; y++) {
@@ -1206,42 +761,31 @@ void AreaChunkRender::uploadGPU()
                 uint32 tr = y * 17 + x + 1;
                 uint32 bl = (y + 1) * 17 + x;
                 uint32 br = (y + 1) * 17 + x + 1;
-
                 indices.push_back(tl);
                 indices.push_back(bl);
                 indices.push_back(tr);
-
                 indices.push_back(tr);
                 indices.push_back(bl);
                 indices.push_back(br);
             }
         }
     }
-
     glGenVertexArrays(1, &mVAO);
     glGenBuffers(1, &mVBO);
     glGenBuffers(1, &mEBO);
-
     glBindVertexArray(mVAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, mVBO);
     glBufferData(GL_ARRAY_BUFFER, mVertices.size() * sizeof(AreaVertex), mVertices.data(), GL_STATIC_DRAW);
-
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32), indices.data(), GL_STATIC_DRAW);
-
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)0);
-
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, nx));
-
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, tanx));
-
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, u));
-
     glBindVertexArray(0);
     mIndexCount = static_cast<int>(indices.size());
 }
@@ -1249,9 +793,7 @@ void AreaChunkRender::uploadGPU()
 AreaChunkRender::~AreaChunkRender() {
     if (mSplatTexture != 0) glDeleteTextures(1, &mSplatTexture);
     if (mColorMapTexture != 0) glDeleteTextures(1, &mColorMapTexture);
-    for (auto tex : mLayerTextures) {
-        if (tex != 0) glDeleteTextures(1, &tex);
-    }
+    for (auto tex : mLayerTextures) if (tex != 0) glDeleteTextures(1, &tex);
     if (mBlendMapTexture) glDeleteTextures(1, &mBlendMapTexture);
     if (mColorMapTextureGPU) glDeleteTextures(1, &mColorMapTextureGPU);
     if (mVAO) glDeleteVertexArrays(1, &mVAO);
@@ -1270,24 +812,14 @@ void AreaChunkRender::calcNormals() {
     for (int y = 0; y < 17; y++) {
         for (int x = 0; x < 17; x++) {
             glm::vec3 normal(0.0f, 0.0f, 0.0f);
-
-            auto getPos = [&](int px, int py) -> glm::vec3 {
-                px = std::clamp(px, 0, 16);
-                py = std::clamp(py, 0, 16);
-                auto& v = mVertices[py * 17 + px];
-                return glm::vec3(v.x, v.y, v.z);
-            };
-
+            auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& v = mVertices[py * 17 + px]; return glm::vec3(v.x, v.y, v.z); };
             glm::vec3 left = getPos(x - 1, y);
             glm::vec3 right = getPos(x + 1, y);
             glm::vec3 up = getPos(x, y - 1);
             glm::vec3 down = getPos(x, y + 1);
-
             glm::vec3 dx = right - left;
             glm::vec3 dz = down - up;
-
             normal = glm::normalize(glm::cross(dz, dx));
-
             mVertices[y * 17 + x].nx = normal.x;
             mVertices[y * 17 + x].ny = normal.y;
             mVertices[y * 17 + x].nz = normal.z;
@@ -1295,11 +827,8 @@ void AreaChunkRender::calcNormals() {
     }
 }
 
-void AreaChunkRender::calcTangentBitangent() {
-}
-
-void AreaChunkRender::extendBuffer() {
-}
+void AreaChunkRender::calcTangentBitangent() {}
+void AreaChunkRender::extendBuffer() {}
 
 void AreaChunkRender::geometryInit(uint32 program) {
     uniforms.colorTexture = glGetUniformLocation(program, "colorTexture");
