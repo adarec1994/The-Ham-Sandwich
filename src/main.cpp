@@ -22,6 +22,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 bool gCharacterIconLoaded = false;
 unsigned int gCharacterIconTexture = 0;
 
+#ifdef _WIN32
 static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize)
 {
     HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
@@ -31,6 +32,51 @@ static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize
     *outSize = SizeofResource(nullptr, hRes);
     *outData = LockResource(hMem);
     return *outData != nullptr;
+}
+#endif
+
+static bool LoadCharacterIcon()
+{
+    int w, h;
+    unsigned char* imageData = nullptr;
+
+#ifdef _WIN32
+    const void* data = nullptr;
+    DWORD dataSize = 0;
+    if (GetResourceData(IDR_ICON_CHARACTER, &data, &dataSize))
+    {
+        imageData = stbi_load_from_memory(
+            static_cast<const unsigned char*>(data),
+            static_cast<int>(dataSize),
+            &w, &h, nullptr, 4);
+    }
+#else
+    imageData = stbi_load("assets/icons/Character.png", &w, &h, nullptr, 4);
+#endif
+
+    if (!imageData)
+        return false;
+
+    for (int i = 0; i < w * h * 4; i += 4)
+    {
+        imageData[i + 0] = 255 - imageData[i + 0];
+        imageData[i + 1] = 255 - imageData[i + 1];
+        imageData[i + 2] = 255 - imageData[i + 2];
+    }
+
+    glGenTextures(1, &gCharacterIconTexture);
+    glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    stbi_image_free(imageData);
+    return true;
 }
 
 int main()
@@ -54,42 +100,7 @@ int main()
         return -1;
     }
 
-    {
-        const void* data = nullptr;
-        DWORD dataSize = 0;
-        if (GetResourceData(IDR_ICON_CHARACTER, &data, &dataSize))
-        {
-            int w, h;
-            unsigned char* imageData = stbi_load_from_memory(
-                static_cast<const unsigned char*>(data),
-                static_cast<int>(dataSize),
-                &w, &h, nullptr, 4);
-
-            if (imageData)
-            {
-                for (int i = 0; i < w * h * 4; i += 4)
-                {
-                    imageData[i + 0] = 255 - imageData[i + 0];
-                    imageData[i + 1] = 255 - imageData[i + 1];
-                    imageData[i + 2] = 255 - imageData[i + 2];
-                }
-
-                glGenTextures(1, &gCharacterIconTexture);
-                glBindTexture(GL_TEXTURE_2D, gCharacterIconTexture);
-
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, imageData);
-                glGenerateMipmap(GL_TEXTURE_2D);
-
-                gCharacterIconLoaded = true;
-                stbi_image_free(imageData);
-            }
-        }
-    }
+    gCharacterIconLoaded = LoadCharacterIcon();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

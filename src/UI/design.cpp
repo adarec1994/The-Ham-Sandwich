@@ -18,12 +18,14 @@
 
 #include <vector>
 #include <iostream>
+#include <fstream>
 
 bool   gAreaIconLoaded = false;
 unsigned int gAreaIconTexture = 0;
 int    gAreaIconWidth = 0;
 int    gAreaIconHeight = 0;
 
+#ifdef _WIN32
 static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize)
 {
     HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
@@ -34,6 +36,7 @@ static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize
     *outData = LockResource(hMem);
     return *outData != nullptr;
 }
+#endif
 
 static GLuint CompileShader(GLenum type, const char* source)
 {
@@ -167,17 +170,12 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     return true;
 }
 
-static bool LoadTextureFromResource(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
+static bool LoadTextureFromMemory(const unsigned char* data, size_t dataSize, GLuint* out_texture, int* out_width, int* out_height)
 {
-    const void* data = nullptr;
-    DWORD dataSize = 0;
-    if (!GetResourceData(resourceId, &data, &dataSize))
-        return false;
-
     int image_width = 0;
     int image_height = 0;
     unsigned char* image_data = stbi_load_from_memory(
-        static_cast<const unsigned char*>(data),
+        data,
         static_cast<int>(dataSize),
         &image_width, &image_height, nullptr, 4);
 
@@ -223,6 +221,79 @@ static bool LoadTextureFromResource(int resourceId, GLuint* out_texture, int* ou
     *out_height = image_height;
 
     return true;
+}
+
+#ifdef _WIN32
+static bool LoadTextureFromResource(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
+{
+    const void* data = nullptr;
+    DWORD dataSize = 0;
+    if (!GetResourceData(resourceId, &data, &dataSize))
+        return false;
+
+    return LoadTextureFromMemory(
+        static_cast<const unsigned char*>(data),
+        static_cast<size_t>(dataSize),
+        out_texture, out_width, out_height);
+}
+#endif
+
+static const char* GetResourcePath(int resourceId)
+{
+    switch (resourceId)
+    {
+        case IDR_ICON_FILETREE:  return "assets/icons/FileTree.png";
+        case IDR_ICON_AREA:      return "assets/icons/Area.png";
+        case IDR_ICON_SETTINGS:  return "assets/icons/Settings.png";
+        case IDR_ICON_ABOUT:     return "assets/icons/About.png";
+        case IDR_ICON_CHARACTER: return "assets/icons/Character.png";
+        default:                 return nullptr;
+    }
+}
+
+static const char* GetFontPath(int resourceId)
+{
+    switch (resourceId)
+    {
+        case IDR_FONT_ROBOTO: return "assets/fonts/Roboto-Regular.ttf";
+        default:              return nullptr;
+    }
+}
+
+static bool LoadTextureFromResourceCrossPlat(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
+{
+#ifdef _WIN32
+    if (LoadTextureFromResource(resourceId, out_texture, out_width, out_height))
+        return true;
+#endif
+    const char* path = GetResourcePath(resourceId);
+    if (path)
+        return LoadTextureFromFile(path, out_texture, out_width, out_height);
+    return false;
+}
+
+static bool LoadFontFromResourceCrossPlat(int resourceId, ImGuiIO& io, float fontSize)
+{
+#ifdef _WIN32
+    const void* fontData = nullptr;
+    DWORD fontDataSize = 0;
+    if (GetResourceData(resourceId, &fontData, &fontDataSize))
+    {
+        void* fontDataCopy = IM_ALLOC(fontDataSize);
+        memcpy(fontDataCopy, fontData, fontDataSize);
+        ImFont* font = io.Fonts->AddFontFromMemoryTTF(fontDataCopy, static_cast<int>(fontDataSize), fontSize);
+        if (font != nullptr)
+            return true;
+    }
+#endif
+    const char* path = GetFontPath(resourceId);
+    if (path)
+    {
+        ImFont* font = io.Fonts->AddFontFromFileTTF(path, fontSize);
+        if (font != nullptr)
+            return true;
+    }
+    return false;
 }
 
 void ApplyBrainwaveStyle()
@@ -282,24 +353,15 @@ void InitUI(AppState& state)
 
     ImGuiIO& io = ImGui::GetIO();
 
-    const void* fontData = nullptr;
-    DWORD fontDataSize = 0;
-    if (GetResourceData(IDR_FONT_ROBOTO, &fontData, &fontDataSize))
-    {
-        void* fontDataCopy = IM_ALLOC(fontDataSize);
-        memcpy(fontDataCopy, fontData, fontDataSize);
-        ImFont* font = io.Fonts->AddFontFromMemoryTTF(fontDataCopy, static_cast<int>(fontDataSize), 18.0f);
-        if (font == nullptr) io.Fonts->AddFontDefault();
-    }
-    else
+    if (!LoadFontFromResourceCrossPlat(IDR_FONT_ROBOTO, io, 18.0f))
     {
         io.Fonts->AddFontDefault();
     }
 
-    state.iconLoaded = LoadTextureFromResource(IDR_ICON_FILETREE, &state.iconTexture, &state.iconWidth, &state.iconHeight);
-    gAreaIconLoaded = LoadTextureFromResource(IDR_ICON_AREA, &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
-    state.settingsIconLoaded = LoadTextureFromResource(IDR_ICON_SETTINGS, &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
-    state.aboutIconLoaded = LoadTextureFromResource(IDR_ICON_ABOUT, &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
+    state.iconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_FILETREE, &state.iconTexture, &state.iconWidth, &state.iconHeight);
+    gAreaIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_AREA, &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
+    state.settingsIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_SETTINGS, &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
+    state.aboutIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_ABOUT, &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
 
     state.areaRender = std::make_shared<AreaRender>();
     state.areaRender->init();
