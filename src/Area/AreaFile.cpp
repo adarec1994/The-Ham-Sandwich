@@ -14,15 +14,16 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
+#include <thread>
+#include <chrono>
 
-static std::string NormalizePropPath(const std::string& path) {
+static std::string NormalizePropPath(const std::string& path)
+{
     std::string result = path;
-    for (char& c : result) {
+    for (char& c : result)
         if (c == '\\') c = '/';
-    }
-    while (!result.empty() && result[0] == '/') {
+    while (!result.empty() && result[0] == '/')
         result.erase(0, 1);
-    }
     return result;
 }
 
@@ -39,14 +40,16 @@ const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms() { return uniform
 
 void ResetAreaReferencePosition() { gReferenceTileX = -1; gReferenceTileY = -1; }
 
-static inline int hexNibble(wchar_t c) {
+static inline int hexNibble(wchar_t c)
+{
     if (c >= L'0' && c <= L'9') return static_cast<int>(c - L'0');
     if (c >= L'a' && c <= L'f') return 10 + static_cast<int>(c - L'a');
     if (c >= L'A' && c <= L'F') return 10 + static_cast<int>(c - L'A');
     return -1;
 }
 
-static inline bool parseHexByte(const std::wstring& s, size_t pos, int& outByte) {
+static inline bool parseHexByte(const std::wstring& s, size_t pos, int& outByte)
+{
     if (pos + 2 > s.size()) return false;
     int hi = hexNibble(s[pos]);
     int lo = hexNibble(s[pos + 1]);
@@ -59,8 +62,10 @@ static GLuint gFallbackWhite = 0;
 static GLuint gFallbackNormal = 0;
 static uint32 gLastTerrainProgram = 0;
 
-static void EnsureFallbackTextures() {
-    if (gFallbackWhite == 0) {
+static void EnsureFallbackTextures()
+{
+    if (gFallbackWhite == 0)
+    {
         uint8_t px[4] = { 255, 255, 255, 255 };
         glGenTextures(1, &gFallbackWhite);
         glBindTexture(GL_TEXTURE_2D, gFallbackWhite);
@@ -68,7 +73,8 @@ static void EnsureFallbackTextures() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
     }
-    if (gFallbackNormal == 0) {
+    if (gFallbackNormal == 0)
+    {
         uint8_t px[4] = { 128, 128, 255, 255 };
         glGenTextures(1, &gFallbackNormal);
         glBindTexture(GL_TEXTURE_2D, gFallbackNormal);
@@ -78,7 +84,8 @@ static void EnsureFallbackTextures() {
     }
 }
 
-void AreaFile::parseTileXYFromFilename() {
+void AreaFile::parseTileXYFromFilename()
+{
     if (mPath.empty()) return;
     std::wstring name = mPath;
     size_t ext = name.rfind(L".area");
@@ -92,8 +99,10 @@ void AreaFile::parseTileXYFromFilename() {
     mTileY = by;
 }
 
-void AreaFile::calculateWorldOffset() {
-    if (gReferenceTileX < 0 || gReferenceTileY < 0) {
+void AreaFile::calculateWorldOffset()
+{
+    if (gReferenceTileX < 0 || gReferenceTileY < 0)
+    {
         gReferenceTileX = mTileX;
         gReferenceTileY = mTileY;
     }
@@ -105,34 +114,417 @@ void AreaFile::calculateWorldOffset() {
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
     : mArchive(std::move(archive)), mFile(std::move(file))
     , mMinBounds(std::numeric_limits<float>::max())
-    , mMaxBounds(std::numeric_limits<float>::lowest()) {
+    , mMaxBounds(std::numeric_limits<float>::lowest())
+{
     mBaseColor = glm::vec4(1.0f);
-    if (mArchive && mFile) {
+    if (mArchive && mFile)
+    {
         mPath = mFile->getFullPath();
-        try {
+        try
+        {
             mArchive->getFileData(mFile, mContent);
             mStream = std::make_shared<BinStream>(mContent);
             parseTileXYFromFilename();
             calculateWorldOffset();
-        } catch (...) {}
+        }
+        catch (...) {}
     }
 }
 
-AreaFile::~AreaFile() { if (mTextureID != 0) glDeleteTextures(1, &mTextureID); }
+AreaFile::~AreaFile()
+{
+    if (mTextureID != 0) glDeleteTextures(1, &mTextureID);
+}
 
 bool AreaFile::loadTexture() { return false; }
 
-ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file) {
+bool AreaFile::load()
+{
+    if (mContent.size() < 8) return false;
+    struct R
+    {
+        const uint8* p; const uint8* e;
+        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
+        uint32 u32le()
+        {
+            uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) |
+                      (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24);
+            p += 4; return v;
+        }
+        void bytes(void* out, size_t n) { memcpy(out, p, n); p += n; }
+        void skip(size_t n) { p += n; }
+    };
+    const uint8* base = mContent.data();
+    R r{ base, base + mContent.size() };
+    uint32 sig = r.u32le();
+    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return false;
+    r.u32le();
+    std::vector<uint8> chnkData, propData, curtData;
+    while (r.can(8))
+    {
+        uint32 magic = r.u32le();
+        uint32 size = r.u32le();
+        if (!r.can(size)) break;
+        switch (magic)
+        {
+            case AreaChunkID::CHNK: chnkData.resize(size); r.bytes(chnkData.data(), size); break;
+            case AreaChunkID::PROp: propData.resize(size); r.bytes(propData.data(), size); break;
+            case AreaChunkID::CURT: curtData.resize(size); r.bytes(curtData.data(), size); break;
+            default: r.skip(size); break;
+        }
+    }
+
+    if (!propData.empty()) ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
+    if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
+    if (chnkData.empty()) { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); return true; }
+
+    struct ChunkJob
+    {
+        uint32 index;
+        uint32 cellX;
+        uint32 cellY;
+        std::vector<uint8> data;
+    };
+    std::vector<ChunkJob> jobs;
+    jobs.reserve(256);
+
+    R cr{ chnkData.data(), chnkData.data() + chnkData.size() };
+    uint32 lastIndex = 0;
+    while (cr.can(4))
+    {
+        uint32 cellInfo = cr.u32le();
+        uint32 idxDelta = (cellInfo >> 24) & 0xFF;
+        uint32 size = cellInfo & 0x00FFFFFF;
+        uint32 index = idxDelta + lastIndex;
+        lastIndex = index + 1;
+        if (index >= 256) break;
+        if (!cr.can(size)) break;
+        if (size < 4) { cr.skip(size); continue; }
+        ChunkJob job;
+        job.index = index;
+        job.cellX = index % 16;
+        job.cellY = index / 16;
+        job.data.resize(size);
+        cr.bytes(job.data.data(), size);
+        jobs.push_back(std::move(job));
+    }
+
+    std::vector<ParsedChunk> parsedChunks(256);
+    size_t numThreads = std::max(1u, std::thread::hardware_concurrency());
+
+    std::vector<std::thread> threads;
+    std::atomic<size_t> jobIndex{0};
+
+    for (size_t t = 0; t < numThreads; t++)
+    {
+        threads.emplace_back([&]()
+        {
+            while (true)
+            {
+                size_t i = jobIndex.fetch_add(1);
+                if (i >= jobs.size()) break;
+                auto& job = jobs[i];
+                parsedChunks[job.index] = AreaChunkRender::parseChunkData(job.data, job.cellX, job.cellY);
+            }
+        });
+    }
+    for (auto& t : threads) t.join();
+
+    mChunks.assign(256, nullptr);
+    uint32 validCount = 0;
+    float totalH = 0.0f;
+    for (size_t i = 0; i < 256; i++)
+    {
+        if (!parsedChunks[i].valid) continue;
+        auto chunk = std::make_shared<AreaChunkRender>(std::move(parsedChunks[i]), mArchive);
+        mChunks[i] = chunk;
+        if (chunk && chunk->isFullyInitialized())
+        {
+            totalH += chunk->getAverageHeight();
+            validCount++;
+            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
+            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
+            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
+        }
+    }
+
+    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
+    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
+    return true;
+}
+
+bool AreaFile::loadFromParsed(ParsedArea&& parsed)
+{
+    mPath = parsed.path;
+    mTileX = parsed.tileX;
+    mTileY = parsed.tileY;
+    calculateWorldOffset();
+    mProps = std::move(parsed.props);
+    mCurts = std::move(parsed.curts);
+    mPropLookup.clear();
+    for (size_t i = 0; i < mProps.size(); i++) mPropLookup[mProps[i].uniqueID] = i;
+    mChunks.assign(256, nullptr);
+    float totalH = 0.0f; uint32 validCount = 0;
+    for (size_t i = 0; i < parsed.chunks.size() && i < 256; i++)
+    {
+        if (!parsed.chunks[i].valid) continue;
+        auto chunk = std::make_shared<AreaChunkRender>(std::move(parsed.chunks[i]), mArchive);
+        mChunks[i] = chunk;
+        if (chunk && chunk->isFullyInitialized())
+        {
+            totalH += chunk->getAverageHeight();
+            validCount++;
+            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
+            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
+            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
+        }
+    }
+    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
+    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
+    return true;
+}
+
+void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk)
+{
+    glUseProgram(shaderProgram);
+    GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
+    GLint projLoc = glGetUniformLocation(shaderProgram, "projection");
+    if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &matView[0][0]);
+    if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, &matProj[0][0]);
+    EnsureFallbackTextures();
+    if (gLastTerrainProgram != shaderProgram) { AreaChunkRender::geometryInit(shaderProgram); gLastTerrainProgram = shaderProgram; }
+    glm::mat4 worldModel(1.0f);
+    worldModel = glm::translate(worldModel, mWorldOffset);
+    worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+    const auto& u = AreaChunkRender::getUniforms();
+    if (u.model != static_cast<uint32>(-1)) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
+    if (u.baseColor != static_cast<uint32>(-1)) glUniform4f(u.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
+    for (auto& c : mChunks)
+    {
+        if (!c || !c->isFullyInitialized()) continue;
+        c->loadTextures(mArchive);
+        GLint highlightLoc = glGetUniformLocation(shaderProgram, "highlightColor");
+        if (highlightLoc != -1)
+        {
+            if (c == selectedChunk) glUniform4f(highlightLoc, 1.0f, 1.0f, 0.0f, 0.5f);
+            else glUniform4f(highlightLoc, 0.0f, 0.0f, 0.0f, 0.0f);
+        }
+        c->bindTextures(shaderProgram);
+        c->render();
+    }
+}
+
+bool AreaFile::loadProp(uint32_t uniqueID)
+{
+    auto it = mPropLookup.find(uniqueID);
+    if (it == mPropLookup.end() || it->second >= mProps.size()) return false;
+    Prop& prop = mProps[it->second];
+    if (prop.loaded) return true;
+    if (prop.loadRequested) return false;
+    PropLoader::Instance().SetArchive(mArchive);
+    PropLoader::Instance().QueueProp(&prop);
+    return true;
+}
+
+void AreaFile::loadAllProps()
+{
+    loadAllPropsAsync();
+    while (PropLoader::Instance().HasPendingWork())
+    {
+        PropLoader::Instance().ProcessGPUUploads(200);
+    }
+    PropLoader::Instance().ProcessGPUUploads(500);
+}
+
+void AreaFile::loadAllPropsWithProgress(std::function<void(size_t, size_t)> progressCallback)
+{
+    size_t total = 0;
+    for (auto& prop : mProps)
+    {
+        if (!prop.loaded && !prop.loadRequested)
+            total++;
+    }
+
+    if (total == 0)
+    {
+        if (progressCallback) progressCallback(0, 0);
+        return;
+    }
+
+    loadAllPropsAsync();
+
+    while (PropLoader::Instance().HasPendingWork())
+    {
+        PropLoader::Instance().ProcessGPUUploads(100);
+
+        size_t loaded = 0;
+        for (auto& prop : mProps)
+        {
+            if (prop.loaded) loaded++;
+        }
+
+        if (progressCallback)
+            progressCallback(loaded, total);
+    }
+
+    PropLoader::Instance().ProcessGPUUploads(500);
+
+    if (progressCallback)
+        progressCallback(total, total);
+}
+
+void AreaFile::loadAllPropsAsync()
+{
+    auto& loader = PropLoader::Instance();
+    loader.SetArchive(mArchive);
+    std::vector<Prop*> toLoad;
+    toLoad.reserve(mProps.size());
+    for (auto& prop : mProps)
+    {
+        if (!prop.loaded && !prop.loadRequested)
+            toLoad.push_back(&prop);
+    }
+    if (!toLoad.empty())
+        loader.QueueProps(toLoad);
+}
+
+void AreaFile::loadPropsInView(const glm::vec3& cameraPos, float radius)
+{
+    auto& loader = PropLoader::Instance();
+    loader.SetArchive(mArchive);
+    std::vector<std::pair<float, Prop*>> sorted;
+    sorted.reserve(mProps.size());
+    float radiusSq = radius * radius;
+    for (auto& prop : mProps)
+    {
+        if (prop.loaded || prop.loadRequested) continue;
+        glm::vec3 propWorldPos = prop.position + mWorldOffset;
+        float distSq = glm::dot(propWorldPos - cameraPos, propWorldPos - cameraPos);
+        if (distSq <= radiusSq)
+            sorted.push_back({distSq, &prop});
+    }
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<Prop*> toLoad;
+    toLoad.reserve(sorted.size());
+    for (auto& [dist, prop] : sorted)
+        toLoad.push_back(prop);
+    if (!toLoad.empty())
+        loader.QueueProps(toLoad);
+}
+
+void AreaFile::updatePropLoading()
+{
+    PropLoader::Instance().ProcessGPUUploads(10);
+}
+
+void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
+{
+    static bool firstRender = true;
+    int rendered = 0;
+
+    // The tile coordinates from filename seem wrong
+    // Let's compute the actual tile from prop positions
+    // Props are in world coords, terrain is at local 0-512
+
+    // Find the approximate tile from first prop with valid position
+    static float computedTileX = -1;
+    static float computedTileZ = -1;
+
+    if (computedTileX < 0 && !mProps.empty())
+    {
+        // Use first prop to estimate tile origin
+        // Prop X / 512 gives tile number, then tile * 512 gives origin
+        for (const auto& prop : mProps)
+        {
+            if (prop.position.x != 0 || prop.position.z != 0)
+            {
+                computedTileX = std::floor(prop.position.x / GRID_SIZE) * GRID_SIZE;
+                computedTileZ = std::floor(prop.position.z / GRID_SIZE) * GRID_SIZE;
+                std::cout << "[RenderProp] Computed tile origin from props: " << computedTileX << ", " << computedTileZ << std::endl;
+                break;
+            }
+        }
+    }
+
+    for (const auto& prop : mProps)
+    {
+        if (!prop.loaded || !prop.render) continue;
+
+        glm::vec3 pos;
+        // Convert world coords to local coords using computed tile origin
+        pos.x = prop.position.x - computedTileX;
+        pos.y = prop.position.y;
+        // Flip Z axis to match terrain
+        pos.z = 512.0f - (prop.position.z - computedTileZ);
+
+        // Add world offset for multi-area support
+        pos += mWorldOffset;
+
+        if (firstRender && rendered < 3)
+        {
+            std::cout << "[RenderProp] " << prop.path << std::endl;
+            std::cout << "  Raw prop pos: " << prop.position.x << ", " << prop.position.y << ", " << prop.position.z << std::endl;
+            std::cout << "  Computed origin: " << computedTileX << ", " << computedTileZ << std::endl;
+            std::cout << "  Terrain bounds: " << mMinBounds.x << " to " << mMaxBounds.x << " (X), "
+                      << mMinBounds.z << " to " << mMaxBounds.z << " (Z)" << std::endl;
+            std::cout << "  Render pos: " << pos.x << ", " << pos.y << ", " << pos.z << std::endl;
+            std::cout << "  Scale: " << prop.scale << std::endl;
+        }
+
+        // Build model matrix: translate, rotate, scale
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, pos);
+
+        // Apply rotation from file
+        model = model * glm::mat4_cast(prop.rotation);
+
+        model = glm::scale(model, glm::vec3(prop.scale));
+
+        if (mGlobalRotation != 0.0f)
+        {
+            glm::mat4 areaRotation = glm::rotate(glm::mat4(1.0f), glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+            model = areaRotation * model;
+        }
+        prop.render->render(matView, matProj, model);
+        rendered++;
+    }
+
+    if (firstRender && rendered > 0)
+    {
+        std::cout << "[RenderProp] Total rendered: " << rendered << std::endl;
+        firstRender = false;
+    }
+}
+
+const Prop* AreaFile::getPropByID(uint32_t uniqueID) const
+{
+    auto it = mPropLookup.find(uniqueID);
+    if (it != mPropLookup.end() && it->second < mProps.size()) return &mProps[it->second];
+    return nullptr;
+}
+
+size_t AreaFile::getLoadedPropCount() const
+{
+    size_t count = 0;
+    for (const auto& prop : mProps) if (prop.loaded && prop.render) count++;
+    return count;
+}
+
+ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr& file)
+{
     ParsedArea result;
     result.file = file;
     if (!archive || !file) return result;
     result.path = file->getFullPath();
     size_t ext = result.path.rfind(L".area");
-    if (ext != std::wstring::npos && ext >= 5) {
+    if (ext != std::wstring::npos && ext >= 5)
+    {
         size_t dot = ext - 5;
-        if (result.path[dot] == L'.') {
+        if (result.path[dot] == L'.')
+        {
             int bx = 0, by = 0;
-            if (parseHexByte(result.path, dot + 1, bx) && parseHexByte(result.path, dot + 3, by)) {
+            if (parseHexByte(result.path, dot + 1, bx) && parseHexByte(result.path, dot + 3, by))
+            {
                 result.tileX = bx;
                 result.tileY = by;
             }
@@ -144,7 +536,8 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
     const uint8* end = base + content.size();
     const uint8* ptr = base;
     auto canRead = [&](size_t n) { return static_cast<size_t>(end - ptr) >= n; };
-    auto readU32 = [&]() -> uint32 {
+    auto readU32 = [&]() -> uint32
+    {
         uint32 v = static_cast<uint32>(ptr[0]) | (static_cast<uint32>(ptr[1]) << 8) |
                   (static_cast<uint32>(ptr[2]) << 16) | (static_cast<uint32>(ptr[3]) << 24);
         ptr += 4;
@@ -154,23 +547,27 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
     if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return result;
     readU32();
     std::vector<uint8> chnkData, propData, curtData;
-    while (canRead(8)) {
+    while (canRead(8))
+    {
         uint32 magic = readU32();
         uint32 size = readU32();
         if (!canRead(size)) break;
-        switch (magic) {
+        switch (magic)
+        {
             case AreaChunkID::CHNK: chnkData.resize(size); memcpy(chnkData.data(), ptr, size); break;
             case AreaChunkID::PROp: propData.resize(size); memcpy(propData.data(), ptr, size); break;
             case AreaChunkID::CURT: curtData.resize(size); memcpy(curtData.data(), ptr, size); break;
         }
         ptr += size;
     }
-    if (!propData.empty()) {
+    if (!propData.empty())
+    {
         std::unordered_map<uint32_t, size_t> lookup;
         ParsePropsChunk(propData.data(), propData.size(), result.props, lookup);
     }
     if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), result.curts);
-    if (chnkData.empty()) {
+    if (chnkData.empty())
+    {
         result.valid = true;
         result.minBounds = glm::vec3(0, 0, 0);
         result.maxBounds = glm::vec3(512, 50, 512);
@@ -182,7 +579,8 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
     uint32 lastIndex = 0;
     float totalH = 0.0f;
     uint32 validCount = 0;
-    while (static_cast<size_t>(cend - cptr) >= 4) {
+    while (static_cast<size_t>(cend - cptr) >= 4)
+    {
         uint32 cellInfo = static_cast<uint32>(cptr[0]) | (static_cast<uint32>(cptr[1]) << 8) |
                          (static_cast<uint32>(cptr[2]) << 16) | (static_cast<uint32>(cptr[3]) << 24);
         cptr += 4;
@@ -199,7 +597,8 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
         uint32 cellX = index % 16;
         uint32 cellY = index / 16;
         auto chunk = AreaChunkRender::parseChunkData(cellData, cellX, cellY);
-        if (chunk.valid) {
+        if (chunk.valid)
+        {
             totalH += chunk.avgHeight;
             validCount++;
             result.maxHeight = std::max(result.maxHeight, chunk.maxHeight);
@@ -213,266 +612,8 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
     result.valid = true;
     return result;
 }
-
-bool AreaFile::load() {
-    if (mContent.size() < 8) return false;
-    struct R {
-        const uint8* p; const uint8* e;
-        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
-        uint32 u32le() {
-            uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) |
-                      (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24);
-            p += 4; return v;
-        }
-        void bytes(void* out, size_t n) { memcpy(out, p, n); p += n; }
-        void skip(size_t n) { p += n; }
-    };
-    const uint8* base = mContent.data();
-    R r{ base, base + mContent.size() };
-    uint32 sig = r.u32le();
-    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return false;
-    r.u32le();
-    std::vector<uint8> chnkData, propData, curtData;
-    while (r.can(8)) {
-        uint32 magic = r.u32le();
-        uint32 size = r.u32le();
-        if (!r.can(size)) break;
-        switch (magic) {
-            case AreaChunkID::CHNK: chnkData.resize(size); r.bytes(chnkData.data(), size); break;
-            case AreaChunkID::PROp: propData.resize(size); r.bytes(propData.data(), size); break;
-            case AreaChunkID::CURT: curtData.resize(size); r.bytes(curtData.data(), size); break;
-            default: r.skip(size); break;
-        }
-    }
-    if (!propData.empty()) ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
-    if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
-    if (chnkData.empty()) { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); return true; }
-    mChunks.assign(256, nullptr);
-    R cr{ chnkData.data(), chnkData.data() + chnkData.size() };
-    uint32 validCount = 0; float totalH = 0.0f; uint32 lastIndex = 0;
-    while (cr.can(4)) {
-        uint32 cellInfo = cr.u32le();
-        uint32 idxDelta = (cellInfo >> 24) & 0xFF;
-        uint32 size = cellInfo & 0x00FFFFFF;
-        uint32 index = idxDelta + lastIndex;
-        lastIndex = index + 1;
-        if (index >= 256) break;
-        if (!cr.can(size)) break;
-        if (size < 4) { cr.skip(size); continue; }
-        std::vector<uint8> cellData(size);
-        cr.bytes(cellData.data(), size);
-        uint32 cellX = index % 16;
-        uint32 cellY = index / 16;
-        auto chunk = std::make_shared<AreaChunkRender>(cellData, cellX, cellY, mArchive);
-        mChunks[index] = chunk;
-        if (chunk && chunk->isFullyInitialized()) {
-            totalH += chunk->getAverageHeight();
-            validCount++;
-            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
-            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
-            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
-        }
-    }
-    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
-    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
-    return true;
-}
-
-bool AreaFile::loadFromParsed(ParsedArea&& parsed) {
-    mPath = parsed.path;
-    mTileX = parsed.tileX;
-    mTileY = parsed.tileY;
-    calculateWorldOffset();
-    mProps = std::move(parsed.props);
-    mCurts = std::move(parsed.curts);
-    mPropLookup.clear();
-    for (size_t i = 0; i < mProps.size(); i++) mPropLookup[mProps[i].uniqueID] = i;
-    mChunks.assign(256, nullptr);
-    float totalH = 0.0f; uint32 validCount = 0;
-    for (size_t i = 0; i < parsed.chunks.size() && i < 256; i++) {
-        if (!parsed.chunks[i].valid) continue;
-        auto chunk = std::make_shared<AreaChunkRender>(std::move(parsed.chunks[i]), mArchive);
-        mChunks[i] = chunk;
-        if (chunk && chunk->isFullyInitialized()) {
-            totalH += chunk->getAverageHeight();
-            validCount++;
-            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
-            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
-            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
-        }
-    }
-    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
-    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
-    return true;
-}
-
-void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk) {
-    glUseProgram(shaderProgram);
-    GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(shaderProgram, "projection");
-    if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &matView[0][0]);
-    if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, &matProj[0][0]);
-    EnsureFallbackTextures();
-    if (gLastTerrainProgram != shaderProgram) { AreaChunkRender::geometryInit(shaderProgram); gLastTerrainProgram = shaderProgram; }
-    glm::mat4 worldModel(1.0f);
-    worldModel = glm::translate(worldModel, mWorldOffset);
-    worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
-    const auto& u = AreaChunkRender::getUniforms();
-    if (u.model != static_cast<uint32>(-1)) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
-    if (u.baseColor != static_cast<uint32>(-1)) glUniform4f(u.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
-    for (auto& c : mChunks) {
-        if (!c || !c->isFullyInitialized()) continue;
-        c->loadTextures(mArchive);
-        GLint highlightLoc = glGetUniformLocation(shaderProgram, "highlightColor");
-        if (highlightLoc != -1) {
-            if (c == selectedChunk) glUniform4f(highlightLoc, 1.0f, 1.0f, 0.0f, 0.5f);
-            else glUniform4f(highlightLoc, 0.0f, 0.0f, 0.0f, 0.0f);
-        }
-        c->bindTextures(shaderProgram);
-        c->render();
-    }
-}
-
-bool AreaFile::loadProp(uint32_t uniqueID) {
-    auto it = mPropLookup.find(uniqueID);
-    if (it == mPropLookup.end() || it->second >= mProps.size()) return false;
-
-    Prop& prop = mProps[it->second];
-    if (prop.loaded) return true;
-    if (prop.loadRequested) return false;
-    prop.loadRequested = true;
-
-    if (prop.modelType == PropModelType::Unk_2 || prop.modelType == PropModelType::Unk_4) {
-        prop.loaded = true;
-        return true;
-    }
-
-    if (prop.path.empty()) {
-        prop.loaded = true;
-        return true;
-    }
-
-    if (!mArchive) {
-        std::cerr << "[Prop] No archive for prop " << uniqueID << std::endl;
-        return false;
-    }
-
-    std::string normalizedPath = NormalizePropPath(prop.path);
-
-    auto fileEntry = mArchive->findFileCached(normalizedPath);
-    if (!fileEntry) {
-        std::string pathWithExt = normalizedPath;
-        if (pathWithExt.find(".m3") == std::string::npos && pathWithExt.find(".M3") == std::string::npos) {
-            pathWithExt += ".m3";
-            fileEntry = mArchive->findFileCached(pathWithExt);
-        }
-    }
-
-    if (!fileEntry) {
-        fileEntry = mArchive->findFileByNameCached(normalizedPath);
-        if (!fileEntry) {
-            size_t lastSlash = normalizedPath.rfind('/');
-            if (lastSlash != std::string::npos) {
-                std::string filename = normalizedPath.substr(lastSlash + 1);
-                fileEntry = mArchive->findFileByNameCached(filename);
-                if (!fileEntry && filename.find(".m3") == std::string::npos) {
-                    fileEntry = mArchive->findFileByNameCached(filename + ".m3");
-                }
-            }
-        }
-    }
-
-    if (!fileEntry) {
-        std::cerr << "[Prop] Failed to find file for prop " << uniqueID << ": " << normalizedPath << std::endl;
-        prop.loaded = true;
-        return false;
-    }
-
-    std::cout << "[Prop] Found file for prop " << uniqueID << ": " << fileEntry->getFullPathNarrow() << std::endl;
-
-    std::vector<uint8_t> testBuffer;
-    if (!mArchive->getFileData(fileEntry, testBuffer)) {
-        std::cerr << "[Prop] Failed to read file data for prop " << uniqueID << std::endl;
-        prop.loaded = true;
-        return false;
-    }
-    std::cout << "[Prop] File buffer size: " << testBuffer.size() << " bytes" << std::endl;
-
-    if (testBuffer.size() >= 8) {
-        char sig[5] = {0};
-        memcpy(sig, testBuffer.data(), 4);
-        uint32_t version = *reinterpret_cast<uint32_t*>(testBuffer.data() + 4);
-        std::cout << "[Prop] File signature: " << sig << ", version: " << version << std::endl;
-    }
-
-    M3ModelData modelData = M3Loader::LoadFromFile(mArchive, fileEntry);
-    if (!modelData.success) {
-        std::cerr << "[Prop] Failed to load M3 for prop " << uniqueID << ": " << normalizedPath << " (file may be unsupported version)" << std::endl;
-        prop.loaded = true;
-        return false;
-    }
-
-    std::cout << "[Prop] Successfully loaded M3 for prop " << uniqueID << std::endl;
-
-    prop.render = std::make_shared<M3Render>(modelData, mArchive);
-    prop.render->setModelName(prop.path);
-    mPropRenderers[uniqueID] = prop.render;
-    prop.loaded = true;
-    return true;
-}
-
-void AreaFile::loadAllProps() {
-    std::cout << "[Prop] Loading all " << mProps.size() << " props..." << std::endl;
-    int loaded = 0;
-    int failed = 0;
-    for (auto& prop : mProps) {
-        if (loadProp(prop.uniqueID)) {
-            if (prop.render) loaded++;
-            else failed++;
-        } else {
-            failed++;
-        }
-    }
-    std::cout << "[Prop] Load complete. With render: " << loaded << ", Failed/skipped: " << failed << std::endl;
-}
-
-void AreaFile::loadPropsInView(const glm::vec3& cameraPos, float radius) {
-    float radiusSq = radius * radius;
-    for (auto& prop : mProps) {
-        if (prop.loaded) continue;
-        glm::vec3 propWorldPos = prop.position + mWorldOffset;
-        float distSq = glm::dot(propWorldPos - cameraPos, propWorldPos - cameraPos);
-        if (distSq <= radiusSq) loadProp(prop.uniqueID);
-    }
-}
-
-void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj) {
-    for (const auto& prop : mProps) {
-        if (!prop.loaded || !prop.render) continue;
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, prop.position + mWorldOffset);
-        model = model * glm::mat4_cast(prop.rotation);
-        model = glm::scale(model, glm::vec3(prop.scale));
-        if (mGlobalRotation != 0.0f) {
-            glm::mat4 areaRotation = glm::rotate(glm::mat4(1.0f), glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
-            model = areaRotation * model;
-        }
-        prop.render->render(matView, matProj, model);
-    }
-}
-
-const Prop* AreaFile::getPropByID(uint32_t uniqueID) const {
-    auto it = mPropLookup.find(uniqueID);
-    if (it != mPropLookup.end() && it->second < mProps.size()) return &mProps[it->second];
-    return nullptr;
-}
-
-size_t AreaFile::getLoadedPropCount() const {
-    size_t count = 0;
-    for (const auto& prop : mProps) if (prop.loaded && prop.render) count++;
-    return count;
-}
-void AreaChunkRender::loadTextures(const ArchivePtr& archive) {
+void AreaChunkRender::loadTextures(const ArchivePtr& archive)
+{
     if (mTexturesLoaded) return;
     auto& texMgr = TerrainTexture::Manager::Instance();
     texMgr.LoadWorldLayerTable(archive);
@@ -481,7 +622,8 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive) {
     else { uint8_t defaultBlend[4] = {255, 0, 0, 0}; mBlendMapTexture = texMgr.CreateBlendMapTexture(defaultBlend, 1, 1); }
     if (!mColorMap.empty()) mColorMapTextureGPU = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
     else if (!mColorMapDXT.empty()) mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
+    {
         uint32_t layerId = mWorldLayerIDs[i];
         if (layerId == 0) { mLayerDiffuse[i] = gFallbackWhite; mLayerNormal[i] = gFallbackNormal; mLayerScale[i] = 4.0f; continue; }
         const auto* cached = texMgr.GetLayerTexture(archive, layerId);
@@ -494,7 +636,8 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive) {
     mTexturesLoaded = true;
 }
 
-void AreaChunkRender::bindTextures(unsigned int program) const {
+void AreaChunkRender::bindTextures(unsigned int program) const
+{
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, mBlendMapTexture ? mBlendMapTexture : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "blendMap"), 0);
@@ -502,13 +645,15 @@ void AreaChunkRender::bindTextures(unsigned int program) const {
     glBindTexture(GL_TEXTURE_2D, mColorMapTextureGPU ? mColorMapTextureGPU : gFallbackWhite);
     glUniform1i(glGetUniformLocation(program, "colorMap"), 1);
     glUniform1i(glGetUniformLocation(program, "hasColorMap"), mColorMapTextureGPU ? 1 : 0);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
+    {
         glActiveTexture(GL_TEXTURE2 + i);
         glBindTexture(GL_TEXTURE_2D, mLayerDiffuse[i] ? mLayerDiffuse[i] : gFallbackWhite);
         const char* names[] = {"layer0", "layer1", "layer2", "layer3"};
         glUniform1i(glGetUniformLocation(program, names[i]), 2 + i);
     }
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
+    {
         glActiveTexture(GL_TEXTURE6 + i);
         glBindTexture(GL_TEXTURE_2D, mLayerNormal[i] ? mLayerNormal[i] : gFallbackNormal);
         const char* names[] = {"layer0Normal", "layer1Normal", "layer2Normal", "layer3Normal"};
@@ -522,12 +667,14 @@ void AreaChunkRender::bindTextures(unsigned int program) const {
     glActiveTexture(GL_TEXTURE0);
 }
 
-ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY) {
+ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY)
+{
     ParsedChunk result;
     result.cellX = cellX;
     result.cellY = cellY;
     if (cellData.size() < 4) return result;
-    struct R {
+    struct R
+    {
         const uint8* p; const uint8* e;
         bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
         uint32 u32le() { uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) | (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24); p += 4; return v; }
@@ -571,11 +718,13 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     if ((result.flags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
-    while (r.can(8)) {
+    while (r.can(8))
+    {
         uint32 chunkID = r.u32le();
         uint32 chunkSize = r.u32le();
         if (!r.can(chunkSize)) break;
-        switch (chunkID) {
+        switch (chunkID)
+        {
             case 0x504F5250: { uint32 propCount = chunkSize / 4; result.props.uniqueIDs.resize(propCount); for (uint32 i = 0; i < propCount; i++) result.props.uniqueIDs[i] = r.u32le(); break; }
             case 0x44727563: { result.curd.rawData.resize(chunkSize); for (uint32 i = 0; i < chunkSize; i++) result.curd.rawData[i] = r.u8(); break; }
             case 0x47744157: { if (chunkSize >= 4) { uint32 waterCount = r.u32le(); if (waterCount > 0 && waterCount < 1000) { result.waters.resize(waterCount); uint32 remainingBytes = chunkSize - 4; uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0; for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) { result.waters[i].rawData.resize(bytesPerWater); for (uint32 j = 0; j < bytesPerWater; j++) result.waters[i].rawData[j] = r.u8(); } result.hasWater = true; } } break; }
@@ -590,8 +739,10 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     result.vertices.resize(17 * 17);
-    for (int y = 0; y < 17; y++) {
-        for (int x = 0; x < 17; x++) {
+    for (int y = 0; y < 17; y++)
+    {
+        for (int x = 0; x < 17; x++)
+        {
             uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
@@ -612,8 +763,10 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
         }
     }
     if (validHeights > 0) result.avgHeight = totalHeight / static_cast<float>(validHeights);
-    for (int y = 0; y < 17; y++) {
-        for (int x = 0; x < 17; x++) {
+    for (int y = 0; y < 17; y++)
+    {
+        for (int x = 0; x < 17; x++)
+        {
             auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& vtx = result.vertices[py * 17 + px]; return glm::vec3(vtx.x, vtx.y, vtx.z); };
             glm::vec3 left = getPos(x - 1, y);
             glm::vec3 right = getPos(x + 1, y);
@@ -632,7 +785,8 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
 }
 
 AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
-    : mFlags(parsed.flags), mMinBounds(parsed.minBounds), mMaxBounds(parsed.maxBounds), mSplatTexture(0), mColorMapTexture(0) {
+    : mFlags(parsed.flags), mMinBounds(parsed.minBounds), mMaxBounds(parsed.maxBounds), mSplatTexture(0), mColorMapTexture(0)
+{
     mMaxHeight = parsed.maxHeight;
     mAverageHeight = parsed.avgHeight;
     for (int i = 0; i < 4; i++) { mWorldLayerIDs[i] = parsed.worldLayerIDs[i]; mZoneIds[i] = parsed.zoneIds[i]; mLayerScale[i] = 0.0f; }
@@ -659,10 +813,12 @@ AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
 }
 
 AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr)
-    : mChunkData(cellData), mFlags(0), mMinBounds(std::numeric_limits<float>::max()), mMaxBounds(std::numeric_limits<float>::lowest()), mSplatTexture(0), mColorMapTexture(0) {
+    : mChunkData(cellData), mFlags(0), mMinBounds(std::numeric_limits<float>::max()), mMaxBounds(std::numeric_limits<float>::lowest()), mSplatTexture(0), mColorMapTexture(0)
+{
     for (int i = 0; i < 4; ++i) mLayerScale[i] = 0.0f;
     if (cellData.size() < 4) return;
-    struct R {
+    struct R
+    {
         const uint8* p; const uint8* e;
         bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
         uint32 u32le() { uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) | (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24); p += 4; return v; }
@@ -707,11 +863,13 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     if ((mFlags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
     if ((mFlags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
     if ((mFlags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
-    while (r.can(8)) {
+    while (r.can(8))
+    {
         uint32 chunkID = r.u32le();
         uint32 chunkSize = r.u32le();
         if (!r.can(chunkSize)) break;
-        switch (chunkID) {
+        switch (chunkID)
+        {
             case 0x504F5250: { uint32 propCount = chunkSize / 4; mProps.uniqueIDs.resize(propCount); for (uint32 i = 0; i < propCount; i++) mProps.uniqueIDs[i] = r.u32le(); break; }
             case 0x44727563: { mCurd.rawData.resize(chunkSize); for (uint32 i = 0; i < chunkSize; i++) mCurd.rawData[i] = r.u8(); break; }
             case 0x47744157: { if (chunkSize >= 4) { uint32 waterCount = r.u32le(); if (waterCount > 0 && waterCount < 1000) { mWaters.resize(waterCount); uint32 remainingBytes = chunkSize - 4; uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0; for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) { mWaters[i].rawData.resize(bytesPerWater); for (uint32 j = 0; j < bytesPerWater; j++) mWaters[i].rawData[j] = r.u8(); } mHasWater = true; } } break; }
@@ -726,8 +884,10 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     mVertices.resize(17 * 17);
-    for (int y = 0; y < 17; y++) {
-        for (int x = 0; x < 17; x++) {
+    for (int y = 0; y < 17; y++)
+    {
+        for (int x = 0; x < 17; x++)
+        {
             uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
@@ -752,11 +912,15 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     uploadGPU();
 }
 
-void AreaChunkRender::uploadGPU() {
-    if (indices.empty()) {
+void AreaChunkRender::uploadGPU()
+{
+    if (indices.empty())
+    {
         indices.reserve(16 * 16 * 6);
-        for (uint32 y = 0; y < 16; y++) {
-            for (uint32 x = 0; x < 16; x++) {
+        for (uint32 y = 0; y < 16; y++)
+        {
+            for (uint32 x = 0; x < 16; x++)
+            {
                 uint32 tl = y * 17 + x;
                 uint32 tr = y * 17 + x + 1;
                 uint32 bl = (y + 1) * 17 + x;
@@ -790,7 +954,8 @@ void AreaChunkRender::uploadGPU() {
     mIndexCount = static_cast<int>(indices.size());
 }
 
-AreaChunkRender::~AreaChunkRender() {
+AreaChunkRender::~AreaChunkRender()
+{
     if (mSplatTexture != 0) glDeleteTextures(1, &mSplatTexture);
     if (mColorMapTexture != 0) glDeleteTextures(1, &mColorMapTexture);
     for (auto tex : mLayerTextures) if (tex != 0) glDeleteTextures(1, &tex);
@@ -801,16 +966,20 @@ AreaChunkRender::~AreaChunkRender() {
     if (mEBO) glDeleteBuffers(1, &mEBO);
 }
 
-void AreaChunkRender::render() {
+void AreaChunkRender::render()
+{
     if (!mVAO) return;
     glBindVertexArray(mVAO);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
 
-void AreaChunkRender::calcNormals() {
-    for (int y = 0; y < 17; y++) {
-        for (int x = 0; x < 17; x++) {
+void AreaChunkRender::calcNormals()
+{
+    for (int y = 0; y < 17; y++)
+    {
+        for (int x = 0; x < 17; x++)
+        {
             glm::vec3 normal(0.0f, 0.0f, 0.0f);
             auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& v = mVertices[py * 17 + px]; return glm::vec3(v.x, v.y, v.z); };
             glm::vec3 left = getPos(x - 1, y);
@@ -830,7 +999,8 @@ void AreaChunkRender::calcNormals() {
 void AreaChunkRender::calcTangentBitangent() {}
 void AreaChunkRender::extendBuffer() {}
 
-void AreaChunkRender::geometryInit(uint32 program) {
+void AreaChunkRender::geometryInit(uint32 program)
+{
     uniforms.colorTexture = glGetUniformLocation(program, "colorTexture");
     uniforms.alphaTexture = glGetUniformLocation(program, "alphaTexture");
     uniforms.hasColorMap = glGetUniformLocation(program, "hasColorMap");
@@ -839,7 +1009,8 @@ void AreaChunkRender::geometryInit(uint32 program) {
     uniforms.model = glGetUniformLocation(program, "model");
     uniforms.highlightColor = glGetUniformLocation(program, "highlightColor");
     uniforms.baseColor = glGetUniformLocation(program, "baseColor");
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i)
+    {
         std::string t = "textures[" + std::to_string(i) + "]";
         std::string n = "normalTextures[" + std::to_string(i) + "]";
         uniforms.textures[i] = glGetUniformLocation(program, t.c_str());

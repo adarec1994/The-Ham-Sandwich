@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <functional>
 #include <glm/glm.hpp>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
@@ -313,7 +314,10 @@ public:
     void renderProps(const Matrix& matView, const Matrix& matProj);
     bool loadProp(uint32_t uniqueID);
     void loadAllProps();
+    void loadAllPropsWithProgress(std::function<void(size_t, size_t)> progressCallback);
+    void loadAllPropsAsync();
     void loadPropsInView(const glm::vec3& cameraPos, float radius);
+    void updatePropLoading();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
     [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }

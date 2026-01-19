@@ -16,6 +16,16 @@
 
 #include <stb_image_write.h>
 
+extern void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale);
+
+static std::string GetFilenameFromPath(const std::string& path)
+{
+    size_t lastSlash = path.find_last_of("/\\");
+    if (lastSlash != std::string::npos)
+        return path.substr(lastSlash + 1);
+    return path;
+}
+
 namespace UI_AreaInfo
 {
     static bool sShowWindow = true;
@@ -547,12 +557,20 @@ namespace UI_AreaInfo
 
                 if (totalProps > 0 && ImGui::TreeNode("Prop Details"))
                 {
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Double-click to focus camera");
+                    ImGui::Spacing();
+
                     int displayCount = 0;
-                    const int maxDisplay = 50;
+                    const int maxDisplay = 100;
+                    int globalIndex = 0;
+                    static int sSelectedPropIndex = -1;
+
                     for (const auto& a : gLoadedAreas)
                     {
                         if (!a) continue;
                         const auto& props = a->getProps();
+                        glm::vec3 areaOffset = a->getWorldOffset();
+
                         for (size_t i = 0; i < props.size() && displayCount < maxDisplay; i++)
                         {
                             const auto& prop = props[i];
@@ -564,20 +582,48 @@ namespace UI_AreaInfo
                             else
                                 color = ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
 
-                            ImGui::PushStyleColor(ImGuiCol_Text, color);
-                            ImGui::Text("[%u] %s", prop.uniqueID, prop.path.empty() ? "(no path)" : prop.path.c_str());
+                            bool isSelected = (sSelectedPropIndex == globalIndex);
+                            if (isSelected)
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+                            else
+                                ImGui::PushStyleColor(ImGuiCol_Text, color);
+
+                            std::string filename = GetFilenameFromPath(prop.path);
+                            if (filename.empty()) filename = "(no path)";
+
+                            char label[256];
+                            snprintf(label, sizeof(label), "[%u] %s##prop%d", prop.uniqueID, filename.c_str(), globalIndex);
+
+                            if (ImGui::Selectable(label, isSelected, ImGuiSelectableFlags_AllowDoubleClick))
+                            {
+                                sSelectedPropIndex = globalIndex;
+
+                                if (ImGui::IsMouseDoubleClicked(0))
+                                {
+                                    // Props are in world coords, camera uses rendering coords
+                                    // areaOffset already accounts for this in the UI display
+                                    glm::vec3 worldPos = prop.position + areaOffset;
+                                    SnapCameraToProp(state, worldPos, prop.scale);
+                                }
+                            }
+
                             ImGui::PopStyleColor();
 
                             if (ImGui::IsItemHovered())
                             {
                                 ImGui::BeginTooltip();
-                                ImGui::Text("Position: %.1f, %.1f, %.1f", prop.position.x, prop.position.y, prop.position.z);
+                                ImGui::Text("Full Path: %s", prop.path.c_str());
+                                ImGui::Separator();
+                                glm::vec3 worldPos = prop.position + areaOffset;
+                                ImGui::Text("Local Pos: %.1f, %.1f, %.1f", prop.position.x, prop.position.y, prop.position.z);
+                                ImGui::Text("World Pos: %.1f, %.1f, %.1f", worldPos.x, worldPos.y, worldPos.z);
                                 ImGui::Text("Scale: %.3f", prop.scale);
                                 ImGui::Text("ModelType: %d", static_cast<int>(prop.modelType));
                                 ImGui::Text("Loaded: %s, Has Render: %s", prop.loaded ? "Yes" : "No", prop.render ? "Yes" : "No");
                                 ImGui::EndTooltip();
                             }
                             displayCount++;
+                            globalIndex++;
                         }
                     }
                     if (totalProps > maxDisplay)

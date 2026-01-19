@@ -281,6 +281,13 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
                 if (area)
                     area->render(view, projection, prog, gSelectedChunk);
             }
+
+            // Render props after terrain
+            for (const auto& area : gLoadedAreas)
+            {
+                if (area)
+                    area->renderProps(view, projection);
+            }
         }
 
         if (gSelectedChunk && gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))

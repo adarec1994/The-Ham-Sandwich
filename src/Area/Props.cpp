@@ -1,5 +1,11 @@
 #include "Props.h"
+#include "../Archive.h"
+#include "../models/M3Loader.h"
+#include "../models/M3LoaderV95.h"
+#include "../models/M3Render.h"
 #include <cstring>
+#include <algorithm>
+#include <iostream>
 
 constexpr size_t PROP_ENTRY_SIZE = 104;
 
@@ -155,4 +161,445 @@ void ParseCurtsChunk(const uint8_t* data, size_t size, std::vector<CurtData>& ou
 
         outCurts.push_back(std::move(curt));
     }
+}
+
+static std::string NormalizePath(const std::string& path)
+{
+    std::string result = path;
+    for (char& c : result)
+    {
+        if (c == '\\') c = '/';
+        if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+    }
+    while (!result.empty() && result[0] == '/')
+        result.erase(0, 1);
+    return result;
+}
+
+PropLoader& PropLoader::Instance()
+{
+    static PropLoader instance;
+    return instance;
+}
+
+PropLoader::~PropLoader()
+{
+    Shutdown();
+}
+
+void PropLoader::Initialize(size_t numThreads)
+{
+    if (mRunning) return;
+
+    if (numThreads == 0)
+        numThreads = std::max(1u, std::thread::hardware_concurrency() - 1);
+
+    mRunning = true;
+    mWorkers.reserve(numThreads);
+
+    for (size_t i = 0; i < numThreads; ++i)
+        mWorkers.emplace_back(&PropLoader::WorkerThread, this);
+}
+
+void PropLoader::Shutdown()
+{
+    {
+        std::lock_guard<std::mutex> lock(mWorkMutex);
+        mRunning = false;
+    }
+    mWorkCondition.notify_all();
+
+    for (auto& worker : mWorkers)
+    {
+        if (worker.joinable())
+            worker.join();
+    }
+    mWorkers.clear();
+
+    std::lock_guard<std::mutex> uploadLock(mUploadMutex);
+    while (!mPendingUploads.empty())
+    {
+        auto& upload = mPendingUploads.front();
+        delete upload.modelData;
+        mPendingUploads.pop();
+    }
+}
+
+void PropLoader::SetArchive(const ArchivePtr& archive)
+{
+    std::lock_guard<std::mutex> lock(mFileCacheMutex);
+    mArchive = archive;
+    mFileCache.clear();
+}
+
+void PropLoader::ClearCache()
+{
+    std::lock_guard<std::mutex> lock(mCacheMutex);
+    mModelCache.clear();
+
+    std::lock_guard<std::mutex> fileLock(mFileCacheMutex);
+    mFileCache.clear();
+}
+
+std::shared_ptr<M3Render> PropLoader::GetCachedModel(const std::string& path)
+{
+    std::string normalized = NormalizePath(path);
+    std::lock_guard<std::mutex> lock(mCacheMutex);
+    auto it = mModelCache.find(normalized);
+    if (it != mModelCache.end() && it->second.valid)
+        return it->second.render;
+    return nullptr;
+}
+
+void PropLoader::CacheModel(const std::string& path, std::shared_ptr<M3Render> render)
+{
+    std::string normalized = NormalizePath(path);
+    std::lock_guard<std::mutex> lock(mCacheMutex);
+    CachedModel cached;
+    cached.render = render;
+    cached.valid = true;
+    mModelCache[normalized] = cached;
+}
+
+size_t PropLoader::GetCacheSize() const
+{
+    return mModelCache.size();
+}
+
+FileEntryPtr PropLoader::FindPropFile(const std::string& path)
+{
+    if (!mArchive) return nullptr;
+
+    std::string normalized = NormalizePath(path);
+
+    {
+        std::lock_guard<std::mutex> lock(mFileCacheMutex);
+        auto it = mFileCache.find(normalized);
+        if (it != mFileCache.end())
+            return it->second;
+    }
+
+    FileEntryPtr fileEntry = mArchive->findFileCached(normalized);
+
+    if (!fileEntry)
+    {
+        std::string withExt = normalized;
+        if (withExt.find(".m3") == std::string::npos)
+        {
+            withExt += ".m3";
+            fileEntry = mArchive->findFileCached(withExt);
+        }
+    }
+
+    if (!fileEntry)
+    {
+        fileEntry = mArchive->findFileByNameCached(normalized);
+        if (!fileEntry)
+        {
+            size_t lastSlash = normalized.rfind('/');
+            if (lastSlash != std::string::npos)
+            {
+                std::string filename = normalized.substr(lastSlash + 1);
+                fileEntry = mArchive->findFileByNameCached(filename);
+                if (!fileEntry && filename.find(".m3") == std::string::npos)
+                    fileEntry = mArchive->findFileByNameCached(filename + ".m3");
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mFileCacheMutex);
+        mFileCache[normalized] = fileEntry;
+    }
+
+    return fileEntry;
+}
+
+void PropLoader::QueueProp(Prop* prop)
+{
+    if (!mRunning)
+        Initialize();
+
+    if (!prop || prop->loaded || prop->loadRequested)
+        return;
+
+    if (prop->modelType == PropModelType::Unk_2 || prop->modelType == PropModelType::Unk_4)
+    {
+        prop->loaded = true;
+        return;
+    }
+
+    if (prop->path.empty())
+    {
+        prop->loaded = true;
+        return;
+    }
+
+    std::string normalized = NormalizePath(prop->path);
+    auto cached = GetCachedModel(normalized);
+    if (cached)
+    {
+        prop->render = cached;
+        prop->loaded = true;
+        return;
+    }
+
+    prop->loadRequested = true;
+    mPendingCount++;
+
+    {
+        std::lock_guard<std::mutex> lock(mWorkMutex);
+        mWorkQueue.push(prop);
+    }
+    mWorkCondition.notify_one();
+}
+
+void PropLoader::QueueProps(std::vector<Prop*>& props)
+{
+    // Auto-initialize if not already running
+    if (!mRunning)
+    {
+        std::cout << "[PropLoader] Auto-initializing..." << std::endl;
+        Initialize();
+    }
+
+    std::vector<Prop*> toQueue;
+    toQueue.reserve(props.size());
+
+    for (Prop* prop : props)
+    {
+        if (!prop || prop->loaded || prop->loadRequested)
+            continue;
+
+        if (prop->modelType == PropModelType::Unk_2 || prop->modelType == PropModelType::Unk_4)
+        {
+            prop->loaded = true;
+            continue;
+        }
+
+        if (prop->path.empty())
+        {
+            prop->loaded = true;
+            continue;
+        }
+
+        std::string normalized = NormalizePath(prop->path);
+        auto cached = GetCachedModel(normalized);
+        if (cached)
+        {
+            prop->render = cached;
+            prop->loaded = true;
+            continue;
+        }
+
+        prop->loadRequested = true;
+        toQueue.push_back(prop);
+    }
+
+    if (toQueue.empty()) return;
+
+    mPendingCount += toQueue.size();
+
+    {
+        std::lock_guard<std::mutex> lock(mWorkMutex);
+        for (Prop* prop : toQueue)
+            mWorkQueue.push(prop);
+    }
+    mWorkCondition.notify_all();
+}
+
+PropLoadResult PropLoader::LoadPropData(Prop* prop)
+{
+    PropLoadResult result;
+    result.uniqueID = prop->uniqueID;
+    result.path = prop->path;
+
+    std::string normalized = NormalizePath(prop->path);
+
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        auto it = mModelCache.find(normalized);
+        if (it != mModelCache.end())
+        {
+            result.fromCache = true;
+            result.success = it->second.valid;
+            return result;
+        }
+    }
+
+    FileEntryPtr fileEntry = FindPropFile(prop->path);
+    if (!fileEntry)
+    {
+        result.success = false;
+        return result;
+    }
+
+    std::vector<uint8_t> buffer;
+    if (!mArchive->getFileData(fileEntry, buffer) || buffer.empty())
+    {
+        result.success = false;
+        return result;
+    }
+
+    M3ModelData* modelData = new M3ModelData();
+
+    if (buffer.size() >= 8)
+    {
+        uint32_t version = 0;
+        std::memcpy(&version, buffer.data() + 4, sizeof(version));
+        if (version >= 90 && version < 100)
+            *modelData = M3LoaderV95::Load(buffer);
+        else
+            *modelData = M3Loader::Load(buffer);
+    }
+    else
+    {
+        *modelData = M3Loader::Load(buffer);
+    }
+
+    if (!modelData->success)
+    {
+        delete modelData;
+        result.success = false;
+        return result;
+    }
+
+    result.modelData = modelData;
+    result.success = true;
+    return result;
+}
+
+void PropLoader::WorkerThread()
+{
+    while (true)
+    {
+        Prop* prop = nullptr;
+
+        {
+            std::unique_lock<std::mutex> lock(mWorkMutex);
+            mWorkCondition.wait(lock, [this]
+            {
+                return !mWorkQueue.empty() || !mRunning;
+            });
+
+            if (!mRunning && mWorkQueue.empty())
+                return;
+
+            if (mWorkQueue.empty())
+                continue;
+
+            prop = mWorkQueue.front();
+            mWorkQueue.pop();
+        }
+
+        if (!prop) continue;
+
+        PropLoadResult result = LoadPropData(prop);
+
+        if (result.fromCache)
+        {
+            std::lock_guard<std::mutex> lock(mCacheMutex);
+            std::string normalized = NormalizePath(prop->path);
+            auto it = mModelCache.find(normalized);
+            if (it != mModelCache.end() && it->second.valid)
+            {
+                prop->render = it->second.render;
+                prop->loaded = true;
+            }
+            else
+            {
+                prop->loaded = true;
+            }
+            mPendingCount--;
+            continue;
+        }
+
+        if (result.success && result.modelData)
+        {
+            PendingUpload upload;
+            upload.prop = prop;
+            upload.modelData = result.modelData;
+            upload.path = result.path;
+
+            std::lock_guard<std::mutex> lock(mUploadMutex);
+            mPendingUploads.push(upload);
+        }
+        else
+        {
+            prop->loaded = true;
+            mPendingCount--;
+        }
+    }
+}
+
+void PropLoader::ProcessGPUUploads(int maxPerFrame)
+{
+    int processed = 0;
+
+    while (processed < maxPerFrame)
+    {
+        PendingUpload upload;
+
+        {
+            std::lock_guard<std::mutex> lock(mUploadMutex);
+            if (mPendingUploads.empty())
+                break;
+
+            upload = mPendingUploads.front();
+            mPendingUploads.pop();
+        }
+
+        if (!upload.prop || !upload.modelData)
+        {
+            delete upload.modelData;
+            mPendingCount--;
+            continue;
+        }
+
+        std::string normalized = NormalizePath(upload.path);
+
+        std::shared_ptr<M3Render> existingRender;
+        {
+            std::lock_guard<std::mutex> lock(mCacheMutex);
+            auto it = mModelCache.find(normalized);
+            if (it != mModelCache.end() && it->second.valid)
+                existingRender = it->second.render;
+        }
+
+        if (existingRender)
+        {
+            upload.prop->render = existingRender;
+            upload.prop->loaded = true;
+            delete upload.modelData;
+            mPendingCount--;
+            processed++;
+            continue;
+        }
+
+        // Create M3Render without textures for faster loading
+        M3ModelData dataNoTex = *upload.modelData;
+        dataNoTex.textures.clear();
+
+        auto render = std::make_shared<M3Render>(dataNoTex, mArchive);
+        render->setModelName(upload.path);
+
+        CacheModel(upload.path, render);
+
+        upload.prop->render = render;
+        upload.prop->loaded = true;
+
+        delete upload.modelData;
+        mPendingCount--;
+        processed++;
+    }
+}
+
+bool PropLoader::HasPendingWork() const
+{
+    return mPendingCount > 0;
+}
+
+size_t PropLoader::GetPendingCount() const
+{
+    return mPendingCount;
 }
