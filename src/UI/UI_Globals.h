@@ -59,3 +59,16 @@ extern std::vector<DumpEntry> gPendingDumpFiles;
 
 void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& outputPath);
 void ProcessDumping();
+
+struct ExtractContext {
+    bool showDialog = false;
+    bool isFolder = false;
+    ArchivePtr arc;
+    std::shared_ptr<FileEntry> file;
+    IFileSystemEntryPtr folder;
+    std::string itemName;
+};
+extern ExtractContext gExtractContext;
+
+void StartExtractSingle(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& outputPath);
+void StartExtractFolder(const ArchivePtr& arc, const IFileSystemEntryPtr& folder, const std::string& outputPath);

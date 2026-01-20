@@ -114,6 +114,8 @@ static void RenderEntryRecursive_Impl(
         const float current_w = indent_px + text_w + 50.0f;
         if (current_w > max_width) max_width = current_w;
 
+        ImGui::PushID(static_cast<const void*>(entry.get()));
+
         if (const bool open = ImGui::TreeNode(name.c_str()); open)
         {
             const auto& children = entry->getChildren();
@@ -146,6 +148,8 @@ static void RenderEntryRecursive_Impl(
                     const float f_current_w = f_indent_px + f_text_w + 50.0f;
                     if (f_current_w > max_width) max_width = f_current_w;
 
+                    ImGui::PushID(static_cast<const void*>(f.get()));
+
                     if (ImGui::Selectable(fname.c_str()))
                     {
                         if (EndsWithNoCase(fname, ".area"))
@@ -169,11 +173,46 @@ static void RenderEntryRecursive_Impl(
                                 UI_Tables::OpenTblFile(state, currentArc, fileEntry);
                         }
                     }
+
+                    if (ImGui::BeginPopupContextItem("FileContextMenu"))
+                    {
+                        if (ImGui::MenuItem("Extract..."))
+                        {
+                            if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(f); fileEntry && currentArc)
+                            {
+                                gExtractContext.showDialog = true;
+                                gExtractContext.isFolder = false;
+                                gExtractContext.arc = currentArc;
+                                gExtractContext.file = fileEntry;
+                                gExtractContext.folder = nullptr;
+                                gExtractContext.itemName = fname;
+                            }
+                        }
+                        ImGui::EndPopup();
+                    }
+
+                    ImGui::PopID();
                 }
             }
 
             ImGui::TreePop();
         }
+
+        if (ImGui::BeginPopupContextItem("FolderContextMenu"))
+        {
+            if (ImGui::MenuItem("Extract Folder..."))
+            {
+                gExtractContext.showDialog = true;
+                gExtractContext.isFolder = true;
+                gExtractContext.arc = currentArc;
+                gExtractContext.file = nullptr;
+                gExtractContext.folder = entry;
+                gExtractContext.itemName = name;
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopID();
     }
     else
     {
@@ -182,6 +221,8 @@ static void RenderEntryRecursive_Impl(
         const float text_w = ImGui::CalcTextSize(name.c_str()).x;
         const float current_w = indent_px + text_w + 50.0f;
         if (current_w > max_width) max_width = current_w;
+
+        ImGui::PushID(static_cast<const void*>(entry.get()));
 
         if (ImGui::Selectable(name.c_str()))
         {
@@ -213,6 +254,25 @@ static void RenderEntryRecursive_Impl(
                     UI_Tables::OpenTblFile(state, currentArc, fileEntry);
             }
         }
+
+        if (ImGui::BeginPopupContextItem("FileContextMenu"))
+        {
+            if (ImGui::MenuItem("Extract..."))
+            {
+                if (const auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry); fileEntry && currentArc)
+                {
+                    gExtractContext.showDialog = true;
+                    gExtractContext.isFolder = false;
+                    gExtractContext.arc = currentArc;
+                    gExtractContext.file = fileEntry;
+                    gExtractContext.folder = nullptr;
+                    gExtractContext.itemName = name;
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopID();
     }
 }
 

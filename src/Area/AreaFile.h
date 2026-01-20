@@ -336,8 +336,17 @@ public:
     static constexpr int WORLD_GRID_ORIGIN = 64;
     static const float GRID_SIZE;
 
-    void rotate90() { mGlobalRotation += 90.0f; }
+    void rotate90() {
+        mGlobalRotation += 90.0f;
+        if (mGlobalRotation >= 360.0f) mGlobalRotation -= 360.0f;
+    }
+    void rotate90CCW() {
+        mGlobalRotation -= 90.0f;
+        if (mGlobalRotation < 0.0f) mGlobalRotation += 360.0f;
+    }
     [[nodiscard]] float getRotation() const { return mGlobalRotation; }
+
+    void printRotationDebug() const;
 
     [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }
     [[nodiscard]] const std::vector<Prop>& getProps() const { return mProps; }

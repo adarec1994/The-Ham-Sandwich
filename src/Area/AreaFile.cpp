@@ -419,76 +419,13 @@ void AreaFile::updatePropLoading()
 
 void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
 {
-    static bool debugPrinted = false;
-    int rendered = 0;
-
-    // Print debug info once
-    if (!debugPrinted && !mProps.empty())
-    {
-        std::cout << "[PropDebug] ===== COORDINATE ANALYSIS =====" << std::endl;
-        std::cout << "[PropDebug] Tile from filename: " << mTileX << ", " << mTileY << std::endl;
-        std::cout << "[PropDebug] World offset: " << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << std::endl;
-        std::cout << "[PropDebug] Terrain bounds: (" << mMinBounds.x << ", " << mMinBounds.y << ", " << mMinBounds.z << ") to ("
-                  << mMaxBounds.x << ", " << mMaxBounds.y << ", " << mMaxBounds.z << ")" << std::endl;
-
-        // Analyze prop positions
-        float minPropX = std::numeric_limits<float>::max();
-        float maxPropX = std::numeric_limits<float>::lowest();
-        float minPropZ = std::numeric_limits<float>::max();
-        float maxPropZ = std::numeric_limits<float>::lowest();
-        float minPropY = std::numeric_limits<float>::max();
-        float maxPropY = std::numeric_limits<float>::lowest();
-
-        for (const auto& prop : mProps)
-        {
-            minPropX = std::min(minPropX, prop.position.x);
-            maxPropX = std::max(maxPropX, prop.position.x);
-            minPropY = std::min(minPropY, prop.position.y);
-            maxPropY = std::max(maxPropY, prop.position.y);
-            minPropZ = std::min(minPropZ, prop.position.z);
-            maxPropZ = std::max(maxPropZ, prop.position.z);
-        }
-
-        std::cout << "[PropDebug] Prop position ranges:" << std::endl;
-        std::cout << "[PropDebug]   X: " << minPropX << " to " << maxPropX << " (span: " << (maxPropX - minPropX) << ")" << std::endl;
-        std::cout << "[PropDebug]   Y: " << minPropY << " to " << maxPropY << " (span: " << (maxPropY - minPropY) << ")" << std::endl;
-        std::cout << "[PropDebug]   Z: " << minPropZ << " to " << maxPropZ << " (span: " << (maxPropZ - minPropZ) << ")" << std::endl;
-
-        // Show first few props
-        int shown = 0;
-        for (const auto& prop : mProps)
-        {
-            if (shown >= 5) break;
-            std::cout << "[PropDebug] Prop[" << shown << "]: pos=(" << prop.position.x << ", " << prop.position.y << ", " << prop.position.z
-                      << ") scale=" << prop.scale << " path=" << prop.path << std::endl;
-            shown++;
-        }
-
-        debugPrinted = true;
-    }
-
-    static int debugCount = 0;
-
     for (const auto& prop : mProps)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        // Direct positioning - terrain now uses normal coordinates
         glm::vec3 pos = prop.position;
-
-        // Add world offset for multi-tile support
         pos += mWorldOffset;
 
-        // Debug: print first few with rotation info
-        if (debugCount < 5 && !prop.path.empty())
-        {
-            std::cout << "[PropRender] " << prop.path.substr(prop.path.rfind('\\') + 1)
-                      << " pos=(" << pos.x << ", " << pos.y << ", " << pos.z << ")"
-                      << " scale=" << prop.scale << std::endl;
-            debugCount++;
-        }
-
-        // Build model matrix
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, pos);
         model = model * glm::mat4_cast(prop.rotation);
@@ -501,15 +438,6 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
         }
 
         prop.render->render(matView, matProj, model);
-        rendered++;
-    }
-
-    // Print render count once
-    static bool countPrinted = false;
-    if (!countPrinted && rendered > 0)
-    {
-        std::cout << "[PropDebug] Rendered " << rendered << " props" << std::endl;
-        countPrinted = true;
     }
 }
 
@@ -752,8 +680,8 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     if (result.blendMap.empty() && result.blendMapDXT.empty()) { result.blendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.blendMap[i * 4 + 0] = 255; result.blendMap[i * 4 + 1] = 0; result.blendMap[i * 4 + 2] = 0; result.blendMap[i * 4 + 3] = 0; } }
     if (result.colorMap.empty() && result.colorMapDXT.empty()) { result.colorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.colorMap[i * 4 + 0] = 128; result.colorMap[i * 4 + 1] = 128; result.colorMap[i * 4 + 2] = 128; result.colorMap[i * 4 + 3] = 255; } }
     if (!hasHeightmap) return result;
-    float baseX = static_cast<float>(cellX) * 32.0f;
-    float baseZ = static_cast<float>(cellY) * 32.0f;
+    float baseX = static_cast<float>(cellY) * 32.0f;
+    float baseZ = static_cast<float>(cellX) * 32.0f;
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     result.vertices.resize(17 * 17);
@@ -761,14 +689,14 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     {
         for (int x = 0; x < 17; x++)
         {
-            uint16 h = heightmap[y * 19 + x] & 0x7FFF;
+            uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
-            v.u = static_cast<float>(x) / 16.0f;
-            v.v = static_cast<float>(y) / 16.0f;
+            v.u = static_cast<float>(y) / 16.0f;
+            v.v = static_cast<float>(x) / 16.0f;
             v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
             v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > result.maxHeight) result.maxHeight = height;
@@ -897,8 +825,8 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     if (mBlendMap.empty() && mBlendMapDXT.empty()) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mBlendMap[i * 4 + 0] = 255; mBlendMap[i * 4 + 1] = 0; mBlendMap[i * 4 + 2] = 0; mBlendMap[i * 4 + 3] = 0; } }
     if (mColorMap.empty() && mColorMapDXT.empty()) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mColorMap[i * 4 + 0] = 128; mColorMap[i * 4 + 1] = 128; mColorMap[i * 4 + 2] = 128; mColorMap[i * 4 + 3] = 255; } }
     if (!hasHeightmap) return;
-    float baseX = static_cast<float>(cellX) * 32.0f;
-    float baseZ = static_cast<float>(cellY) * 32.0f;
+    float baseX = static_cast<float>(cellY) * 32.0f;
+    float baseZ = static_cast<float>(cellX) * 32.0f;
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     mVertices.resize(17 * 17);
@@ -906,14 +834,14 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     {
         for (int x = 0; x < 17; x++)
         {
-            uint16 h = heightmap[y * 19 + x] & 0x7FFF;
+            uint16 h = heightmap[x * 19 + y] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
-            v.u = static_cast<float>(x) / 16.0f;
-            v.v = static_cast<float>(y) / 16.0f;
+            v.u = static_cast<float>(y) / 16.0f;
+            v.v = static_cast<float>(x) / 16.0f;
             v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
             v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > mMaxHeight) mMaxHeight = height;

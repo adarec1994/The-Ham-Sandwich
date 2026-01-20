@@ -284,3 +284,102 @@ void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& ou
 void ProcessDumping()
 {
 }
+
+ExtractContext gExtractContext;
+
+void StartExtractSingle(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& outputPath)
+{
+    if (!arc || !file || outputPath.empty()) return;
+
+    std::vector<uint8_t> data;
+    arc->getFileData(file, data);
+
+    if (data.empty()) return;
+
+    std::string fileName = wstring_to_utf8(file->getEntryName());
+    std::filesystem::path outPath = std::filesystem::path(outputPath) / fileName;
+
+    try
+    {
+        std::ofstream out(outPath, std::ios::binary);
+        if (out)
+        {
+            out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
+static void CollectFolderFilesRecursive(const ArchivePtr& arc, const IFileSystemEntryPtr& entry,
+                                         const std::wstring& currentPath, std::vector<DumpEntry>& outFiles)
+{
+    if (!entry) return;
+
+    if (entry->isDirectory())
+    {
+        std::wstring dirPath = currentPath;
+        if (!entry->getEntryName().empty())
+        {
+            if (!dirPath.empty()) dirPath += L"/";
+            dirPath += entry->getEntryName();
+        }
+
+        for (const auto& child : entry->getChildren())
+        {
+            CollectFolderFilesRecursive(arc, child, dirPath, outFiles);
+        }
+    }
+    else
+    {
+        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(entry);
+        if (fileEntry)
+        {
+            std::wstring filePath = currentPath;
+            if (!filePath.empty()) filePath += L"/";
+            filePath += entry->getEntryName();
+
+            outFiles.push_back({arc, fileEntry, filePath});
+        }
+    }
+}
+
+void StartExtractFolder(const ArchivePtr& arc, const IFileSystemEntryPtr& folder, const std::string& outputPath)
+{
+    if (!arc || !folder || !folder->isDirectory() || outputPath.empty()) return;
+
+    std::vector<DumpEntry> filesToExtract;
+    CollectFolderFilesRecursive(arc, folder, L"", filesToExtract);
+
+    if (filesToExtract.empty()) return;
+
+    std::string folderName = wstring_to_utf8(folder->getEntryName());
+    std::filesystem::path basePath = std::filesystem::path(outputPath) / folderName;
+
+    for (const auto& entry : filesToExtract)
+    {
+        std::string relPath = wstring_to_utf8(entry.relativePath);
+        std::filesystem::path outPath = basePath / relPath;
+
+        try
+        {
+            std::filesystem::create_directories(outPath.parent_path());
+
+            std::vector<uint8_t> data;
+            entry.arc->getFileData(entry.file, data);
+
+            if (!data.empty())
+            {
+                std::ofstream out(outPath, std::ios::binary);
+                if (out)
+                {
+                    out.write(reinterpret_cast<const char*>(data.data()), data.size());
+                }
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+}

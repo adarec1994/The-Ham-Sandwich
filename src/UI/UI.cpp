@@ -152,6 +152,47 @@ static void RenderDumpFolderDialog(AppState& state)
     }
 }
 
+static void RenderExtractDialog(AppState& state)
+{
+    if (gExtractContext.showDialog)
+    {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        config.flags = ImGuiFileDialogFlags_Modal;
+
+        std::string title = gExtractContext.isFolder
+            ? "Extract Folder: " + gExtractContext.itemName
+            : "Extract File: " + gExtractContext.itemName;
+
+        ImGuiFileDialog::Instance()->OpenDialog("ExtractDlg", title.c_str(), nullptr, config);
+        gExtractContext.showDialog = false;
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("ExtractDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+    {
+        if (ImGuiFileDialog::Instance()->IsOk())
+        {
+            std::string outputPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+            if (gExtractContext.isFolder && gExtractContext.folder && gExtractContext.arc)
+            {
+                StartExtractFolder(gExtractContext.arc, gExtractContext.folder, outputPath);
+            }
+            else if (!gExtractContext.isFolder && gExtractContext.file && gExtractContext.arc)
+            {
+                StartExtractSingle(gExtractContext.arc, gExtractContext.file, outputPath);
+            }
+        }
+
+        gExtractContext.arc = nullptr;
+        gExtractContext.file = nullptr;
+        gExtractContext.folder = nullptr;
+        gExtractContext.itemName.clear();
+
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
 static void RenderDumpOverlay()
 {
     if (!gIsDumping) return;
@@ -473,6 +514,7 @@ void RenderUI(AppState& state)
     UI_ChunkTextures::Draw(state);
 
     RenderDumpFolderDialog(state);
+    RenderExtractDialog(state);
     RenderDumpOverlay();
     RenderLoadingOverlay();
 }
