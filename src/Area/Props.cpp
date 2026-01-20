@@ -72,13 +72,15 @@ void ParsePropsChunk(const uint8_t* data, size_t size, std::vector<Prop>& outPro
         std::memcpy(&qy, propPtr + offset, 4); offset += 4;
         std::memcpy(&qz, propPtr + offset, 4); offset += 4;
         std::memcpy(&qw, propPtr + offset, 4); offset += 4;
-        prop.rotation = glm::quat(qw, qx, qy, qz);
+        // Swap X and Z to match terrain coordinate system
+        prop.rotation = glm::quat(qw, qz, qy, qx);
 
         float px, py, pz;
         std::memcpy(&px, propPtr + offset, 4); offset += 4;
         std::memcpy(&py, propPtr + offset, 4); offset += 4;
         std::memcpy(&pz, propPtr + offset, 4); offset += 4;
-        prop.position = glm::vec3(px, py, pz);
+        // Swap X and Z to match terrain coordinate system
+        prop.position = glm::vec3(pz, py, px);
 
         std::memcpy(&prop.placement.minX, propPtr + offset, 2); offset += 2;
         std::memcpy(&prop.placement.minY, propPtr + offset, 2); offset += 2;

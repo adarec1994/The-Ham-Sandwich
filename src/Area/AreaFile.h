@@ -346,6 +346,20 @@ public:
     }
     [[nodiscard]] float getRotation() const { return mGlobalRotation; }
 
+    // Debug mirror/transform flags
+    bool mMirrorX = false;
+    bool mMirrorZ = false;
+
+    void setMirrorX(bool v) { mMirrorX = v; }
+    void setMirrorZ(bool v) { mMirrorZ = v; }
+    [[nodiscard]] bool getMirrorX() const { return mMirrorX; }
+    [[nodiscard]] bool getMirrorZ() const { return mMirrorZ; }
+
+    // Print all transforms for debugging
+    void printTransformDebug() const;
+    // Print all loaded areas' transforms (call from UI)
+    static void printAllTransformsDebug(const std::vector<std::shared_ptr<AreaFile>>& areas);
+
     void printRotationDebug() const;
 
     [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }

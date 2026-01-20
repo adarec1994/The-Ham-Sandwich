@@ -106,9 +106,10 @@ void AreaFile::calculateWorldOffset()
         gReferenceTileX = mTileX;
         gReferenceTileY = mTileY;
     }
-    mWorldOffset.x = static_cast<float>(mTileX - gReferenceTileX) * GRID_SIZE;
+    // Swapped: TileX -> Z, TileY -> X
+    mWorldOffset.x = static_cast<float>(mTileY - gReferenceTileY) * GRID_SIZE;
     mWorldOffset.y = 0.0f;
-    mWorldOffset.z = static_cast<float>(mTileY - gReferenceTileY) * GRID_SIZE;
+    mWorldOffset.z = static_cast<float>(mTileX - gReferenceTileX) * GRID_SIZE;
 }
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
@@ -293,9 +294,28 @@ void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shade
     if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, &matProj[0][0]);
     EnsureFallbackTextures();
     if (gLastTerrainProgram != shaderProgram) { AreaChunkRender::geometryInit(shaderProgram); gLastTerrainProgram = shaderProgram; }
+
     glm::mat4 worldModel(1.0f);
     worldModel = glm::translate(worldModel, mWorldOffset);
-    worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // All transforms happen around center (256, 0, 256)
+    glm::vec3 center(256.0f, 0.0f, 256.0f);
+    worldModel = glm::translate(worldModel, center);
+
+    // Apply rotation
+    if (mGlobalRotation != 0.0f)
+        worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    // Apply mirroring (scale by -1 on axis)
+    if (mMirrorX || mMirrorZ)
+    {
+        float scaleX = mMirrorX ? -1.0f : 1.0f;
+        float scaleZ = mMirrorZ ? -1.0f : 1.0f;
+        worldModel = glm::scale(worldModel, glm::vec3(scaleX, 1.0f, scaleZ));
+    }
+
+    worldModel = glm::translate(worldModel, -center);
+
     const auto& u = AreaChunkRender::getUniforms();
     if (u.model != static_cast<uint32>(-1)) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
     if (u.baseColor != static_cast<uint32>(-1)) glUniform4f(u.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
@@ -423,19 +443,10 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        glm::vec3 pos = prop.position;
-        pos += mWorldOffset;
-
         glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, pos);
+        model = glm::translate(model, prop.position + mWorldOffset);
         model = model * glm::mat4_cast(prop.rotation);
         model = glm::scale(model, glm::vec3(prop.scale));
-
-        if (mGlobalRotation != 0.0f)
-        {
-            glm::mat4 areaRotation = glm::rotate(glm::mat4(1.0f), glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
-            model = areaRotation * model;
-        }
 
         prop.render->render(matView, matProj, model);
     }
@@ -680,8 +691,8 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     if (result.blendMap.empty() && result.blendMapDXT.empty()) { result.blendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.blendMap[i * 4 + 0] = 255; result.blendMap[i * 4 + 1] = 0; result.blendMap[i * 4 + 2] = 0; result.blendMap[i * 4 + 3] = 0; } }
     if (result.colorMap.empty() && result.colorMapDXT.empty()) { result.colorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.colorMap[i * 4 + 0] = 128; result.colorMap[i * 4 + 1] = 128; result.colorMap[i * 4 + 2] = 128; result.colorMap[i * 4 + 3] = 255; } }
     if (!hasHeightmap) return result;
-    float baseX = static_cast<float>(cellY) * 32.0f;
-    float baseZ = static_cast<float>(cellX) * 32.0f;
+    float baseX = static_cast<float>(cellX) * 32.0f;
+    float baseZ = static_cast<float>(cellY) * 32.0f;
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     result.vertices.resize(17 * 17);
@@ -689,14 +700,14 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     {
         for (int x = 0; x < 17; x++)
         {
-            uint16 h = heightmap[x * 19 + y] & 0x7FFF;
+            uint16 h = heightmap[y * 19 + x] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
-            v.u = static_cast<float>(y) / 16.0f;
-            v.v = static_cast<float>(x) / 16.0f;
+            v.u = static_cast<float>(x) / 16.0f;
+            v.v = static_cast<float>(y) / 16.0f;
             v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
             v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > result.maxHeight) result.maxHeight = height;
@@ -825,8 +836,8 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     if (mBlendMap.empty() && mBlendMapDXT.empty()) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mBlendMap[i * 4 + 0] = 255; mBlendMap[i * 4 + 1] = 0; mBlendMap[i * 4 + 2] = 0; mBlendMap[i * 4 + 3] = 0; } }
     if (mColorMap.empty() && mColorMapDXT.empty()) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mColorMap[i * 4 + 0] = 128; mColorMap[i * 4 + 1] = 128; mColorMap[i * 4 + 2] = 128; mColorMap[i * 4 + 3] = 255; } }
     if (!hasHeightmap) return;
-    float baseX = static_cast<float>(cellY) * 32.0f;
-    float baseZ = static_cast<float>(cellX) * 32.0f;
+    float baseX = static_cast<float>(cellX) * 32.0f;
+    float baseZ = static_cast<float>(cellY) * 32.0f;
     float totalHeight = 0.0f;
     uint32 validHeights = 0;
     mVertices.resize(17 * 17);
@@ -834,14 +845,14 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     {
         for (int x = 0; x < 17; x++)
         {
-            uint16 h = heightmap[x * 19 + y] & 0x7FFF;
+            uint16 h = heightmap[y * 19 + x] & 0x7FFF;
             float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
             AreaVertex v{};
             v.x = baseX + static_cast<float>(x) * UnitSize;
             v.z = baseZ + static_cast<float>(y) * UnitSize;
             v.y = height;
-            v.u = static_cast<float>(y) / 16.0f;
-            v.v = static_cast<float>(x) / 16.0f;
+            v.u = static_cast<float>(x) / 16.0f;
+            v.v = static_cast<float>(y) / 16.0f;
             v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
             v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
             if (height > mMaxHeight) mMaxHeight = height;
@@ -962,4 +973,37 @@ void AreaChunkRender::geometryInit(uint32 program)
         uniforms.textures[i] = glGetUniformLocation(program, t.c_str());
         uniforms.normalTextures[i] = glGetUniformLocation(program, n.c_str());
     }
+}
+
+void AreaFile::printTransformDebug() const
+{
+    // Convert tile coordinates to hex string like the filename
+    char tileStr[8];
+    snprintf(tileStr, sizeof(tileStr), "%02X%02X", mTileX, mTileY);
+
+    std::cout << "Tile " << tileStr
+              << " | Rot: " << mGlobalRotation
+              << " | MirrorX: " << (mMirrorX ? "true" : "false")
+              << " | MirrorZ: " << (mMirrorZ ? "true" : "false")
+              << std::endl;
+}
+
+void AreaFile::printAllTransformsDebug(const std::vector<std::shared_ptr<AreaFile>>& areas)
+{
+    std::cout << "\n=== AREA TRANSFORM DEBUG ===" << std::endl;
+    std::cout << "Format: Tile | Rotation | MirrorX | MirrorZ" << std::endl;
+    std::cout << "-----------------------------" << std::endl;
+
+    for (const auto& area : areas)
+    {
+        if (area)
+            area->printTransformDebug();
+    }
+
+    std::cout << "============================\n" << std::endl;
+}
+
+void AreaFile::printRotationDebug() const
+{
+    printTransformDebug();
 }

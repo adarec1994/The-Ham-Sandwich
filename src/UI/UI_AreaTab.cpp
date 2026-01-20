@@ -187,11 +187,13 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gSelectedChunkIndex = -1;
+    gSelectedAreaIndex = -1;
+    gSelectedAreaName.clear();
 
     auto af = std::make_shared<AreaFile>(arc, fileEntry);
     if (af->load())
     {
-        af->loadAllProps();
         gLoadedAreas.push_back(af);
         state.currentArea = af;
         SnapCameraToLoaded(state);

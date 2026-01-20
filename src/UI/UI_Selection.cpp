@@ -50,7 +50,7 @@ static bool RayIntersectsBox(const glm::vec3& rayOrigin, const glm::vec3& rayDir
     return true;
 }
 
-void CheckChunkSelection(AppState& state)
+void CheckAreaSelection(AppState& state)
 {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -95,8 +95,6 @@ void CheckChunkSelection(AppState& state)
     const glm::vec3 rayDir = glm::normalize(rayEnd - rayStart);
 
     float closestDist = std::numeric_limits<float>::max();
-    AreaChunkRenderPtr hitChunk = nullptr;
-    int hitIndex = -1;
     int hitAreaIdx = -1;
     std::string hitAreaName;
 
@@ -106,42 +104,48 @@ void CheckChunkSelection(AppState& state)
         if (!area) continue;
 
         const glm::vec3 worldOffset = area->getWorldOffset();
-        const auto& chunks = area->getChunks();
+        const glm::vec3 localMin = area->getMinBounds();
+        const glm::vec3 localMax = area->getMaxBounds();
 
-        for (size_t i = 0; i < chunks.size(); ++i)
+        if (localMin.x > localMax.x || localMin.y > localMax.y || localMin.z > localMax.z)
+            continue;
+
+        const glm::vec3 areaWorldMin = localMin + worldOffset;
+        const glm::vec3 areaWorldMax = localMax + worldOffset;
+
+        float dist = 0.0f;
+        if (RayIntersectsBox(rayStart, rayDir, areaWorldMin, areaWorldMax, dist))
         {
-            const auto& chunk = chunks[i];
-            if (!chunk) continue;
-
-            const glm::vec3 localMin = chunk->getMinBounds();
-            const glm::vec3 localMax = chunk->getMaxBounds();
-
-            if (localMin.x > localMax.x || localMin.y > localMax.y || localMin.z > localMax.z)
-                continue;
-
-            const glm::vec3 chunkWorldMin = localMin + worldOffset;
-            const glm::vec3 chunkWorldMax = localMax + worldOffset;
-
-            float dist = 0.0f;
-            if (RayIntersectsBox(rayStart, rayDir, chunkWorldMin, chunkWorldMax, dist))
+            if (dist < closestDist)
             {
-                if (dist < closestDist)
-                {
-                    closestDist = dist;
-                    hitChunk = chunk;
-                    hitIndex = static_cast<int>(i);
-                    hitAreaIdx = static_cast<int>(areaIdx);
-                    hitAreaName = "Area " + std::to_string(areaIdx);
-                }
+                closestDist = dist;
+                hitAreaIdx = static_cast<int>(areaIdx);
+                hitAreaName = "Area " + std::to_string(areaIdx);
             }
         }
     }
 
-    if (hitChunk)
+    if (hitAreaIdx >= 0)
     {
-        gSelectedChunk = hitChunk;
-        gSelectedChunkIndex = hitIndex;
         gSelectedAreaIndex = hitAreaIdx;
-        gSelectedChunkAreaName = hitAreaName;
+        gSelectedAreaName = hitAreaName;
+
+        // Also select the first valid chunk in this area for texture preview
+        const auto& area = gLoadedAreas[hitAreaIdx];
+        if (area)
+        {
+            const auto& chunks = area->getChunks();
+            gSelectedChunk = nullptr;
+            gSelectedChunkIndex = -1;
+            for (size_t i = 0; i < chunks.size(); ++i)
+            {
+                if (chunks[i])
+                {
+                    gSelectedChunk = chunks[i];
+                    gSelectedChunkIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
     }
 }

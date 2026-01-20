@@ -28,6 +28,9 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gSelectedChunkIndex = -1;
+    gSelectedAreaIndex = -1;
+    gSelectedAreaName.clear();
 
     for (const auto& child : folderEntry->getChildren())
     {
@@ -42,7 +45,6 @@ static void LoadAreasInFolder(AppState& state, const ArchivePtr& arc, const IFil
         const auto af = std::make_shared<AreaFile>(arc, fileEntry);
         if (af->load())
         {
-            af->loadAllProps();
             gLoadedAreas.push_back(af);
         }
     }
@@ -66,12 +68,14 @@ static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::sh
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gSelectedChunkIndex = -1;
+    gSelectedAreaIndex = -1;
+    gSelectedAreaName.clear();
     gLoadedModel = nullptr;
 
     auto af = std::make_shared<AreaFile>(arc, fileEntry);
     if (af->load())
     {
-        af->loadAllProps();
         gLoadedAreas.push_back(af);
         state.currentArea = af;
         SnapCameraToLoaded(state);

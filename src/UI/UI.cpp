@@ -261,7 +261,7 @@ void RenderUI(AppState& state)
     ProcessAreaLoading(state);
     ProcessModelLoading(state);
     ProcessDumping();
-    HandleChunkPicking(state);
+    HandleAreaPicking(state);
 
     if (!state.archivesLoaded)
     {

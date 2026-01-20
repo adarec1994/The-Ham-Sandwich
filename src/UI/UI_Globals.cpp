@@ -18,7 +18,9 @@ std::vector<AreaFilePtr> gLoadedAreas;
 AreaChunkRenderPtr gSelectedChunk = nullptr;
 int gSelectedChunkIndex = -1;
 int gSelectedAreaIndex = -1;
-std::string gSelectedChunkAreaName;
+std::string gSelectedAreaName;
+
+bool gShowProps = true;
 
 std::shared_ptr<M3Render> gLoadedModel = nullptr;
 
@@ -74,6 +76,9 @@ void ProcessModelLoading(AppState& state)
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gSelectedChunkIndex = -1;
+    gSelectedAreaIndex = -1;
+    gSelectedAreaName.clear();
 
     if (gLoadedModelData.success)
     {
@@ -105,6 +110,9 @@ void StartLoadingAreasInFolder(AppState& state, const ArchivePtr& arc, const IFi
 
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
+    gSelectedChunkIndex = -1;
+    gSelectedAreaIndex = -1;
+    gSelectedAreaName.clear();
     gLoadedModel = nullptr;
     gPendingAreaFiles.clear();
 
@@ -142,7 +150,6 @@ void ProcessAreaLoading(AppState& state)
         const auto af = std::make_shared<AreaFile>(arc, fileEntry);
         if (af->load())
         {
-            af->loadAllProps();
             gLoadedAreas.push_back(af);
         }
 

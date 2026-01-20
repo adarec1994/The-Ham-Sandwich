@@ -9,7 +9,7 @@
 #include <imgui.h>
 
 extern std::vector<AreaFilePtr> gLoadedAreas;
-extern void CheckChunkSelection(AppState& state);
+extern void CheckAreaSelection(AppState& state);
 
 void SnapCameraToLoaded(AppState& state)
 {
@@ -171,7 +171,7 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
     {
-        CheckChunkSelection(state);
+        CheckAreaSelection(state);
     }
 
     if (ImGui::IsMouseDown(ImGuiMouseButton_Right))

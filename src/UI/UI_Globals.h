@@ -17,7 +17,9 @@ extern std::vector<AreaFilePtr> gLoadedAreas;
 extern AreaChunkRenderPtr gSelectedChunk;
 extern int gSelectedChunkIndex;
 extern int gSelectedAreaIndex;
-extern std::string gSelectedChunkAreaName;
+extern std::string gSelectedAreaName;
+
+extern bool gShowProps;
 
 extern std::shared_ptr<M3Render> gLoadedModel;
 

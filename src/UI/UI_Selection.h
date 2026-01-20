@@ -1,4 +1,4 @@
 #pragma once
 #include "UI.h"
 
-void CheckChunkSelection(AppState& state);
+void CheckAreaSelection(AppState& state);

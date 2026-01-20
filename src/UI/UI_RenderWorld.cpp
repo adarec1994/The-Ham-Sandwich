@@ -162,16 +162,18 @@ static void RenderAxisGizmo(const AppState& state, int display_w, int display_h)
     glEnable(GL_DEPTH_TEST);
 }
 
-static void RenderChunkHighlight(const AreaChunkRenderPtr& chunk, const glm::mat4& view, const glm::mat4& projection, const glm::vec3& worldOffset)
+static void RenderAreaHighlight(const AreaFilePtr& area, const glm::mat4& view, const glm::mat4& projection)
 {
-    if (!chunk) return;
+    if (!area) return;
 
     InitHighlightShader();
 
-    glm::vec3 minB = chunk->getMinBounds() + worldOffset;
-    glm::vec3 maxB = chunk->getMaxBounds() + worldOffset;
+    glm::vec3 worldOffset = area->getWorldOffset();
+    glm::vec3 minB = area->getMinBounds() + worldOffset;
+    glm::vec3 maxB = area->getMaxBounds() + worldOffset;
 
     float vertices[] = {
+        // Bottom face
         minB.x, minB.y, minB.z,
         maxB.x, minB.y, minB.z,
         maxB.x, minB.y, minB.z,
@@ -181,6 +183,7 @@ static void RenderChunkHighlight(const AreaChunkRenderPtr& chunk, const glm::mat
         minB.x, minB.y, maxB.z,
         minB.x, minB.y, minB.z,
 
+        // Top face
         minB.x, maxB.y, minB.z,
         maxB.x, maxB.y, minB.z,
         maxB.x, maxB.y, minB.z,
@@ -190,6 +193,7 @@ static void RenderChunkHighlight(const AreaChunkRenderPtr& chunk, const glm::mat
         minB.x, maxB.y, maxB.z,
         minB.x, maxB.y, minB.z,
 
+        // Vertical edges
         minB.x, minB.y, minB.z,
         minB.x, maxB.y, minB.z,
         maxB.x, minB.y, minB.z,
@@ -222,13 +226,13 @@ static void RenderChunkHighlight(const AreaChunkRenderPtr& chunk, const glm::mat
     glBindVertexArray(0);
 }
 
-void HandleChunkPicking(AppState& state)
+void HandleAreaPicking(AppState& state)
 {
     if (gLoadedAreas.empty()) return;
     if (ImGui::GetIO().WantCaptureMouse) return;
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
 
-    CheckChunkSelection(state);
+    CheckAreaSelection(state);
 }
 
 void RenderAreas(const AppState& state, int display_w, int display_h)
@@ -279,10 +283,13 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
             for (const auto& area : gLoadedAreas)
             {
                 if (area)
-                    area->render(view, projection, prog, gSelectedChunk);
+                    area->render(view, projection, prog, nullptr);
             }
+        }
 
-            // Render props after terrain
+        // Render props if enabled (no auto-loading - use Load Props button)
+        if (gShowProps)
+        {
             for (const auto& area : gLoadedAreas)
             {
                 if (area)
@@ -290,10 +297,10 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
             }
         }
 
-        if (gSelectedChunk && gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
+        // Render highlight for selected area
+        if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
         {
-            glm::vec3 worldOffset = gLoadedAreas[gSelectedAreaIndex]->getWorldOffset();
-            RenderChunkHighlight(gSelectedChunk, view, projection, worldOffset);
+            RenderAreaHighlight(gLoadedAreas[gSelectedAreaIndex], view, projection);
         }
     }
 

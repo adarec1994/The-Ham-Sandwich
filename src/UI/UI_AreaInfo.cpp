@@ -518,6 +518,7 @@ namespace UI_AreaInfo
                 glm::vec3 maxB = area->getMaxBounds();
                 glm::vec3 worldMin = area->getWorldMinBounds();
                 glm::vec3 worldMax = area->getWorldMaxBounds();
+                glm::vec3 worldOffset = area->getWorldOffset();
 
                 ImGui::Spacing();
                 ImGui::Text("Local Bounds:");
@@ -529,11 +530,84 @@ namespace UI_AreaInfo
                 ImGui::Text("  Min: %.1f, %.1f, %.1f", worldMin.x, worldMin.y, worldMin.z);
                 ImGui::Text("  Max: %.1f, %.1f, %.1f", worldMax.x, worldMax.y, worldMax.z);
 
+                // Debug: Rotation info
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "Transform Debug");
+                ImGui::Text("World Offset: %.1f, %.1f, %.1f", worldOffset.x, worldOffset.y, worldOffset.z);
+                ImGui::Text("Rotation: %.1f deg", area->getRotation());
+
+                glm::vec3 areaCenter = (minB + maxB) * 0.5f;
+                ImGui::Text("Area Center (local): %.1f, %.1f, %.1f", areaCenter.x, areaCenter.y, areaCenter.z);
+
+                // Rotation buttons
+                ImGui::Spacing();
+                float buttonWidth = (ImGui::GetContentRegionAvail().x - 8) / 2;
+                if (ImGui::Button("Rotate 90 CW", ImVec2(buttonWidth, 0)))
+                {
+                    // Rotate the selected area or all areas
+                    if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
+                    {
+                        gLoadedAreas[gSelectedAreaIndex]->rotate90();
+                    }
+                    else
+                    {
+                        for (auto& a : gLoadedAreas)
+                            if (a) a->rotate90();
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Rotate 90 CCW", ImVec2(buttonWidth, 0)))
+                {
+                    if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
+                    {
+                        gLoadedAreas[gSelectedAreaIndex]->rotate90CCW();
+                    }
+                    else
+                    {
+                        for (auto& a : gLoadedAreas)
+                            if (a) a->rotate90CCW();
+                    }
+                }
+
+                // Mirror controls (debug)
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 1.0f), "Mirror Debug:");
+
+                if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
+                {
+                    auto& selArea = gLoadedAreas[gSelectedAreaIndex];
+                    if (selArea)
+                    {
+                        ImGui::Text("Selected: %02X%02X", selArea->getTileX(), selArea->getTileY());
+
+                        bool mirrorX = selArea->getMirrorX();
+                        bool mirrorZ = selArea->getMirrorZ();
+
+                        if (ImGui::Checkbox("Mirror X (red)", &mirrorX))
+                            selArea->setMirrorX(mirrorX);
+                        ImGui::SameLine();
+                        if (ImGui::Checkbox("Mirror Z (blue)", &mirrorZ))
+                            selArea->setMirrorZ(mirrorZ);
+                    }
+                }
+                else
+                {
+                    ImGui::Text("Select an area to adjust mirrors");
+                }
+
+                ImGui::Spacing();
+                if (ImGui::Button("Print All Transforms", ImVec2(ImGui::GetContentRegionAvail().x, 0)))
+                {
+                    AreaFile::printAllTransformsDebug(gLoadedAreas);
+                }
+
                 int validChunks = 0;
                 for (const auto& c : area->getChunks())
                     if (c && c->isFullyInitialized()) validChunks++;
 
                 ImGui::Spacing();
+                ImGui::Separator();
                 ImGui::Text("Chunks: %d / 256", validChunks);
                 ImGui::Text("Avg Height: %.2f", area->getAverageHeight());
                 ImGui::Text("Max Height: %.2f", area->getMaxHeight());
@@ -542,6 +616,9 @@ namespace UI_AreaInfo
                 ImGui::Separator();
                 ImGui::Text("Props");
                 ImGui::Separator();
+
+                // Show/Hide Props toggle
+                ImGui::Checkbox("Show Props", &gShowProps);
 
                 size_t totalProps = 0;
                 size_t loadedProps = 0;
@@ -553,7 +630,19 @@ namespace UI_AreaInfo
                 }
 
                 ImGui::Text("Total: %zu", totalProps);
-                ImGui::Text("Loaded (with render): %zu", loadedProps);
+                ImGui::Text("Loaded: %zu", loadedProps);
+
+                if (loadedProps < totalProps)
+                {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load All Props"))
+                    {
+                        for (auto& a : gLoadedAreas)
+                        {
+                            if (a) a->loadAllProps();
+                        }
+                    }
+                }
 
                 if (totalProps > 0 && ImGui::TreeNode("Prop Details"))
                 {
@@ -600,8 +689,6 @@ namespace UI_AreaInfo
 
                                 if (ImGui::IsMouseDoubleClicked(0))
                                 {
-                                    // Props are in world coords, camera uses rendering coords
-                                    // areaOffset already accounts for this in the UI display
                                     glm::vec3 worldPos = prop.position + areaOffset;
                                     SnapCameraToProp(state, worldPos, prop.scale);
                                 }

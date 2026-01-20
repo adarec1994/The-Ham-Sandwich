@@ -2,4 +2,4 @@
 #include "UI.h"
 
 void RenderAreas(const AppState& state, int display_w, int display_h);
-void HandleChunkPicking(AppState& state);
+void HandleAreaPicking(AppState& state);
