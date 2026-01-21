@@ -28,11 +28,13 @@ extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const
 
 namespace UI_ContentBrowser {
     static bool sIsOpen = false;
+    static bool sIsDocked = false;
     static float sCurrentHeight = 0.0f;
     static float sTargetHeight = 300.0f;
     static float sAnimSpeed = 1500.0f;
     static float sTreeWidth = 200.0f;
     static ImTextureID sFolderIcon = 0;
+    static ImTextureID sContentBrowserIcon = 0;
 
     static IFileSystemEntryPtr sSelectedFolder = nullptr;
     static ArchivePtr sSelectedArchive = nullptr;
@@ -233,29 +235,23 @@ namespace UI_ContentBrowser {
     {
         if (!folder || !folder->isDirectory()) return;
 
-        // Optimization: Pre-allocate reasonable stack space for children to avoid small reallocations
-        // const auto& children = folder->getChildren();
-
         for (const auto& child : folder->getChildren())
         {
             if (!child) continue;
 
             if (child->isDirectory())
             {
-                // Recursive step: Dirs are only for traversal, NOT matching.
                 CollectRecursive(archive, child, filterLower, outList);
             }
             else
             {
-                // File matching logic
                 std::string name = wstring_to_utf8(child->getEntryName());
 
-                // Manual case-insensitive substring search to avoid full string lowercasing allocs if possible
                 auto searchIt = std::search(
                     name.begin(), name.end(),
                     filterLower.begin(), filterLower.end(),
                     [](char c1, char c2) {
-                        return std::tolower(static_cast<unsigned char>(c1)) == c2; // filterLower is already lowercased
+                        return std::tolower(static_cast<unsigned char>(c1)) == c2;
                     }
                 );
 
@@ -522,6 +518,20 @@ namespace UI_ContentBrowser {
 
         if (ImGui::BeginChild("FileTree", ImVec2(sTreeWidth, 0), true))
         {
+            bool stylePushed = false;
+            if (sIsDocked) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.26f, 0.59f, 0.98f, 0.8f));
+                stylePushed = true;
+            }
+            if (ImGui::Button("Dock", ImVec2(-FLT_MIN, 0.0f)))
+            {
+                sIsDocked = !sIsDocked;
+                if (sIsDocked) sIsOpen = true;
+            }
+            if (stylePushed) {
+                ImGui::PopStyleColor();
+            }
+
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 2.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 15.0f);
@@ -720,9 +730,6 @@ namespace UI_ContentBrowser {
                 sSelectedFileIndex = -1;
             }
 
-            // CRITICAL FIX: Pass the item height to Clipper.Begin!
-            // This allows clipper to calculate range without relying on past cursor positions,
-            // fixing the cutoff issue during fast scrolls.
             ImGuiListClipper clipper;
             clipper.Begin(rows, cellHeight + spacingY);
 
@@ -855,7 +862,6 @@ namespace UI_ContentBrowser {
             }
             clipper.End();
 
-            // Place dummy to ensure scroll range covers the full content
             float totalH = startPos.y + rows * (cellHeight + spacingY);
             ImGui::SetCursorScreenPos(ImVec2(startX, totalH));
             ImGui::Dummy(ImVec2(1, 20.0f));
@@ -870,7 +876,7 @@ namespace UI_ContentBrowser {
 
     void Toggle() { sIsOpen = !sIsOpen; }
     bool IsOpen() { return sIsOpen; }
-    static const float BOTTOM_BAR_HEIGHT = 28.0f;
+    static const float BOTTOM_BAR_HEIGHT = 34.0f;
     float GetHeight() { return sCurrentHeight + BOTTOM_BAR_HEIGHT; }
     float GetBarHeight() { return BOTTOM_BAR_HEIGHT; }
 
@@ -910,10 +916,14 @@ namespace UI_ContentBrowser {
             Toggle();
         }
 
+        if (!sContentBrowserIcon)
+            sContentBrowserIcon = UI_Utils::LoadTexture("Assets/Icons/ContentBrowser.png");
+
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         float dt = ImGui::GetIO().DeltaTime;
 
         float targetH = sIsOpen ? sTargetHeight : 0.0f;
+        if (sIsDocked) targetH = sTargetHeight;
 
         if (sCurrentHeight < targetH)
         {
@@ -928,13 +938,11 @@ namespace UI_ContentBrowser {
                 sCurrentHeight = targetH;
         }
 
-        if (sCurrentHeight < 1.0f)
-            return;
-
-        float windowY = viewport->Pos.y + viewport->Size.y - sCurrentHeight;
+        float totalHeight = sCurrentHeight + BOTTOM_BAR_HEIGHT;
+        float windowY = viewport->Pos.y + viewport->Size.y - totalHeight;
 
         ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, windowY), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, sCurrentHeight), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, totalHeight), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.98f);
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
@@ -946,43 +954,112 @@ namespace UI_ContentBrowser {
         if (ImGui::Begin("##ContentBrowser", nullptr, flags))
         {
             float handleHeight = 6.0f;
-            ImVec2 handlePos = ImGui::GetCursorScreenPos();
-            ImVec2 handleSize = ImVec2(ImGui::GetContentRegionAvail().x, handleHeight);
 
-            ImGui::InvisibleButton("##ResizeHandle", handleSize);
-
-            bool isHovered = ImGui::IsItemHovered();
-            bool isActive = ImGui::IsItemActive();
-
-            ImU32 handleColor = isActive ? IM_COL32(100, 149, 237, 255) :
-                               (isHovered ? IM_COL32(80, 80, 100, 255) : IM_COL32(60, 60, 70, 255));
-
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                handlePos,
-                ImVec2(handlePos.x + handleSize.x, handlePos.y + handleSize.y),
-                handleColor,
-                3.0f
-            );
-
-            if (isActive)
+            if (sCurrentHeight > 1.0f)
             {
-                float mouseDelta = -ImGui::GetIO().MouseDelta.y;
-                sTargetHeight += mouseDelta;
-                sTargetHeight = std::clamp(sTargetHeight, 150.0f, viewport->Size.y * 0.7f);
-                sCurrentHeight = sTargetHeight;
+                ImVec2 handlePos = ImGui::GetCursorScreenPos();
+                ImVec2 handleSize = ImVec2(ImGui::GetContentRegionAvail().x, handleHeight);
+
+                ImGui::InvisibleButton("##ResizeHandle", handleSize);
+
+                bool isHovered = ImGui::IsItemHovered();
+                bool isActive = ImGui::IsItemActive();
+
+                ImU32 handleColor = isActive ? IM_COL32(100, 149, 237, 255) :
+                                   (isHovered ? IM_COL32(80, 80, 100, 255) : IM_COL32(60, 60, 70, 255));
+
+                ImGui::GetWindowDrawList()->AddRectFilled(
+                    handlePos,
+                    ImVec2(handlePos.x + handleSize.x, handlePos.y + handleSize.y),
+                    handleColor,
+                    3.0f
+                );
+
+                if (isActive)
+                {
+                    float mouseDelta = -ImGui::GetIO().MouseDelta.y;
+                    sTargetHeight += mouseDelta;
+                    sTargetHeight = std::clamp(sTargetHeight, 150.0f, viewport->Size.y * 0.7f);
+                    sCurrentHeight = sTargetHeight;
+                }
+
+                if (isHovered || isActive)
+                {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                }
+
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+                float contentH = ImGui::GetContentRegionAvail().y - BOTTOM_BAR_HEIGHT;
+                if (contentH > 0)
+                {
+                    if (ImGui::BeginChild("##ContentArea", ImVec2(0, contentH), false, ImGuiWindowFlags_NoScrollbar))
+                    {
+                        RenderFileTree(state);
+                        ImGui::SameLine();
+                        RenderFileBrowser(state);
+                    }
+                    ImGui::EndChild();
+                }
+
+                ImGui::PopStyleVar();
+            }
+            else
+            {
+                 ImGui::Dummy(ImVec2(0, handleHeight));
             }
 
-            if (isHovered || isActive)
-            {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            ImGui::SetCursorPosY(totalHeight - BOTTOM_BAR_HEIGHT);
+            ImGui::Separator();
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+
+            const char* btnText = "Content Browser";
+            float textWidth = ImGui::CalcTextSize(btnText).x;
+            float buttonWidth = 140.0f;
+            float iconSize = ImGui::GetTextLineHeight();
+            float spacing = 4.0f;
+            float totalContentW = textWidth + (sContentBrowserIcon ? (iconSize + spacing) : 0.0f);
+
+            float scale = 1.0f;
+            if (totalContentW > buttonWidth - 10.0f) {
+                scale = (buttonWidth - 10.0f) / totalContentW;
+                ImGui::SetWindowFontScale(scale);
+                iconSize *= scale;
+                spacing *= scale;
             }
 
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+            float currentBtnHeight = ImGui::GetFrameHeight();
+            float barTopY = totalHeight - BOTTOM_BAR_HEIGHT;
+            float centeredY = barTopY + (BOTTOM_BAR_HEIGHT - currentBtnHeight) * 0.5f;
 
-            RenderFileTree(state);
-            ImGui::SameLine();
-            RenderFileBrowser(state);
+            ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x + 16.0f, centeredY));
+            ImVec2 startPos = ImGui::GetCursorScreenPos();
 
+            float imgOffset = (currentBtnHeight - iconSize) * 0.5f;
+
+            if (sContentBrowserIcon) {
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + imgOffset);
+                ImGui::Image((void*)(intptr_t)sContentBrowserIcon, ImVec2(iconSize, iconSize), ImVec2(0,0), ImVec2(1,1));
+                ImGui::SameLine(0, spacing);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - imgOffset);
+            }
+
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(btnText);
+
+            if (scale != 1.0f) {
+                ImGui::SetWindowFontScale(1.0f);
+            }
+
+            ImGui::SetCursorScreenPos(startPos);
+            if (ImGui::Button("##ContentBrowserBtn", ImVec2(buttonWidth, currentBtnHeight)))
+            {
+                Toggle();
+            }
+
+            ImGui::PopStyleColor();
             ImGui::PopStyleVar();
         }
         ImGui::End();
