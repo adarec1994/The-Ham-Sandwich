@@ -35,6 +35,9 @@ namespace UI_ContentBrowser {
     static float sTreeWidth = 200.0f;
     static ImTextureID sFolderIcon = 0;
     static ImTextureID sContentBrowserIcon = 0;
+    static ImTextureID sTblIcon = 0;
+    static ImTextureID sAreaIcon = 0;
+    static ImTextureID sAudioIcon = 0;
 
     static IFileSystemEntryPtr sSelectedFolder = nullptr;
     static ArchivePtr sSelectedArchive = nullptr;
@@ -65,6 +68,7 @@ namespace UI_ContentBrowser {
     struct ThumbnailRequest {
         ArchivePtr archive;
         std::shared_ptr<FileEntry> entry;
+        std::string extension;
         int fileIndex;
         uint64_t generation;
     };
@@ -140,19 +144,85 @@ namespace UI_ContentBrowser {
 
                 if (req.archive && req.entry)
                 {
-                    std::vector<uint8_t> bytes;
-                    if (req.archive->getFileData(req.entry, bytes) && !bytes.empty())
+                    if (req.extension == ".area")
                     {
-                        Tex::File tf;
-                        if (tf.readFromMemory(bytes.data(), bytes.size()))
+                        // Parse the area file structure (lightweight, no GPU ops)
+                        auto parsed = AreaFile::parseAreaFile(req.archive, req.entry);
+                        if (parsed.valid)
                         {
-                            Tex::ImageRGBA img;
-                            if (tf.decodeLargestMipToRGBA(img))
+                            // Area is 16x16 chunks. Each chunk is 32 units wide.
+                            // We will map 16x16 pixels per chunk -> 256x256 image.
+                            int w = 256;
+                            int h = 256;
+                            std::vector<uint8_t> pixels(w * h * 4, 0); // Initialize black/transparent
+
+                            float minH = parsed.minBounds.y;
+                            float maxH = parsed.maxHeight;
+                            float range = maxH - minH;
+                            if (range < 1.0f) range = 1.0f; // Avoid divide by zero
+
+                            for (int cz = 0; cz < 16; cz++)
                             {
-                                res.width = img.width;
-                                res.height = img.height;
-                                res.data = std::move(img.rgba);
-                                res.success = true;
+                                for (int cx = 0; cx < 16; cx++)
+                                {
+                                    int chunkIdx = cz * 16 + cx;
+                                    if (chunkIdx >= (int)parsed.chunks.size()) continue;
+
+                                    const auto& chunk = parsed.chunks[chunkIdx];
+                                    if (!chunk.valid || chunk.vertices.empty()) continue;
+
+                                    // Chunks usually have 17x17 vertices (for overlap).
+                                    // We iterate 0..15 to fit our 256x256 pixel grid perfectly.
+                                    for (int lz = 0; lz < 16; lz++)
+                                    {
+                                        for (int lx = 0; lx < 16; lx++)
+                                        {
+                                            int vIdx = lz * 17 + lx;
+                                            if (vIdx >= (int)chunk.vertices.size()) continue;
+
+                                            float height = chunk.vertices[vIdx].y;
+                                            // Normalize height to 0..255
+                                            float norm = (height - minH) / range;
+                                            uint8_t val = (uint8_t)(std::clamp(norm, 0.0f, 1.0f) * 255.0f);
+
+                                            // Calculate pixel position
+                                            int px = cx * 16 + lx;
+                                            int py = cz * 16 + lz;
+
+                                            // Flip Y for visual consistency if needed, but standard top-down
+                                            // usually matches map layout (North Up)
+                                            int pIdx = (py * w + px) * 4;
+
+                                            pixels[pIdx + 0] = val;
+                                            pixels[pIdx + 1] = val;
+                                            pixels[pIdx + 2] = val;
+                                            pixels[pIdx + 3] = 255; // Alpha
+                                        }
+                                    }
+                                }
+                            }
+                            res.width = w;
+                            res.height = h;
+                            res.data = std::move(pixels);
+                            res.success = true;
+                        }
+                    }
+                    else // .tex or default
+                    {
+                        std::vector<uint8_t> bytes;
+                        if (req.archive->getFileData(req.entry, bytes) && !bytes.empty())
+                        {
+                            Tex::File tf;
+                            if (tf.readFromMemory(bytes.data(), bytes.size()))
+                            {
+                                Tex::ImageRGBA img;
+                                if (tf.decodeLargestMipToRGBA(img))
+                                {
+                                    res.width = img.width;
+                                    res.height = img.height;
+                                    res.data = std::move(img.rgba);
+                                    res.success = true;
+                                }
                             }
                         }
                     }
@@ -627,6 +697,12 @@ namespace UI_ContentBrowser {
 
         if (!sFolderIcon)
             sFolderIcon = UI_Utils::LoadTexture("Assets/Icons/Folder.png");
+        if (!sTblIcon)
+            sTblIcon = UI_Utils::LoadTexture("Assets/Icons/Tbl.png");
+        if (!sAreaIcon)
+            sAreaIcon = UI_Utils::LoadTexture("Assets/Icons/Area.png");
+        if (!sAudioIcon)
+            sAudioIcon = UI_Utils::LoadTexture("Assets/Icons/Audio.png");
 
         if (ImGui::BeginChild("FileBrowser", ImVec2(0, 0), true))
         {
@@ -778,7 +854,10 @@ namespace UI_ContentBrowser {
                             drawList->AddRectFilled(cellMin, cellMax, IM_COL32(255, 255, 255, 20), 4.0f);
                         }
 
-                        if (file.extension == ".tex" && !file.attemptedLoad && !file.textureID)
+                        bool isTex = (file.extension == ".tex");
+                        bool isArea = (file.extension == ".area");
+
+                        if ((isTex || isArea) && !file.attemptedLoad && !file.textureID)
                         {
                             file.attemptedLoad = true;
                             auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
@@ -788,6 +867,7 @@ namespace UI_ContentBrowser {
                                 req.archive = file.archive;
                                 req.entry = fe;
                                 req.fileIndex = i;
+                                req.extension = file.extension;
                                 req.generation = sCurrentGeneration;
 
                                 {
@@ -806,6 +886,18 @@ namespace UI_ContentBrowser {
                         {
                              drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
+                        else if (file.extension == ".tbl" && sTblIcon)
+                        {
+                             drawList->AddImage(sTblIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                        }
+                        else if (file.extension == ".area" && sAreaIcon)
+                        {
+                             drawList->AddImage(sAreaIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                        }
+                        else if (file.extension == ".wem" && sAudioIcon)
+                        {
+                             drawList->AddImage(sAudioIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                        }
                         else
                         {
                             ImU32 bgColor = IM_COL32(51, 51, 51, 255);
@@ -814,6 +906,7 @@ namespace UI_ContentBrowser {
                             else if (file.extension == ".area") bgColor = IM_COL32(38, 51, 76, 255);
                             else if (file.extension == ".tex")  bgColor = IM_COL32(76, 38, 76, 255);
                             else if (file.extension == ".tbl")  bgColor = IM_COL32(76, 76, 38, 255);
+                            else if (file.extension == ".wem")  bgColor = IM_COL32(76, 76, 76, 255);
 
                             drawList->AddRectFilled(contentMin + ImVec2(10, 10), contentMin + ImVec2(iconSize - 10, iconSize - 10), bgColor, 4.0f);
                         }
@@ -1034,8 +1127,10 @@ namespace UI_ContentBrowser {
             float barTopY = totalHeight - BOTTOM_BAR_HEIGHT;
             float centeredY = barTopY + (BOTTOM_BAR_HEIGHT - currentBtnHeight) * 0.5f;
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x + 16.0f, centeredY));
+            ImGui::SetCursorPos(ImVec2(ImGui::GetStyle().WindowPadding.x + 50.0f, centeredY));
             ImVec2 startPos = ImGui::GetCursorScreenPos();
+
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (buttonWidth - totalContentW) * 0.5f);
 
             float imgOffset = (currentBtnHeight - iconSize) * 0.5f;
 
