@@ -514,6 +514,7 @@ namespace UI_ContentBrowser {
             if (!sCachedFiles.empty())
             {
                 ImGui::SetCursorScreenPos(ImVec2(startX, currentY + cellHeight + spacingY));
+                ImGui::Dummy(ImVec2(1, 1)); 
             }
             else
             {
