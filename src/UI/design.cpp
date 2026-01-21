@@ -20,11 +20,6 @@
 #include <iostream>
 #include <fstream>
 
-bool   gAreaIconLoaded = false;
-unsigned int gAreaIconTexture = 0;
-int    gAreaIconWidth = 0;
-int    gAreaIconHeight = 0;
-
 #ifdef _WIN32
 static bool GetResourceData(int resourceId, const void** outData, DWORD* outSize)
 {
@@ -170,87 +165,6 @@ bool LoadTextureFromFile(const char* filename, GLuint* out_texture, int* out_wid
     return true;
 }
 
-static bool LoadTextureFromMemory(const unsigned char* data, size_t dataSize, GLuint* out_texture, int* out_width, int* out_height)
-{
-    int image_width = 0;
-    int image_height = 0;
-    unsigned char* image_data = stbi_load_from_memory(
-        data,
-        static_cast<int>(dataSize),
-        &image_width, &image_height, nullptr, 4);
-
-    if (image_data == nullptr)
-        return false;
-
-    for (int i = 0; i < image_width * image_height * 4; i += 4)
-    {
-        unsigned char alpha = image_data[i + 3];
-        if (alpha > 0)
-        {
-            image_data[i]     = 255 - image_data[i];
-            image_data[i + 1] = 255 - image_data[i + 1];
-            image_data[i + 2] = 255 - image_data[i + 2];
-        }
-    }
-
-    glGenTextures(1, out_texture);
-    glBindTexture(GL_TEXTURE_2D, *out_texture);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glTexImage2D(
-        GL_TEXTURE_2D,
-        0,
-        GL_RGBA,
-        image_width,
-        image_height,
-        0,
-        GL_RGBA,
-        GL_UNSIGNED_BYTE,
-        image_data
-    );
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    stbi_image_free(image_data);
-
-    *out_width = image_width;
-    *out_height = image_height;
-
-    return true;
-}
-
-#ifdef _WIN32
-static bool LoadTextureFromResource(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
-{
-    const void* data = nullptr;
-    DWORD dataSize = 0;
-    if (!GetResourceData(resourceId, &data, &dataSize))
-        return false;
-
-    return LoadTextureFromMemory(
-        static_cast<const unsigned char*>(data),
-        static_cast<size_t>(dataSize),
-        out_texture, out_width, out_height);
-}
-#endif
-
-static const char* GetResourcePath(int resourceId)
-{
-    switch (resourceId)
-    {
-        case IDR_ICON_FILETREE:  return "assets/icons/FileTree.png";
-        case IDR_ICON_AREA:      return "assets/icons/Area.png";
-        case IDR_ICON_SETTINGS:  return "assets/icons/Settings.png";
-        case IDR_ICON_ABOUT:     return "assets/icons/About.png";
-        case IDR_ICON_CHARACTER: return "assets/icons/Character.png";
-        default:                 return nullptr;
-    }
-}
-
 static const char* GetFontPath(int resourceId)
 {
     switch (resourceId)
@@ -258,18 +172,6 @@ static const char* GetFontPath(int resourceId)
         case IDR_FONT_ROBOTO: return "assets/fonts/Roboto-Regular.ttf";
         default:              return nullptr;
     }
-}
-
-static bool LoadTextureFromResourceCrossPlat(int resourceId, GLuint* out_texture, int* out_width, int* out_height)
-{
-#ifdef _WIN32
-    if (LoadTextureFromResource(resourceId, out_texture, out_width, out_height))
-        return true;
-#endif
-    const char* path = GetResourcePath(resourceId);
-    if (path)
-        return LoadTextureFromFile(path, out_texture, out_width, out_height);
-    return false;
 }
 
 static bool LoadFontFromResourceCrossPlat(int resourceId, ImGuiIO& io, float fontSize)
@@ -308,7 +210,7 @@ void ApplyBrainwaveStyle()
     style.ScrollbarRounding = 9.0f;
     style.GrabMinSize       = 5.0f;
     style.GrabRounding      = 3.0f;
-    style.WindowRounding    = 0.0f;
+    style.WindowRounding    = 4.0f;
     style.FrameRounding     = 4.0f;
 
     ImVec4* colors = style.Colors;
@@ -321,30 +223,15 @@ void ApplyBrainwaveStyle()
     colors[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.21f, 0.22f, 0.80f);
     colors[ImGuiCol_FrameBgActive]  = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
     colors[ImGuiCol_TitleBg]        = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_TitleBgActive]  = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]  = ImVec4(0.16f, 0.17f, 0.19f, 1.00f);
     colors[ImGuiCol_MenuBarBg]      = ImVec4(0.13f, 0.14f, 0.16f, 1.00f);
-    colors[ImGuiCol_Button]         = ImVec4(0.20f, 0.21f, 0.22f, 0.00f);
-    colors[ImGuiCol_ButtonHovered]  = ImVec4(0.20f, 0.21f, 0.22f, 0.50f);
-    colors[ImGuiCol_ButtonActive]   = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
+    colors[ImGuiCol_Button]         = ImVec4(0.20f, 0.21f, 0.22f, 0.40f);
+    colors[ImGuiCol_ButtonHovered]  = ImVec4(0.25f, 0.26f, 0.27f, 0.70f);
+    colors[ImGuiCol_ButtonActive]   = ImVec4(0.30f, 0.31f, 0.32f, 1.00f);
     colors[ImGuiCol_Header]         = ImVec4(0.20f, 0.21f, 0.22f, 1.00f);
     colors[ImGuiCol_HeaderHovered]  = ImVec4(0.25f, 0.25f, 0.27f, 1.00f);
     colors[ImGuiCol_HeaderActive]   = ImVec4(0.28f, 0.28f, 0.30f, 1.00f);
     colors[ImGuiCol_Separator]      = ImVec4(0.25f, 0.25f, 0.27f, 0.50f);
-}
-
-void PushSplashButtonColors()
-{
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.22f, 0.24f, 0.28f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.30f, 0.36f, 1.00f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.32f, 0.34f, 0.42f, 1.00f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 10.0f));
-}
-
-void PopSplashButtonColors()
-{
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor(3);
 }
 
 void InitUI(AppState& state)
@@ -357,11 +244,6 @@ void InitUI(AppState& state)
     {
         io.Fonts->AddFontDefault();
     }
-
-    state.iconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_FILETREE, &state.iconTexture, &state.iconWidth, &state.iconHeight);
-    gAreaIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_AREA, &gAreaIconTexture, &gAreaIconWidth, &gAreaIconHeight);
-    state.settingsIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_SETTINGS, &state.settingsIconTexture, &state.settingsIconWidth, &state.settingsIconHeight);
-    state.aboutIconLoaded = LoadTextureFromResourceCrossPlat(IDR_ICON_ABOUT, &state.aboutIconTexture, &state.aboutIconWidth, &state.aboutIconHeight);
 
     state.areaRender = std::make_shared<AreaRender>();
     state.areaRender->init();

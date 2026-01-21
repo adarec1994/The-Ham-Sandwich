@@ -8,7 +8,7 @@
 
 class M3Render {
 public:
-    M3Render(const M3ModelData& data, const ArchivePtr& arc);
+    M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly = false);
     ~M3Render();
 
     void render(const glm::mat4& view, const glm::mat4& proj);
@@ -47,6 +47,13 @@ public:
     const std::string& getModelName() const { return modelName; }
     const std::vector<unsigned int>& getGLTextures() const { return glTextures; }
     const std::vector<M3SubmeshGroup>& getSubmeshGroups() const { return submeshGroups; }
+
+    // Deferred texture loading
+    bool hasTexturesLoaded() const { return texturesLoaded; }
+    bool hasPendingTextures() const { return !pendingTexturePaths.empty(); }
+    size_t getPendingTextureCount() const { return pendingTexturePaths.size(); }
+    void queueTexturesForLoading();
+    bool uploadNextTexture(const ArchivePtr& arc); // Returns true if more textures pending
 
     void setActiveVariant(int variantIndex);
     int getActiveVariant() const { return activeVariant; }
@@ -104,6 +111,10 @@ private:
     unsigned int skeletonProgram = 0;
 
     unsigned int fallbackWhiteTex = 0;
+    bool texturesLoaded = false;
+    std::vector<std::string> pendingTexturePaths;
+    size_t nextTextureToLoad = 0;
+    ArchivePtr archiveRef;  // Stored for async texture loading
 
     void setupShader();
     void setupSkeletonShader();

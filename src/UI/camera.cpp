@@ -110,32 +110,23 @@ void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::v
 
 void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale)
 {
-    // Position is already in world coords with Z-flip applied from UI
-    // But we need to apply the flip here since UI passes raw position
     glm::vec3 pos = position;
-    // Note: The Z-flip is applied in renderProps, so for camera we need the same transform
-    // Actually the UI passes position + areaOffset, so Z should already be correct for terrain
-    // But prop position from file has Z flipped in renderProps, so we need to match
 
-    // Estimate prop size based on scale (props are typically a few units)
     float estimatedSize = std::max(2.0f, scale * 5.0f);
     float distance = estimatedSize * 3.0f;
 
-    // Position camera slightly above and behind the prop
     state.camera.Position = glm::vec3(
         pos.x - distance * 0.5f,
         pos.y + estimatedSize * 1.5f,
         pos.z - distance * 0.5f
     );
 
-    // Look towards the prop
     glm::vec3 toTarget = pos - state.camera.Position;
     toTarget = glm::normalize(toTarget);
 
     state.camera.Yaw = glm::degrees(atan2(toTarget.z, toTarget.x));
     state.camera.Pitch = glm::degrees(asin(toTarget.y));
 
-    // Clamp pitch
     if (state.camera.Pitch > 89.0f) state.camera.Pitch = 89.0f;
     if (state.camera.Pitch < -89.0f) state.camera.Pitch = -89.0f;
 

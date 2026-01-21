@@ -10,6 +10,9 @@
 #include <cmath>
 #include <cfloat>
 #include <set>
+#include <chrono>
+#include <iostream>
+
 const char* m3VertexSrc = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -38,6 +41,7 @@ void main() {
     TexCoord = aTexCoord;
 }
 )";
+
 const char* m3FragSrc = R"(
 #version 330 core
 out vec4 FragColor;
@@ -55,6 +59,7 @@ void main() {
     FragColor = vec4(finalColor, 1.0);
 }
 )";
+
 const char* skeletonVertSrc = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -66,6 +71,7 @@ void main() {
     vColor = aColor;
 }
 )";
+
 const char* skeletonFragSrc = R"(
 #version 330 core
 in vec3 vColor;
@@ -74,12 +80,14 @@ void main() {
     FragColor = vec4(vColor, 1.0);
 }
 )";
+
 static unsigned int CompileShader(GLenum type, const char* src) {
     unsigned int s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
     glCompileShader(s);
     return s;
 }
+
 struct RenderVertex {
     glm::vec3 position;
     glm::vec3 normal;
@@ -87,7 +95,8 @@ struct RenderVertex {
     glm::vec4 boneWeights;
     glm::uvec4 boneIndices;
 };
-M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
+
+M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly) {
     if (!data.success) return;
     geometry = data.geometry;
     submeshes = data.geometry.submeshes;
@@ -140,6 +149,7 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc) {
     setupShader();
     setupSkeletonShader();
 }
+
 M3Render::~M3Render() {
     if (VAO) glDeleteVertexArrays(1, &VAO);
     if (VBO) glDeleteBuffers(1, &VBO);
@@ -151,6 +161,7 @@ M3Render::~M3Render() {
     if (skeletonVBO) glDeleteBuffers(1, &skeletonVBO);
     if (skeletonProgram) glDeleteProgram(skeletonProgram);
 }
+
 void M3Render::setupShader() {
     unsigned int v = CompileShader(GL_VERTEX_SHADER, m3VertexSrc);
     unsigned int f = CompileShader(GL_FRAGMENT_SHADER, m3FragSrc);
@@ -161,6 +172,7 @@ void M3Render::setupShader() {
     glDeleteShader(v);
     glDeleteShader(f);
 }
+
 void M3Render::setupSkeletonShader() {
     unsigned int v = CompileShader(GL_VERTEX_SHADER, skeletonVertSrc);
     unsigned int f = CompileShader(GL_FRAGMENT_SHADER, skeletonFragSrc);
@@ -173,6 +185,7 @@ void M3Render::setupSkeletonShader() {
     glGenVertexArrays(1, &skeletonVAO);
     glGenBuffers(1, &skeletonVBO);
 }
+
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     glTextures.clear();
     glTextures.reserve(data.textures.size());
@@ -180,6 +193,7 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
         glTextures.push_back(loadTextureFromArchive(arc, tex.path));
     }
 }
+
 unsigned int M3Render::createFallbackWhite() {
     unsigned int tid = 0;
     glGenTextures(1, &tid);
@@ -193,8 +207,12 @@ unsigned int M3Render::createFallbackWhite() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     return tid;
 }
+
 unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty()) return 0;
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring wp = conv.from_bytes(path);
     if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
@@ -204,13 +222,25 @@ unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::
         entry = arc->getByPath(wp);
     }
     if (!entry) return 0;
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+
     std::vector<uint8_t> buffer;
     arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
     if (buffer.empty()) return 0;
+
+    auto t2 = std::chrono::high_resolution_clock::now();
+
     Tex::File tf;
     if (!tf.readFromMemory(buffer.data(), buffer.size())) return 0;
+
+    auto t3 = std::chrono::high_resolution_clock::now();
+
     Tex::ImageRGBA img;
     if (!tf.decodeLargestMipToRGBA(img)) return 0;
+
+    auto t4 = std::chrono::high_resolution_clock::now();
+
     unsigned int tid = 0;
     glGenTextures(1, &tid);
     glBindTexture(GL_TEXTURE_2D, tid);
@@ -221,8 +251,27 @@ unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    auto t5 = std::chrono::high_resolution_clock::now();
+
+    auto lookup = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    auto fileread = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
+    auto texparse = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    auto decode = std::chrono::duration_cast<std::chrono::microseconds>(t4 - t3).count();
+    auto upload = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
+    auto total = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t0).count();
+
+    std::cout << "[TEX] " << path << " " << img.width << "x" << img.height
+              << " lookup=" << lookup << "us"
+              << " read=" << fileread << "us"
+              << " parse=" << texparse << "us"
+              << " decode=" << decode << "us"
+              << " upload=" << upload << "us"
+              << " TOTAL=" << total << "us" << std::endl;
+
     return tid;
 }
+
 unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
     if (materialId >= materials.size()) return fallbackWhiteTex;
     const auto& m = materials[materialId];
@@ -237,9 +286,11 @@ unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) c
     }
     return fallbackWhiteTex;
 }
+
 void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
     render(view, proj, glm::mat4(1.0f));
 }
+
 void M3Render::render(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model) {
     if (!shaderProgram || !VAO) return;
     glDisable(GL_BLEND);
@@ -285,17 +336,21 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj, const glm::m
         );
     }
 }
+
 size_t M3Render::getSubmeshCount() const { return submeshes.size(); }
 const M3Submesh& M3Render::getSubmesh(size_t i) const { return submeshes[i]; }
 size_t M3Render::getMaterialCount() const { return materials.size(); }
+
 size_t M3Render::getMaterialVariantCount(size_t materialId) const {
     if (materialId >= materials.size()) return 0;
     return materials[materialId].variants.size();
 }
+
 int M3Render::getMaterialSelectedVariant(size_t materialId) const {
     if (materialId >= materialSelectedVariant.size()) return 0;
     return materialSelectedVariant[materialId];
 }
+
 void M3Render::setMaterialSelectedVariant(size_t materialId, int variant) {
     if (materialId >= materialSelectedVariant.size()) return;
     int maxV = (int)getMaterialVariantCount(materialId);
@@ -304,22 +359,27 @@ void M3Render::setMaterialSelectedVariant(size_t materialId, int variant) {
     if (variant >= maxV) variant = maxV - 1;
     materialSelectedVariant[materialId] = variant;
 }
+
 bool M3Render::getSubmeshVisible(size_t submeshId) const {
     if (submeshId >= submeshVisible.size()) return true;
     return submeshVisible[submeshId] != 0;
 }
+
 void M3Render::setSubmeshVisible(size_t submeshId, bool v) {
     if (submeshId >= submeshVisible.size()) return;
     submeshVisible[submeshId] = v ? 1 : 0;
 }
+
 int M3Render::getSubmeshVariantOverride(size_t submeshId) const {
     if (submeshId >= submeshVariantOverride.size()) return -1;
     return submeshVariantOverride[submeshId];
 }
+
 void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) {
     if (submeshId >= submeshVariantOverride.size()) return;
     submeshVariantOverride[submeshId] = variantOrMinus1;
 }
+
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
     for (size_t i = 0; i < submeshes.size(); ++i) {
@@ -333,6 +393,7 @@ void M3Render::setActiveVariant(int variantIndex) {
         }
     }
 }
+
 void M3Render::playAnimation(int index) {
     if (index < 0 || index >= (int)animations.size()) {
         stopAnimation();
@@ -343,23 +404,28 @@ void M3Render::playAnimation(int index) {
     animationPaused = false;
     updateAnimation(0.0f);
 }
+
 void M3Render::stopAnimation() {
     playingAnimation = -1;
     animationTime = 0.0f;
     animationPaused = false;
     boneMatrices.clear();
 }
+
 void M3Render::pauseAnimation() {
     animationPaused = true;
 }
+
 void M3Render::resumeAnimation() {
     animationPaused = false;
 }
+
 float M3Render::getAnimationDuration() const {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) return 0.0f;
     const auto& anim = animations[playingAnimation];
     return (anim.timestampEnd - anim.timestampStart) / 1000.0f;
 }
+
 static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(1.0f);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -380,6 +446,7 @@ static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     }
     return glm::mix(prev->scale, next->scale, t);
 }
+
 static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::quat(1, 0, 0, 0);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -400,6 +467,7 @@ static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs
     }
     return glm::slerp(prev->rotation, next->rotation, t);
 }
+
 static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(0.0f);
     const M3KeyFrame* prev = &track.keyframes[0];
@@ -420,6 +488,7 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
     }
     return glm::mix(prev->translation, next->translation, t);
 }
+
 void M3Render::updateAnimation(float deltaTime) {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) {
         boneMatrices.clear();
@@ -581,6 +650,7 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     glLineWidth(1.0f);
     glEnable(GL_DEPTH_TEST);
 }
+
 static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
     const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2, float& t)
 {
@@ -600,6 +670,7 @@ static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
     t = f * glm::dot(edge2, q);
     return t > EPSILON;
 }
+
 int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
 {
     float closestT = FLT_MAX;

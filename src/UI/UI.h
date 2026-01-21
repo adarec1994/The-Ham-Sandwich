@@ -44,11 +44,6 @@ struct Grid {
 };
 
 struct AppState {
-    int active_tab_index = 0;
-    bool sidebar_visible = false;
-    float sidebar_current_width = 0.0f;
-    float contentWidth = 280.0f;
-
     std::shared_ptr<Tex::PreviewState> texPreview = std::make_shared<Tex::PreviewState>();
 
     bool archivesLoaded = false;
@@ -60,24 +55,6 @@ struct AppState {
     bool showFileDialog = false;
     std::string currentDialogPath = R"(C:\Program Files (x86)\NCSOFT\WildStar)";
     std::string selectedPath;
-
-    GLuint iconTexture = 0;
-    int iconWidth = 0;
-    int iconHeight = 0;
-    bool iconLoaded = false;
-
-    GLuint settingsIconTexture = 0;
-    int settingsIconWidth = 0;
-    int settingsIconHeight = 0;
-    bool settingsIconLoaded = false;
-
-    GLuint aboutIconTexture = 0;
-    int aboutIconWidth = 0;
-    int aboutIconHeight = 0;
-    bool aboutIconLoaded = false;
-
-    bool show_settings_window = false;
-    bool show_about_window = false;
 
     M3RenderPtr m3Render = nullptr;
     bool show_models_window = false;

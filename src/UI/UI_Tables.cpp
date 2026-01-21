@@ -1,5 +1,6 @@
 #include "UI_Tables.h"
 #include "UI_Utils.h"
+#include "UI_ContentBrowser.h"
 #include "../Archive.h"
 
 #include <imgui.h>
@@ -57,12 +58,11 @@ namespace UI_Tables
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-        float strip_width = 70.0f;
-        float left_offset = strip_width + state.sidebar_current_width;
-        float available_width = viewport->Size.x - left_offset;
-        float available_height = viewport->Size.y;
+        float contentBrowserHeight = UI_ContentBrowser::GetHeight();
+        float available_width = viewport->Size.x;
+        float available_height = viewport->Size.y - contentBrowserHeight;
 
-        ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + left_offset, viewport->Pos.y));
+        ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y));
         ImGui::SetNextWindowSize(ImVec2(available_width, available_height));
 
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoMove

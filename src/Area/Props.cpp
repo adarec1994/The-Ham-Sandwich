@@ -72,15 +72,13 @@ void ParsePropsChunk(const uint8_t* data, size_t size, std::vector<Prop>& outPro
         std::memcpy(&qy, propPtr + offset, 4); offset += 4;
         std::memcpy(&qz, propPtr + offset, 4); offset += 4;
         std::memcpy(&qw, propPtr + offset, 4); offset += 4;
-        // Swap X and Z to match terrain coordinate system
-        prop.rotation = glm::quat(qw, qz, qy, qx);
+        prop.rotation = glm::quat(qw, qx, qy, qz);
 
         float px, py, pz;
         std::memcpy(&px, propPtr + offset, 4); offset += 4;
         std::memcpy(&py, propPtr + offset, 4); offset += 4;
         std::memcpy(&pz, propPtr + offset, 4); offset += 4;
-        // Swap X and Z to match terrain coordinate system
-        prop.position = glm::vec3(pz, py, px);
+        prop.position = glm::vec3(px, py, pz);
 
         std::memcpy(&prop.placement.minX, propPtr + offset, 2); offset += 2;
         std::memcpy(&prop.placement.minY, propPtr + offset, 2); offset += 2;
@@ -358,7 +356,7 @@ void PropLoader::QueueProp(Prop* prop)
 
 void PropLoader::QueueProps(std::vector<Prop*>& props)
 {
-    // Auto-initialize if not already running
+
     if (!mRunning)
     {
         std::cout << "[PropLoader] Auto-initializing..." << std::endl;
@@ -578,7 +576,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             continue;
         }
 
-        // Create M3Render without textures for faster loading
+
         M3ModelData dataNoTex = *upload.modelData;
         dataNoTex.textures.clear();
 

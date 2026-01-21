@@ -104,6 +104,23 @@ struct CachedModel
     bool valid = false;
 };
 
+// Pre-decoded texture ready for instant GPU upload
+struct DecodedTexture
+{
+    std::vector<uint8_t> rgba;
+    int width = 0;
+    int height = 0;
+    bool valid = false;
+    bool uploaded = false;
+};
+
+// Pre-parsed M3 model ready for instant GPU upload
+struct PreloadedModel
+{
+    std::unique_ptr<M3ModelData> data;
+    bool valid = false;
+};
+
 class PropLoader
 {
 public:
@@ -127,6 +144,23 @@ public:
     void CacheModel(const std::string& path, std::shared_ptr<M3Render> render);
 
     void ClearCache();
+
+    // Texture preloading - call this to decode textures in background
+    void PreloadTexture(const std::string& path);
+    void PreloadTextures(const std::vector<std::string>& paths);
+
+    // Get pre-decoded texture (returns nullptr if not ready)
+    DecodedTexture* GetDecodedTexture(const std::string& path);
+
+    // Upload a pre-decoded texture to GPU (fast, main thread only)
+    unsigned int UploadDecodedTexture(const DecodedTexture& tex);
+
+    // M3 model preloading - loads and parses M3 files in background
+    void PreloadModel(const std::string& path);
+    void PreloadModels(const std::vector<std::string>& paths);
+
+    // Get pre-parsed model (returns nullptr if not ready)
+    PreloadedModel* GetPreloadedModel(const std::string& path);
 
 private:
     PropLoader() = default;
@@ -163,4 +197,23 @@ private:
     std::mutex mFileCacheMutex;
 
     std::atomic<size_t> mPendingCount{0};
+
+    // Pre-decoded texture cache (in RAM, ready for instant GPU upload)
+    std::unordered_map<std::string, DecodedTexture> mDecodedTextures;
+    std::mutex mDecodedTextureMutex;
+
+    // Pre-parsed M3 model cache (in RAM, ready for instant GPU upload)
+    std::unordered_map<std::string, PreloadedModel> mPreloadedModels;
+    std::mutex mPreloadedModelMutex;
+
+    // Texture decode queue (background workers decode these)
+    std::queue<std::string> mTextureDecodeQueue;
+    std::mutex mTextureQueueMutex;
+
+    // Model preload queue (background workers parse these)
+    std::queue<std::string> mModelPreloadQueue;
+    std::mutex mModelQueueMutex;
+
+    void DecodeTextureInWorker(const std::string& path);
+    void PreloadModelInWorker(const std::string& path);
 };

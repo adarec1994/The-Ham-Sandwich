@@ -276,6 +276,12 @@ add_executable(The_Ham_Sandwich
         src/Area/Props.h
         src/models/M3LoaderV95.cpp
         src/models/M3LoaderV95.h
+        src/UI/UI_Outliner.cpp
+        src/UI/UI_Outliner.h
+        src/UI/UI_Details.cpp
+        src/UI/UI_Details.h
+        src/UI/UI_ContentBrowser.cpp
+        src/UI/UI_ContentBrowser.h
 )
 
 target_include_directories(The_Ham_Sandwich PRIVATE
