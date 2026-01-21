@@ -146,20 +146,17 @@ namespace UI_ContentBrowser {
                 {
                     if (req.extension == ".area")
                     {
-                        // Parse the area file structure (lightweight, no GPU ops)
                         auto parsed = AreaFile::parseAreaFile(req.archive, req.entry);
                         if (parsed.valid)
                         {
-                            // Area is 16x16 chunks. Each chunk is 32 units wide.
-                            // We will map 16x16 pixels per chunk -> 256x256 image.
                             int w = 256;
                             int h = 256;
-                            std::vector<uint8_t> pixels(w * h * 4, 0); // Initialize black/transparent
+                            std::vector<uint8_t> pixels(w * h * 4, 0);
 
                             float minH = parsed.minBounds.y;
                             float maxH = parsed.maxHeight;
                             float range = maxH - minH;
-                            if (range < 1.0f) range = 1.0f; // Avoid divide by zero
+                            if (range < 1.0f) range = 1.0f;
 
                             for (int cz = 0; cz < 16; cz++)
                             {
@@ -171,8 +168,6 @@ namespace UI_ContentBrowser {
                                     const auto& chunk = parsed.chunks[chunkIdx];
                                     if (!chunk.valid || chunk.vertices.empty()) continue;
 
-                                    // Chunks usually have 17x17 vertices (for overlap).
-                                    // We iterate 0..15 to fit our 256x256 pixel grid perfectly.
                                     for (int lz = 0; lz < 16; lz++)
                                     {
                                         for (int lx = 0; lx < 16; lx++)
@@ -181,22 +176,18 @@ namespace UI_ContentBrowser {
                                             if (vIdx >= (int)chunk.vertices.size()) continue;
 
                                             float height = chunk.vertices[vIdx].y;
-                                            // Normalize height to 0..255
                                             float norm = (height - minH) / range;
                                             uint8_t val = (uint8_t)(std::clamp(norm, 0.0f, 1.0f) * 255.0f);
 
-                                            // Calculate pixel position
                                             int px = cx * 16 + lx;
                                             int py = cz * 16 + lz;
 
-                                            // Flip Y for visual consistency if needed, but standard top-down
-                                            // usually matches map layout (North Up)
                                             int pIdx = (py * w + px) * 4;
 
                                             pixels[pIdx + 0] = val;
                                             pixels[pIdx + 1] = val;
                                             pixels[pIdx + 2] = val;
-                                            pixels[pIdx + 3] = 255; // Alpha
+                                            pixels[pIdx + 3] = 255;
                                         }
                                     }
                                 }
@@ -207,7 +198,7 @@ namespace UI_ContentBrowser {
                             res.success = true;
                         }
                     }
-                    else // .tex or default
+                    else
                     {
                         std::vector<uint8_t> bytes;
                         if (req.archive->getFileData(req.entry, bytes) && !bytes.empty())
