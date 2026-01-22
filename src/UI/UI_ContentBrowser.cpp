@@ -246,7 +246,7 @@ namespace UI_ContentBrowser {
             sResultQueue.pop_front();
 
             if (res.generation != sCurrentGeneration) continue;
-            if (res.fileIndex < 0 || res.fileIndex >= sCachedFiles.size()) continue;
+            if (res.fileIndex < 0 || res.fileIndex >= (int)sCachedFiles.size()) continue;
 
             auto& file = sCachedFiles[res.fileIndex];
             if (res.success && !file.textureID)
@@ -362,8 +362,8 @@ namespace UI_ContentBrowser {
         bool isFiltering = (sSearchFilter[0] != '\0');
         std::string filterLower;
         if (isFiltering) {
-             filterLower = sSearchFilter;
-             std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
+            filterLower = sSearchFilter;
+            std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
         }
 
         if (!sSelectedFolder)
@@ -676,7 +676,7 @@ namespace UI_ContentBrowser {
         sRequestTreeSync = false;
     }
 
-   static void RenderFileBrowser(AppState& state)
+    static void RenderFileBrowser(AppState& state)
     {
         if (sNeedsRefresh)
         {
@@ -739,7 +739,7 @@ namespace UI_ContentBrowser {
 
                     if (i == sBreadcrumbPath.size() - 1)
                     {
-                         ImGui::TextDisabled("%s", name.c_str());
+                        ImGui::TextDisabled("%s", name.c_str());
                     }
                     else
                     {
@@ -763,7 +763,6 @@ namespace UI_ContentBrowser {
 
             ImGui::Separator();
 
-            ImGuiStyle& style = ImGui::GetStyle();
             ImDrawList* drawList = ImGui::GetWindowDrawList();
 
             float windowVisibleX = ImGui::GetContentRegionAvail().x;
@@ -875,25 +874,25 @@ namespace UI_ContentBrowser {
                         }
                         else if (file.textureID)
                         {
-                             drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                            drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
                         else if (file.extension == ".tbl" && sTblIcon)
                         {
-                             drawList->AddImage(sTblIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                            drawList->AddImage(sTblIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
                         else if (file.extension == ".area" && sAreaIcon)
                         {
-                             drawList->AddImage(sAreaIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                            drawList->AddImage(sAreaIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
                         else if (file.extension == ".wem" && sAudioIcon)
                         {
-                             drawList->AddImage(sAudioIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                            drawList->AddImage(sAudioIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
                         else
                         {
                             ImU32 bgColor = IM_COL32(51, 51, 51, 255);
-                            if (file.isDirectory)           bgColor = IM_COL32(76, 64, 38, 255);
-                            else if (file.extension == ".m3") bgColor = IM_COL32(38, 76, 38, 255);
+                            if (file.isDirectory)              bgColor = IM_COL32(76, 64, 38, 255);
+                            else if (file.extension == ".m3")  bgColor = IM_COL32(38, 76, 38, 255);
                             else if (file.extension == ".area") bgColor = IM_COL32(38, 51, 76, 255);
                             else if (file.extension == ".tex")  bgColor = IM_COL32(76, 38, 76, 255);
                             else if (file.extension == ".tbl")  bgColor = IM_COL32(76, 76, 38, 255);
@@ -960,6 +959,9 @@ namespace UI_ContentBrowser {
 
     void Toggle() { sIsOpen = !sIsOpen; }
     bool IsOpen() { return sIsOpen; }
+    bool IsDocked() { return sIsDocked; }
+    void HideIfNotDocked() { if (!sIsDocked) sIsOpen = false; }
+
     static const float BOTTOM_BAR_HEIGHT = 34.0f;
     float GetHeight() { return sCurrentHeight + BOTTOM_BAR_HEIGHT; }
     float GetBarHeight() { return BOTTOM_BAR_HEIGHT; }
@@ -1030,8 +1032,8 @@ namespace UI_ContentBrowser {
         ImGui::SetNextWindowBgAlpha(0.98f);
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
-                                  ImGuiWindowFlags_NoBringToFrontOnFocus;
+                                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar |
+                                 ImGuiWindowFlags_NoBringToFrontOnFocus;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
@@ -1050,7 +1052,7 @@ namespace UI_ContentBrowser {
                 bool isActive = ImGui::IsItemActive();
 
                 ImU32 handleColor = isActive ? IM_COL32(100, 149, 237, 255) :
-                                   (isHovered ? IM_COL32(80, 80, 100, 255) : IM_COL32(60, 60, 70, 255));
+                                  (isHovered ? IM_COL32(80, 80, 100, 255) : IM_COL32(60, 60, 70, 255));
 
                 ImGui::GetWindowDrawList()->AddRectFilled(
                     handlePos,
@@ -1079,8 +1081,43 @@ namespace UI_ContentBrowser {
                 {
                     if (ImGui::BeginChild("##ContentArea", ImVec2(0, contentH), false, ImGuiWindowFlags_NoScrollbar))
                     {
+                        float availW = ImGui::GetContentRegionAvail().x;
+                        float splitterW = 6.0f;
+                        float minTree = 140.0f;
+                        float minRight = 200.0f;
+                        float maxTree = std::max(minTree, availW - splitterW - minRight);
+                        sTreeWidth = std::clamp(sTreeWidth, minTree, maxTree);
+
                         RenderFileTree(state);
-                        ImGui::SameLine();
+
+                        ImGui::SameLine(0.0f, 0.0f);
+
+                        ImVec2 splitPos = ImGui::GetCursorScreenPos();
+                        ImGui::InvisibleButton("##TreeSplitter", ImVec2(splitterW, -1.0f));
+
+                        bool splitHovered = ImGui::IsItemHovered();
+                        bool splitActive = ImGui::IsItemActive();
+
+                        ImU32 splitCol = splitActive ? IM_COL32(120, 170, 255, 255) :
+                                       (splitHovered ? IM_COL32(90, 90, 110, 255) : IM_COL32(70, 70, 85, 255));
+
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            splitPos,
+                            ImVec2(splitPos.x + splitterW, splitPos.y + ImGui::GetItemRectSize().y),
+                            splitCol
+                        );
+
+                        if (splitHovered || splitActive)
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+                        if (splitActive)
+                        {
+                            sTreeWidth += ImGui::GetIO().MouseDelta.x;
+                            sTreeWidth = std::clamp(sTreeWidth, minTree, maxTree);
+                        }
+
+                        ImGui::SameLine(0.0f, 0.0f);
+
                         RenderFileBrowser(state);
                     }
                     ImGui::EndChild();
@@ -1090,7 +1127,7 @@ namespace UI_ContentBrowser {
             }
             else
             {
-                 ImGui::Dummy(ImVec2(0, handleHeight));
+                ImGui::Dummy(ImVec2(0, handleHeight));
             }
 
             ImGui::SetCursorPosY(totalHeight - BOTTOM_BAR_HEIGHT);

@@ -1,3 +1,5 @@
+// camera.cpp (or wherever UpdateCamera lives)
+
 #include "UI.h"
 #include "../Area/AreaFile.h"
 #include <vector>
@@ -7,6 +9,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
+
+#include "UI_ContentBrowser.h"
 
 extern std::vector<AreaFilePtr> gLoadedAreas;
 extern void CheckAreaSelection(AppState& state);
@@ -163,6 +167,11 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
     {
         CheckAreaSelection(state);
+    }
+
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !io.WantCaptureMouse)
+    {
+        UI_ContentBrowser::HideIfNotDocked();
     }
 
     if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
