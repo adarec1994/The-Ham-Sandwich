@@ -10,8 +10,6 @@
 #include <cmath>
 #include <cfloat>
 #include <set>
-#include <chrono>
-#include <iostream>
 
 const char* m3VertexSrc = R"(
 #version 330 core
@@ -211,8 +209,6 @@ unsigned int M3Render::createFallbackWhite() {
 unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty()) return 0;
 
-    auto t0 = std::chrono::high_resolution_clock::now();
-
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring wp = conv.from_bytes(path);
     if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
@@ -223,23 +219,15 @@ unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::
     }
     if (!entry) return 0;
 
-    auto t1 = std::chrono::high_resolution_clock::now();
-
     std::vector<uint8_t> buffer;
     arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
     if (buffer.empty()) return 0;
 
-    auto t2 = std::chrono::high_resolution_clock::now();
-
     Tex::File tf;
     if (!tf.readFromMemory(buffer.data(), buffer.size())) return 0;
 
-    auto t3 = std::chrono::high_resolution_clock::now();
-
     Tex::ImageRGBA img;
     if (!tf.decodeLargestMipToRGBA(img)) return 0;
-
-    auto t4 = std::chrono::high_resolution_clock::now();
 
     unsigned int tid = 0;
     glGenTextures(1, &tid);
@@ -251,23 +239,6 @@ unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    auto t5 = std::chrono::high_resolution_clock::now();
-
-    auto lookup = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-    auto fileread = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
-    auto texparse = std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
-    auto decode = std::chrono::duration_cast<std::chrono::microseconds>(t4 - t3).count();
-    auto upload = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t4).count();
-    auto total = std::chrono::duration_cast<std::chrono::microseconds>(t5 - t0).count();
-
-    std::cout << "[TEX] " << path << " " << img.width << "x" << img.height
-              << " lookup=" << lookup << "us"
-              << " read=" << fileread << "us"
-              << " parse=" << texparse << "us"
-              << " decode=" << decode << "us"
-              << " upload=" << upload << "us"
-              << " TOTAL=" << total << "us" << std::endl;
 
     return tid;
 }
@@ -702,4 +673,50 @@ int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir
         }
     }
     return closestSubmesh;
+}
+
+int M3Render::rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
+{
+    if (bones.empty()) return -1;
+
+    int closestBone = -1;
+    float closestDist = FLT_MAX;
+    float pickRadius = 0.15f;
+
+    std::vector<glm::vec3> boneWorldPos(bones.size());
+    if (playingAnimation >= 0 && !boneMatrices.empty())
+    {
+        for (size_t i = 0; i < bones.size(); ++i)
+        {
+            glm::mat4 worldTransform = boneMatrices[i] * bones[i].globalMatrix;
+            boneWorldPos[i] = glm::vec3(worldTransform[3]);
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < bones.size(); ++i)
+        {
+            boneWorldPos[i] = glm::vec3(bones[i].globalMatrix[3]);
+        }
+    }
+
+    for (size_t i = 0; i < bones.size(); ++i)
+    {
+        glm::vec3 bonePos = boneWorldPos[i];
+
+        glm::vec3 toPoint = bonePos - rayOrigin;
+        float t = glm::dot(toPoint, rayDir);
+        if (t < 0) continue;
+
+        glm::vec3 closestPoint = rayOrigin + rayDir * t;
+        float dist = glm::length(bonePos - closestPoint);
+
+        if (dist < pickRadius && t < closestDist)
+        {
+            closestDist = t;
+            closestBone = static_cast<int>(i);
+        }
+    }
+
+    return closestBone;
 }

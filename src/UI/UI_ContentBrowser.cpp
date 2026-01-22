@@ -275,7 +275,11 @@ namespace UI_ContentBrowser {
 
     static bool FindPathToNode(const IFileSystemEntryPtr& current, const IFileSystemEntryPtr& target)
     {
-        if (current.get() == target.get()) return true;
+        if (current.get() == target.get())
+        {
+            sNodesToExpand.insert(current.get());
+            return true;
+        }
         if (!current->isDirectory()) return false;
 
         for (const auto& child : current->getChildren())
@@ -915,9 +919,21 @@ namespace UI_ContentBrowser {
                         ImVec4 clipRect(cellMin.x, cellMin.y, cellMax.x, textStart.y + (textLineHeight * nameLines));
                         drawList->PushClipRect(ImVec2(clipRect.x, clipRect.y), ImVec2(clipRect.z, clipRect.w), true);
 
+                        ImVec4 nameColor(1.0f, 1.0f, 1.0f, 1.0f);
+                        if (file.extension == ".m3")
+                            nameColor = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
+                        else if (file.extension == ".tex")
+                            nameColor = ImVec4(0.8f, 0.5f, 0.9f, 1.0f);
+                        else if (file.extension == ".area")
+                            nameColor = ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+                        else if (file.extension == ".wem")
+                            nameColor = ImVec4(0.9f, 0.35f, 0.35f, 1.0f);
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, nameColor);
                         ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + iconSize - 4);
                         ImGui::TextUnformatted(stem.c_str());
                         ImGui::PopTextWrapPos();
+                        ImGui::PopStyleColor();
 
                         drawList->PopClipRect();
 

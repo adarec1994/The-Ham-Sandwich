@@ -143,8 +143,6 @@ add_executable(The_Ham_Sandwich
         src/UI/UI_RenderWorld.h
         src/UI/UI_FileTree.cpp
         src/UI/UI_FileTree.h
-        src/UI/UI_ModelTab.cpp
-        src/UI/UI_ModelTab.h
         src/Area/TerrainTexture.cpp
         src/Area/TerrainTexture.h
         src/Area/TerrainShader.cpp

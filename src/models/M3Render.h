@@ -68,6 +68,7 @@ public:
 
     void setSelectedBone(int idx) { selectedBone = idx; }
     int getSelectedBone() const { return selectedBone; }
+    int rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const;
 
     void playAnimation(int index);
     void stopAnimation();
@@ -114,7 +115,7 @@ private:
     bool texturesLoaded = false;
     std::vector<std::string> pendingTexturePaths;
     size_t nextTextureToLoad = 0;
-    ArchivePtr archiveRef;  // Stored for async texture loading
+    ArchivePtr archiveRef;
 
     void setupShader();
     void setupSkeletonShader();

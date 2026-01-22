@@ -97,6 +97,7 @@ namespace Tex
         int texW = 0;
         int texH = 0;
         bool hasTexture = false;
+        bool ownsTexture = true;  
 
         bool showR = true;
         bool showG = true;
@@ -109,5 +110,6 @@ namespace Tex
     };
 
     bool OpenTexPreviewFromEntry(AppState& state, const ArchivePtr& arc, const FileEntryPtr& fileEntry);
+    void OpenTexPreviewFromGLTexture(AppState& state, GLuint texId, int width, int height, const std::string& title);
     void RenderTexPreviewWindow(PreviewState& ps);
 }

@@ -33,17 +33,18 @@ namespace Tex
 {
     void PreviewState::clearGL()
     {
-        if (texture != 0)
+        if (texture != 0 && ownsTexture)
         {
             if (glIsTexture(texture)) {
                 glDeleteTextures(1, &texture);
             }
-            texture = 0;
         }
+        texture = 0;
         texW = texH = 0;
         hasTexture = false;
         title.clear();
         open = false;
+        ownsTexture = true;  // Reset for next use
 
         showR = true;
         showG = true;
@@ -695,15 +696,17 @@ namespace Tex
     {
         if (!state.texPreview) return false;
 
-        if (state.texPreview->texture != 0) {
+        // Clear previous texture if we own it
+        if (state.texPreview->texture != 0 && state.texPreview->ownsTexture) {
             glDeleteTextures(1, &state.texPreview->texture);
-            state.texPreview->texture = 0;
         }
+        state.texPreview->texture = 0;
         state.texPreview->hasTexture = false;
         state.texPreview->texW = 0;
         state.texPreview->texH = 0;
         state.texPreview->open = true;
         state.texPreview->title = "Processing...";
+        state.texPreview->ownsTexture = true;
 
         if (!arc || !fileEntry) return false;
 
@@ -728,6 +731,25 @@ namespace Tex
         }
 
         return uploaded;
+    }
+
+    void OpenTexPreviewFromGLTexture(AppState& state, GLuint texId, int width, int height, const std::string& title)
+    {
+        if (!state.texPreview) return;
+
+        // Clear previous texture if we own it
+        if (state.texPreview->texture != 0 && state.texPreview->ownsTexture) {
+            glDeleteTextures(1, &state.texPreview->texture);
+        }
+
+        // Use the existing texture - don't delete it when done
+        state.texPreview->texture = texId;
+        state.texPreview->texW = width;
+        state.texPreview->texH = height;
+        state.texPreview->hasTexture = (texId != 0);
+        state.texPreview->ownsTexture = false;  // We're borrowing this texture
+        state.texPreview->open = true;
+        state.texPreview->title = title;
     }
 
     void RenderTexPreviewWindow(PreviewState& ps)

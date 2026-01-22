@@ -1,5 +1,6 @@
 #include "UI_RenderWorld.h"
 #include "../Area/AreaRender.h"
+#include "../models/M3Render.h"
 #include "UI_Globals.h"
 #include "UI_Selection.h"
 
@@ -118,8 +119,50 @@ static void RenderAreaHighlight(const AreaFilePtr& area, const glm::mat4& view, 
     glBindVertexArray(0);
 }
 
+static void HandleModelPicking(AppState& state)
+{
+    M3Render* render = state.m3Render.get();
+    if (!render) return;
+    if (ImGui::GetIO().WantCaptureMouse) return;
+    if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;
+
+    ImVec2 mousePos = ImGui::GetMousePos();
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+
+    float ndcX = (2.0f * (mousePos.x - vp->Pos.x) / vp->Size.x) - 1.0f;
+    float ndcY = 1.0f - (2.0f * (mousePos.y - vp->Pos.y) / vp->Size.y);
+
+    glm::mat4 invProj = glm::inverse(gProjMatrix);
+    glm::mat4 invView = glm::inverse(gViewMatrix);
+
+    glm::vec4 rayClip(ndcX, ndcY, -1.0f, 1.0f);
+    glm::vec4 rayEye = invProj * rayClip;
+    rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+    glm::vec3 rayWorld = glm::normalize(glm::vec3(invView * rayEye));
+    glm::vec3 rayOrigin = glm::vec3(invView[3]);
+
+    if (render->getShowSkeleton())
+    {
+        int hit = render->rayPickBone(rayOrigin, rayWorld);
+        render->setSelectedBone(hit);
+        render->setSelectedSubmesh(-1);
+    }
+    else
+    {
+        int hit = render->rayPickSubmesh(rayOrigin, rayWorld);
+        render->setSelectedSubmesh(hit);
+        render->setSelectedBone(-1);
+    }
+}
+
 void HandleAreaPicking(AppState& state)
 {
+    if (gLoadedModel)
+    {
+        HandleModelPicking(state);
+        return;
+    }
+
     if (gLoadedAreas.empty()) return;
     if (ImGui::GetIO().WantCaptureMouse) return;
     if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) return;

@@ -7,8 +7,11 @@
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
 #include "../export/M3Export.h"
+#include "../tex/tex.h"
+#include "../Archive.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
+#include <glad/glad.h>
 #include <set>
 #include <thread>
 #include <atomic>
@@ -27,9 +30,6 @@ namespace UI_Details
     static float sNotificationTimer = 0.0f;
     static std::string sNotificationMessage;
     static bool sNotificationSuccess = true;
-
-    static int sSelectedTextureIndex = -1;
-    static bool sShowTexturePopup = false;
 
     void Reset()
     {
@@ -130,6 +130,27 @@ namespace UI_Details
             }
         }
 
+        if (materialCount > 0 && ImGui::CollapsingHeader("Materials"))
+        {
+            for (size_t i = 0; i < materialCount; ++i)
+            {
+                ImGui::PushID((int)i);
+                if (ImGui::TreeNode((void*)(intptr_t)i, "Material %zu", i))
+                {
+                    int currentVar = render->getMaterialSelectedVariant(i);
+                    int variantCount = (int)render->getMaterialVariantCount(i);
+                    if (variantCount > 1)
+                    {
+                        if (ImGui::SliderInt("Variant", &currentVar, 0, variantCount - 1))
+                            render->setMaterialSelectedVariant(i, currentVar);
+                    }
+                    ImGui::Text("Variants: %d", variantCount);
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+        }
+
         if (ImGui::CollapsingHeader("Textures"))
         {
             const auto& textures = render->getAllTextures();
@@ -148,8 +169,16 @@ namespace UI_Details
                 {
                     if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
                     {
-                        sSelectedTextureIndex = (int)i;
-                        sShowTexturePopup = true;
+                        // Query texture dimensions from OpenGL
+                        int texWidth = 0, texHeight = 0;
+                        glBindTexture(GL_TEXTURE_2D, glTex);
+                        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texWidth);
+                        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texHeight);
+                        glBindTexture(GL_TEXTURE_2D, 0);
+
+                        // Open preview instantly using existing texture
+                        std::string title = tex.path.empty() ? "Texture Preview" : tex.path;
+                        Tex::OpenTexPreviewFromGLTexture(state, glTex, texWidth, texHeight, title);
                     }
 
                     if (ImGui::IsItemHovered())
@@ -171,39 +200,50 @@ namespace UI_Details
             }
         }
 
-        if (sShowTexturePopup && sSelectedTextureIndex >= 0)
+        if (boneCount > 0 && ImGui::CollapsingHeader("Bones"))
         {
-            const auto& textures = render->getAllTextures();
-            const auto& glTextures = render->getGLTextures();
+            const auto& bones = render->getAllBones();
+            int selectedBone = render->getSelectedBone();
+            static int sLastSelectedBone = -1;
 
-            if (sSelectedTextureIndex < (int)textures.size())
+            for (size_t i = 0; i < bones.size(); ++i)
             {
-                const auto& tex = textures[sSelectedTextureIndex];
-                std::string title = tex.path.empty() ? ("Texture " + std::to_string(sSelectedTextureIndex)) : tex.path;
+                const auto& bone = bones[i];
+                ImGui::PushID((int)i);
 
-                ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_FirstUseEver);
-                if (ImGui::Begin(title.c_str(), &sShowTexturePopup))
+                bool isSelected = (selectedBone == (int)i);
+
+                if (isSelected && selectedBone != sLastSelectedBone)
                 {
-                    unsigned int glTex = (sSelectedTextureIndex < (int)glTextures.size()) ? glTextures[sSelectedTextureIndex] : 0;
-                    if (glTex != 0)
-                    {
-                        ImVec2 avail = ImGui::GetContentRegionAvail();
-                        float maxDim = std::min(avail.x, avail.y - 60.0f);
-                        maxDim = std::max(64.0f, maxDim);
-                        ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
-                    }
-
-                    ImGui::Separator();
-                    ImGui::Text("Index: %d", sSelectedTextureIndex);
-                    ImGui::TextWrapped("%s", tex.path.c_str());
-                    if (!tex.textureType.empty())
-                        ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
+                    ImGui::SetScrollHereY(0.5f);
+                    sLastSelectedBone = selectedBone;
                 }
-                ImGui::End();
+
+                if (isSelected)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
+
+                char label[128];
+                snprintf(label, sizeof(label), "[%d] %s", bone.id, bone.name.c_str());
+
+                if (ImGui::Selectable(label, isSelected))
+                    render->setSelectedBone(isSelected ? -1 : (int)i);
+
+                if (isSelected)
+                    ImGui::PopStyleColor();
+
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::Text("Parent: %d", bone.parentId);
+                    ImGui::Text("Flags: 0x%04X", bone.flags);
+                    ImGui::EndTooltip();
+                }
+
+                ImGui::PopID();
             }
 
-            if (!sShowTexturePopup)
-                sSelectedTextureIndex = -1;
+            if (selectedBone < 0)
+                sLastSelectedBone = -1;
         }
 
         if (animCount > 0 && ImGui::CollapsingHeader("Animations"))
@@ -285,6 +325,57 @@ namespace UI_Details
         }
     }
 
+
+    static void DrawAnimationPlayback(AppState& state)
+    {
+        M3Render* render = state.m3Render.get();
+        if (!render || !render->isAnimationPlaying())
+            return;
+
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        float sidebarWidth = UI_Outliner::GetSidebarWidth();
+        float playbackWidth = 180.0f;
+        float popupX = vp->Pos.x + vp->Size.x - sidebarWidth - playbackWidth - 20.0f;
+        float popupY = vp->Pos.y + 40.0f;
+
+        ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowBgAlpha(0.9f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+
+        ImGuiWindowFlags popupFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
+
+        bool showPlayback = true;
+        if (ImGui::Begin("Playback", &showPlayback, popupFlags))
+        {
+            float duration = render->getAnimationDuration();
+            float currentTime = render->getAnimationTime();
+            bool isPaused = render->isAnimationPaused();
+
+            ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(160, 14));
+
+            float btnWidth = 50.0f;
+            if (isPaused)
+            {
+                if (ImGui::Button("Play", ImVec2(btnWidth, 0)))
+                    render->resumeAnimation();
+            }
+            else
+            {
+                if (ImGui::Button("Pause", ImVec2(btnWidth, 0)))
+                    render->pauseAnimation();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Stop", ImVec2(btnWidth, 0)))
+                render->stopAnimation();
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+
+        if (!showPlayback)
+            render->stopAnimation();
+    }
+
     static void DrawAreaSelectionDetails(AppState& state)
     {
         if (gSelectedAreaIndex < 0 || gSelectedAreaIndex >= static_cast<int>(gLoadedAreas.size()))
@@ -328,6 +419,16 @@ namespace UI_Details
 
     void Draw(AppState& state)
     {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::GetIO().WantCaptureKeyboard)
+        {
+            if (state.m3Render)
+            {
+                state.m3Render->setSelectedBone(-1);
+                state.m3Render->setSelectedSubmesh(-1);
+            }
+            gSelectedAreaIndex = -1;
+        }
+
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
         float sidebarWidth = UI_Outliner::GetSidebarWidth();
@@ -386,6 +487,8 @@ namespace UI_Details
         }
         ImGui::End();
         ImGui::PopStyleVar();
+
+        DrawAnimationPlayback(state);
 
         if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
