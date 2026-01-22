@@ -66,23 +66,39 @@ namespace UI_Details
         if (uniqueGroups.size() > 1)
         {
             ImGui::Separator();
-            ImGui::Text("Variant:");
+
             int currentVariant = render->getActiveVariant();
+            char preview[32];
+            if (currentVariant == -1)
+                snprintf(preview, sizeof(preview), "All");
+            else
+                snprintf(preview, sizeof(preview), "%d", currentVariant);
 
-            if (ImGui::RadioButton("All", currentVariant == -1))
-            {
-                render->setActiveVariant(-1);
-                for (size_t i = 0; i < submeshCount; ++i)
-                    render->setSubmeshVisible(i, true);
-            }
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Variant:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1);
 
-            for (uint8_t gid : uniqueGroups)
+            if (ImGui::BeginCombo("##VariantCombo", preview))
             {
-                ImGui::SameLine();
-                char label[32];
-                snprintf(label, sizeof(label), "%d", gid);
-                if (ImGui::RadioButton(label, currentVariant == (int)gid))
-                    render->setActiveVariant((int)gid);
+                bool selAll = (currentVariant == -1);
+                if (ImGui::Selectable("All", selAll))
+                {
+                    render->setActiveVariant(-1);
+                    for (size_t i = 0; i < submeshCount; ++i)
+                        render->setSubmeshVisible(i, true);
+                }
+
+                for (uint8_t gid : uniqueGroups)
+                {
+                    bool sel = (currentVariant == (int)gid);
+                    char label[32];
+                    snprintf(label, sizeof(label), "%d", gid);
+                    if (ImGui::Selectable(label, sel))
+                        render->setActiveVariant((int)gid);
+                }
+
+                ImGui::EndCombo();
             }
         }
 
@@ -120,7 +136,13 @@ namespace UI_Details
 
         if (!sExportInProgress.load())
         {
-            if (ImGui::Button("Export GLB", ImVec2(ImGui::GetContentRegionAvail().x, 24)))
+            const float buttonHeight = 24.0f;
+            const float fontHeight = ImGui::GetFontSize();
+            const float padY = (buttonHeight - fontHeight) * 0.5f;
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, padY));
+
+            if (ImGui::Button("Export GLB", ImVec2(ImGui::GetContentRegionAvail().x, buttonHeight)))
             {
                 IGFD::FileDialogConfig config;
                 config.path = ".";
@@ -132,7 +154,7 @@ namespace UI_Details
                 ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
             }
 
-            if (ImGui::Button("Export FBX", ImVec2(ImGui::GetContentRegionAvail().x, 24)))
+            if (ImGui::Button("Export FBX", ImVec2(ImGui::GetContentRegionAvail().x, buttonHeight)))
             {
                 IGFD::FileDialogConfig config;
                 config.path = ".";
@@ -143,6 +165,8 @@ namespace UI_Details
                 defaultName += ".fbx";
                 ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
             }
+
+            ImGui::PopStyleVar();
         }
         else
         {
@@ -215,7 +239,8 @@ namespace UI_Details
         ImGui::SetNextWindowBgAlpha(0.95f);
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus;
+                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
@@ -236,6 +261,8 @@ namespace UI_Details
             }
             ImGui::SetCursorScreenPos(cursorPos);
 
+            ImGui::BeginChild("##DetailsScroll", ImVec2(0, 0), false);
+
             if (gLoadedModel)
             {
                 DrawM3Details(state);
@@ -250,6 +277,8 @@ namespace UI_Details
                 ImGui::Spacing();
                 ImGui::TextWrapped("Use the Content Browser to load .area or .m3 files.");
             }
+
+            ImGui::EndChild();
         }
         ImGui::End();
         ImGui::PopStyleVar();

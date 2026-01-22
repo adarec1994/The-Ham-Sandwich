@@ -151,516 +151,509 @@ namespace UI_Models
                 ImGui::Separator();
                 ImGui::Text("Variant:");
                 int currentVariant = render->getActiveVariant();
-                float availWidth = ImGui::GetContentRegionAvail().x;
-                float btnWidth = 45.0f;
-                float spacing = ImGui::GetStyle().ItemSpacing.x;
-                float x = 0.0f;
+                char preview[64];
+                if (currentVariant == -1) snprintf(preview, sizeof(preview), "All");
+                else snprintf(preview, sizeof(preview), "%d", currentVariant);
 
-                if (ImGui::RadioButton("All", currentVariant == -1))
+                if (ImGui::BeginCombo("##variant_combo", preview))
                 {
-                    render->setActiveVariant(-1);
+                    bool selAll = (currentVariant == -1);
+                    if (ImGui::Selectable("All", selAll))
+                    {
+                        render->setActiveVariant(-1);
+                        for (size_t i = 0; i < submeshCount; ++i)
+                            render->setSubmeshVisible(i, true);
+                    }
+
+                    for (uint8_t gid : uniqueGroups)
+                    {
+                        bool sel = (currentVariant == (int)gid);
+                        char label[32];
+                        snprintf(label, sizeof(label), "%d", gid);
+                        if (ImGui::Selectable(label, sel))
+                            render->setActiveVariant((int)gid);
+                    }
+
+                    ImGui::EndCombo();
+                }
+                if (ImGui::CollapsingHeader("Animations"))
+                {
+                    const auto& anims = render->getAllAnimations();
+                    int playingIdx = render->getPlayingAnimation();
+
+                    for (size_t i = 0; i < anims.size(); ++i)
+                    {
+                        const auto& anim = anims[i];
+                        bool isPlaying = (playingIdx == (int)i);
+                        float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
+
+                        char label[64];
+                        snprintf(label, sizeof(label), "%s Anim %zu (%.2fs)###anim%zu", isPlaying ? ">" : " ", i, duration, i);
+
+                        if (isPlaying) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+                        if (ImGui::Selectable(label, isPlaying))
+                        {
+                            if (isPlaying) render->stopAnimation();
+                            else render->playAnimation((int)i);
+                        }
+                        if (isPlaying) ImGui::PopStyleColor();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Submeshes"))
+                {
                     for (size_t i = 0; i < submeshCount; ++i)
-                        render->setSubmeshVisible(i, true);
-                }
-                x += btnWidth + spacing;
+                    {
+                        const auto& sm = render->getSubmesh(i);
+                        ImGui::PushID(static_cast<int>(i));
 
-                for (uint8_t gid : uniqueGroups)
-                {
-                    if (x + btnWidth > availWidth && x > 0)
-                    {
-                        x = 0.0f;
-                    }
-                    else if (x > 0)
-                    {
+                        bool visible = render->getSubmeshVisible(i);
+                        if (ImGui::Checkbox("##vis", &visible))
+                            render->setSubmeshVisible(i, visible);
                         ImGui::SameLine();
-                    }
 
-                    char label[32];
-                    snprintf(label, sizeof(label), "%d", gid);
-                    if (ImGui::RadioButton(label, currentVariant == (int)gid))
-                        render->setActiveVariant((int)gid);
-
-                    x += btnWidth + spacing;
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Animations"))
-            {
-                const auto& anims = render->getAllAnimations();
-                int playingIdx = render->getPlayingAnimation();
-
-                for (size_t i = 0; i < anims.size(); ++i)
-                {
-                    const auto& anim = anims[i];
-                    bool isPlaying = (playingIdx == (int)i);
-                    float duration = (anim.timestampEnd - anim.timestampStart) / 1000.0f;
-
-                    char label[64];
-                    snprintf(label, sizeof(label), "%s Anim %zu (%.2fs)###anim%zu", isPlaying ? ">" : " ", i, duration, i);
-
-                    if (isPlaying) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
-                    if (ImGui::Selectable(label, isPlaying))
-                    {
-                        if (isPlaying) render->stopAnimation();
-                        else render->playAnimation((int)i);
-                    }
-                    if (isPlaying) ImGui::PopStyleColor();
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Submeshes"))
-            {
-                for (size_t i = 0; i < submeshCount; ++i)
-                {
-                    const auto& sm = render->getSubmesh(i);
-                    ImGui::PushID(static_cast<int>(i));
-
-                    bool visible = render->getSubmeshVisible(i);
-                    if (ImGui::Checkbox("##vis", &visible))
-                        render->setSubmeshVisible(i, visible);
-                    ImGui::SameLine();
-
-                    if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu (Group %d)", i, sm.groupId))
-                    {
-                        ImGui::Text("Material: %d  Indices: %u  Vertices: %u", sm.materialID, sm.indexCount, sm.vertexCount);
-                        ImGui::TreePop();
-                    }
-                    ImGui::PopID();
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Materials"))
-            {
-                for (size_t i = 0; i < materialCount; ++i)
-                {
-                    ImGui::PushID(static_cast<int>(i));
-                    if (ImGui::TreeNode((void*)(intptr_t)i, "Material %zu", i))
-                    {
-                        int currentVariant = render->getMaterialSelectedVariant(i);
-                        int variantCount = (int)render->getMaterialVariantCount(i);
-                        if (variantCount > 1)
+                        if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu (Group %d)", i, sm.groupId))
                         {
-                            if (ImGui::SliderInt("Variant", &currentVariant, 0, variantCount - 1))
-                                render->setMaterialSelectedVariant(i, currentVariant);
+                            ImGui::Text("Material: %d  Indices: %u  Vertices: %u", sm.materialID, sm.indexCount, sm.vertexCount);
+                            ImGui::TreePop();
                         }
-                        ImGui::Text("Variants: %d", variantCount);
-                        ImGui::TreePop();
+                        ImGui::PopID();
                     }
-                    ImGui::PopID();
                 }
-            }
 
-            if (ImGui::CollapsingHeader("Textures"))
-            {
-                const auto& textures = render->getAllTextures();
-                const auto& glTextures = render->getGLTextures();
-                float thumbSize = 48.0f;
-                float windowWidth = ImGui::GetContentRegionAvail().x;
-                int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
-
-                for (size_t i = 0; i < textures.size(); ++i)
+                if (ImGui::CollapsingHeader("Materials"))
                 {
-                    const auto& tex = textures[i];
-                    ImGui::PushID(static_cast<int>(i));
-                    unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
-
-                    if (glTex != 0)
+                    for (size_t i = 0; i < materialCount; ++i)
                     {
-                        if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
+                        ImGui::PushID(static_cast<int>(i));
+                        if (ImGui::TreeNode((void*)(intptr_t)i, "Material %zu", i))
                         {
-                            selectedTextureIndex = static_cast<int>(i);
-                            showTexturePopup = true;
+                            int currentVariant = render->getMaterialSelectedVariant(i);
+                            int variantCount = (int)render->getMaterialVariantCount(i);
+                            if (variantCount > 1)
+                            {
+                                if (ImGui::SliderInt("Variant", &currentVariant, 0, variantCount - 1))
+                                    render->setMaterialSelectedVariant(i, currentVariant);
+                            }
+                            ImGui::Text("Variants: %d", variantCount);
+                            ImGui::TreePop();
                         }
+                        ImGui::PopID();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Textures"))
+                {
+                    const auto& textures = render->getAllTextures();
+                    const auto& glTextures = render->getGLTextures();
+                    float thumbSize = 48.0f;
+                    float windowWidth = ImGui::GetContentRegionAvail().x;
+                    int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
+
+                    for (size_t i = 0; i < textures.size(); ++i)
+                    {
+                        const auto& tex = textures[i];
+                        ImGui::PushID(static_cast<int>(i));
+                        unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
+
+                        if (glTex != 0)
+                        {
+                            if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
+                            {
+                                selectedTextureIndex = static_cast<int>(i);
+                                showTexturePopup = true;
+                            }
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::BeginTooltip();
+                                ImGui::Text("[%zu] %s", i, tex.path.c_str());
+                                ImGui::EndTooltip();
+                            }
+                        }
+                        else
+                        {
+                            ImGui::Button("N/A", ImVec2(thumbSize, thumbSize));
+                        }
+
+                        if ((i + 1) % columns != 0 && i + 1 < textures.size())
+                            ImGui::SameLine();
+                        ImGui::PopID();
+                    }
+                }
+
+                if (ImGui::CollapsingHeader("Bones"))
+                {
+                    const auto& bones = render->getAllBones();
+                    int selectedBone = render->getSelectedBone();
+
+                    // Deselect button
+                    if (selectedBone >= 0)
+                    {
+                        if (ImGui::Button("Deselect"))
+                            render->setSelectedBone(-1);
+                        ImGui::Separator();
+                    }
+
+                    for (size_t i = 0; i < bones.size(); ++i)
+                    {
+                        const auto& bone = bones[i];
+                        ImGui::PushID(static_cast<int>(i));
+
+                        bool isSelected = (selectedBone == static_cast<int>(i));
+
+                        // Highlight selected bone
+                        if (isSelected)
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
+
+                        char label[128];
+                        snprintf(label, sizeof(label), "[%d] %s", bone.id, bone.name.c_str());
+
+                        if (ImGui::Selectable(label, isSelected))
+                        {
+                            render->setSelectedBone(isSelected ? -1 : static_cast<int>(i));
+                        }
+
+                        if (isSelected)
+                            ImGui::PopStyleColor();
+
+                        // Show tooltip with bone info on hover
                         if (ImGui::IsItemHovered())
                         {
                             ImGui::BeginTooltip();
-                            ImGui::Text("[%zu] %s", i, tex.path.c_str());
+                            ImGui::Text("Parent: %d", bone.parentId);
+                            ImGui::Text("Flags: 0x%04X", bone.flags);
                             ImGui::EndTooltip();
                         }
-                    }
-                    else
-                    {
-                        ImGui::Button("N/A", ImVec2(thumbSize, thumbSize));
-                    }
 
-                    if ((i + 1) % columns != 0 && i + 1 < textures.size())
-                        ImGui::SameLine();
-                    ImGui::PopID();
+                        ImGui::PopID();
+                    }
                 }
-            }
+                ImGui::EndChild();
 
-            if (ImGui::CollapsingHeader("Bones"))
-            {
-                const auto& bones = render->getAllBones();
-                int selectedBone = render->getSelectedBone();
+                ImGui::Separator();
+                bool exportDisabled = sExportInProgress.load();
+                if (exportDisabled) ImGui::BeginDisabled();
 
-                // Deselect button
-                if (selectedBone >= 0)
+                if (ImGui::Button("Export FBX", ImVec2(130, 0)))
                 {
-                    if (ImGui::Button("Deselect"))
-                        render->setSelectedBone(-1);
-                    ImGui::Separator();
+                    std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".fbx";
+                    IGFD::FileDialogConfig config;
+                    config.path = ".";
+                    config.fileName = suggestedName;
+                    config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
+                    ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
+                    sExportingFBX = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Export GLB", ImVec2(130, 0)))
+                {
+                    std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".glb";
+                    IGFD::FileDialogConfig config;
+                    config.path = ".";
+                    config.fileName = suggestedName;
+                    config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
+                    ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
+                    sExportingGLB = true;
                 }
 
-                for (size_t i = 0; i < bones.size(); ++i)
+                if (exportDisabled) ImGui::EndDisabled();
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
+
+            if (showTexturePopup && selectedTextureIndex >= 0)
+            {
+                const auto& textures = render->getAllTextures();
+                const auto& glTextures = render->getGLTextures();
+
+                if (selectedTextureIndex < (int)textures.size())
                 {
-                    const auto& bone = bones[i];
-                    ImGui::PushID(static_cast<int>(i));
+                    const auto& tex = textures[selectedTextureIndex];
+                    std::string popupTitle = tex.path.empty() ? "Texture " + std::to_string(selectedTextureIndex) : tex.path;
 
-                    bool isSelected = (selectedBone == static_cast<int>(i));
-
-                    // Highlight selected bone
-                    if (isSelected)
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
-
-                    char label[128];
-                    snprintf(label, sizeof(label), "[%d] %s", bone.id, bone.name.c_str());
-
-                    if (ImGui::Selectable(label, isSelected))
+                    ImGui::SetNextWindowSize(ImVec2(520, 580), ImGuiCond_FirstUseEver);
+                    if (ImGui::Begin(popupTitle.c_str(), &showTexturePopup))
                     {
-                        render->setSelectedBone(isSelected ? -1 : static_cast<int>(i));
-                    }
+                        ImGui::Checkbox("Show UVs", &showUVs);
+                        ImGui::Separator();
 
-                    if (isSelected)
-                        ImGui::PopStyleColor();
-
-                    // Show tooltip with bone info on hover
-                    if (ImGui::IsItemHovered())
-                    {
-                        ImGui::BeginTooltip();
-                        ImGui::Text("Parent: %d", bone.parentId);
-                        ImGui::Text("Flags: 0x%04X", bone.flags);
-                        ImGui::EndTooltip();
-                    }
-
-                    ImGui::PopID();
-                }
-            }
-            ImGui::EndChild();
-
-            ImGui::Separator();
-            bool exportDisabled = sExportInProgress.load();
-            if (exportDisabled) ImGui::BeginDisabled();
-
-            if (ImGui::Button("Export FBX", ImVec2(130, 0)))
-            {
-                std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".fbx";
-                IGFD::FileDialogConfig config;
-                config.path = ".";
-                config.fileName = suggestedName;
-                config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
-                ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
-                sExportingFBX = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Export GLB", ImVec2(130, 0)))
-            {
-                std::string suggestedName = M3Export::GetSuggestedFilename(render) + ".glb";
-                IGFD::FileDialogConfig config;
-                config.path = ".";
-                config.fileName = suggestedName;
-                config.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
-                ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
-                sExportingGLB = true;
-            }
-
-            if (exportDisabled) ImGui::EndDisabled();
-        }
-        ImGui::End();
-        ImGui::PopStyleVar();
-
-        if (showTexturePopup && selectedTextureIndex >= 0)
-        {
-            const auto& textures = render->getAllTextures();
-            const auto& glTextures = render->getGLTextures();
-
-            if (selectedTextureIndex < (int)textures.size())
-            {
-                const auto& tex = textures[selectedTextureIndex];
-                std::string popupTitle = tex.path.empty() ? "Texture " + std::to_string(selectedTextureIndex) : tex.path;
-
-                ImGui::SetNextWindowSize(ImVec2(520, 580), ImGuiCond_FirstUseEver);
-                if (ImGui::Begin(popupTitle.c_str(), &showTexturePopup))
-                {
-                    ImGui::Checkbox("Show UVs", &showUVs);
-                    ImGui::Separator();
-
-                    unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
-                    if (glTex != 0)
-                    {
-                        ImVec2 avail = ImGui::GetContentRegionAvail();
-                        float maxDim = std::min(avail.x, avail.y - 60.0f);
-
-                        ImVec2 imgPos = ImGui::GetCursorScreenPos();
-                        ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
-
-                        if (showUVs)
+                        unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
+                        if (glTex != 0)
                         {
-                            ImDrawList* drawList = ImGui::GetWindowDrawList();
-                            const auto& vertices = render->getVertices();
-                            const auto& indices = render->getIndices();
-                            const auto& submeshes = render->getAllSubmeshes();
-                            const auto& materials = render->getAllMaterials();
+                            ImVec2 avail = ImGui::GetContentRegionAvail();
+                            float maxDim = std::min(avail.x, avail.y - 60.0f);
 
-                            ImU32 uvColor = IM_COL32(0, 255, 0, 180);
+                            ImVec2 imgPos = ImGui::GetCursorScreenPos();
+                            ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
 
-                            for (size_t si = 0; si < submeshes.size(); ++si)
+                            if (showUVs)
                             {
-                                if (!render->getSubmeshVisible(si)) continue;
+                                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                                const auto& vertices = render->getVertices();
+                                const auto& indices = render->getIndices();
+                                const auto& submeshes = render->getAllSubmeshes();
+                                const auto& materials = render->getAllMaterials();
 
-                                const auto& sm = submeshes[si];
+                                ImU32 uvColor = IM_COL32(0, 255, 0, 180);
 
-                                if (sm.materialID >= materials.size()) continue;
-                                const auto& mat = materials[sm.materialID];
-                                if (mat.variants.empty()) continue;
-
-                                int varIdx = render->getMaterialSelectedVariant(sm.materialID);
-                                if (varIdx < 0 || varIdx >= (int)mat.variants.size()) varIdx = 0;
-                                const auto& variant = mat.variants[varIdx];
-
-                                if (variant.textureIndexA != selectedTextureIndex &&
-                                    variant.textureIndexB != selectedTextureIndex)
-                                    continue;
-
-                                for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
+                                for (size_t si = 0; si < submeshes.size(); ++si)
                                 {
-                                    uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
-                                    uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
-                                    uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
+                                    if (!render->getSubmeshVisible(si)) continue;
 
-                                    if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+                                    const auto& sm = submeshes[si];
+
+                                    if (sm.materialID >= materials.size()) continue;
+                                    const auto& mat = materials[sm.materialID];
+                                    if (mat.variants.empty()) continue;
+
+                                    int varIdx = render->getMaterialSelectedVariant(sm.materialID);
+                                    if (varIdx < 0 || varIdx >= (int)mat.variants.size()) varIdx = 0;
+                                    const auto& variant = mat.variants[varIdx];
+
+                                    if (variant.textureIndexA != selectedTextureIndex &&
+                                        variant.textureIndexB != selectedTextureIndex)
                                         continue;
 
-                                    const auto& v0 = vertices[i0];
-                                    const auto& v1 = vertices[i1];
-                                    const auto& v2 = vertices[i2];
+                                    for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
+                                    {
+                                        uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
+                                        uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
+                                        uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
 
-                                    ImVec2 p0(imgPos.x + v0.uv1.x * maxDim, imgPos.y + (1.0f - v0.uv1.y) * maxDim);
-                                    ImVec2 p1(imgPos.x + v1.uv1.x * maxDim, imgPos.y + (1.0f - v1.uv1.y) * maxDim);
-                                    ImVec2 p2(imgPos.x + v2.uv1.x * maxDim, imgPos.y + (1.0f - v2.uv1.y) * maxDim);
+                                        if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+                                            continue;
 
-                                    drawList->AddLine(p0, p1, uvColor, 1.0f);
-                                    drawList->AddLine(p1, p2, uvColor, 1.0f);
-                                    drawList->AddLine(p2, p0, uvColor, 1.0f);
+                                        const auto& v0 = vertices[i0];
+                                        const auto& v1 = vertices[i1];
+                                        const auto& v2 = vertices[i2];
+
+                                        ImVec2 p0(imgPos.x + v0.uv1.x * maxDim, imgPos.y + (1.0f - v0.uv1.y) * maxDim);
+                                        ImVec2 p1(imgPos.x + v1.uv1.x * maxDim, imgPos.y + (1.0f - v1.uv1.y) * maxDim);
+                                        ImVec2 p2(imgPos.x + v2.uv1.x * maxDim, imgPos.y + (1.0f - v2.uv1.y) * maxDim);
+
+                                        drawList->AddLine(p0, p1, uvColor, 1.0f);
+                                        drawList->AddLine(p1, p2, uvColor, 1.0f);
+                                        drawList->AddLine(p2, p0, uvColor, 1.0f);
+                                    }
                                 }
                             }
                         }
+                        ImGui::Separator();
+                        ImGui::Text("Path: %s", tex.path.c_str());
+                        ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
                     }
-                    ImGui::Separator();
-                    ImGui::Text("Path: %s", tex.path.c_str());
-                    ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
+                    ImGui::End();
+
+                    if (!showTexturePopup)
+                        selectedTextureIndex = -1;
+                }
+                else
+                {
+                    showTexturePopup = false;
+                    selectedTextureIndex = -1;
+                }
+            }
+
+            if (render->isAnimationPlaying())
+            {
+                ImGuiViewport* vp = ImGui::GetMainViewport();
+                float modelInfoX = vp->Pos.x + vp->Size.x - 300.0f - 10.0f;
+                float playbackWidth = 180.0f;
+                float popupX = modelInfoX - playbackWidth - 10.0f;
+                float popupY = vp->Pos.y + 40.0f;
+
+                ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowBgAlpha(0.9f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+
+                ImGuiWindowFlags popupFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
+
+                bool showPlayback = true;
+                if (ImGui::Begin("Playback", &showPlayback, popupFlags))
+                {
+                    float duration = render->getAnimationDuration();
+                    float currentTime = render->getAnimationTime();
+                    bool isPaused = render->isAnimationPaused();
+
+                    ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(160, 14));
+
+                    float btnWidth = 50.0f;
+                    if (isPaused)
+                    {
+                        if (ImGui::Button("Play", ImVec2(btnWidth, 0)))
+                            render->resumeAnimation();
+                    }
+                    else
+                    {
+                        if (ImGui::Button("Pause", ImVec2(btnWidth, 0)))
+                            render->pauseAnimation();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Stop", ImVec2(btnWidth, 0)))
+                        render->stopAnimation();
                 }
                 ImGui::End();
+                ImGui::PopStyleVar();
 
-                if (!showTexturePopup)
-                    selectedTextureIndex = -1;
-            }
-            else
-            {
-                showTexturePopup = false;
-                selectedTextureIndex = -1;
-            }
-        }
-
-        if (render->isAnimationPlaying())
-        {
-            ImGuiViewport* vp = ImGui::GetMainViewport();
-            float modelInfoX = vp->Pos.x + vp->Size.x - 300.0f - 10.0f;
-            float playbackWidth = 180.0f;
-            float popupX = modelInfoX - playbackWidth - 10.0f;
-            float popupY = vp->Pos.y + 40.0f;
-
-            ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowBgAlpha(0.9f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-
-            ImGuiWindowFlags popupFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse;
-
-            bool showPlayback = true;
-            if (ImGui::Begin("Playback", &showPlayback, popupFlags))
-            {
-                float duration = render->getAnimationDuration();
-                float currentTime = render->getAnimationTime();
-                bool isPaused = render->isAnimationPaused();
-
-                ImGui::ProgressBar(duration > 0 ? currentTime / duration : 0, ImVec2(160, 14));
-
-                float btnWidth = 50.0f;
-                if (isPaused)
-                {
-                    if (ImGui::Button("Play", ImVec2(btnWidth, 0)))
-                        render->resumeAnimation();
-                }
-                else
-                {
-                    if (ImGui::Button("Pause", ImVec2(btnWidth, 0)))
-                        render->pauseAnimation();
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Stop", ImVec2(btnWidth, 0)))
+                if (!showPlayback)
                     render->stopAnimation();
             }
-            ImGui::End();
-            ImGui::PopStyleVar();
 
-            if (!showPlayback)
-                render->stopAnimation();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
+            if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
             {
-                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
-                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
-                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+                if (ImGuiFileDialog::Instance()->IsOk())
+                {
+                    std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                    std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                    std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
 
-                size_t extPos = fileName.rfind('.');
-                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
+                    size_t extPos = fileName.rfind('.');
+                    std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
-                sExportInProgress = true;
-                sExportProgress = 0;
-                sExportTotal = 100;
-                sExportStatus = "Starting export...";
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting export...";
 
-                std::thread([render, dirPath, exportName]() {
-                    M3Export::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.customName = exportName;
-                    settings.activeVariant = render->getActiveVariant();
-                    settings.exportTextures = true;
-                    settings.exportAnimations = true;
-                    settings.exportSkeleton = true;
+                    std::thread([render, dirPath, exportName]() {
+                        M3Export::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.customName = exportName;
+                        settings.activeVariant = render->getActiveVariant();
+                        settings.exportTextures = true;
+                        settings.exportAnimations = true;
+                        settings.exportSkeleton = true;
 
-                    auto result = M3Export::ExportToFBX(render, gPendingModelArchive, settings,
-                        [](int cur, int total, const std::string& status) {
-                            sExportProgress = cur;
-                            sExportTotal = total;
+                        auto result = M3Export::ExportToFBX(render, gPendingModelArchive, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        {
                             std::lock_guard<std::mutex> lock(sExportMutex);
-                            sExportStatus = status;
-                        });
+                            sExportResult = result;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
+                }
+                ImGuiFileDialog::Instance()->Close();
+                sExportingFBX = false;
+            }
 
+            if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+            {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                {
+                    std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                    std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                    std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+                    size_t extPos = fileName.rfind('.');
+                    std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
+
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting export...";
+
+                    std::thread([render, dirPath, exportName]() {
+                        M3Export::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.customName = exportName;
+                        settings.activeVariant = render->getActiveVariant();
+                        settings.exportTextures = true;
+                        settings.exportAnimations = true;
+                        settings.exportSkeleton = true;
+
+                        auto result = M3Export::ExportToGLB(render, gPendingModelArchive, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult = result;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
+                }
+                ImGuiFileDialog::Instance()->Close();
+                sExportingGLB = false;
+            }
+
+            if (sExportInProgress.load())
+            {
+                ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
+                ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::SetNextWindowBgAlpha(0.95f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+
+                ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+
+                if (ImGui::Begin("##ExportProgress", nullptr, flags))
+                {
+                    std::string status;
                     {
                         std::lock_guard<std::mutex> lock(sExportMutex);
-                        sExportResult = result;
+                        status = sExportStatus;
                     }
-                    sExportInProgress = false;
-                    sShowExportResult = true;
-                }).detach();
+
+                    ImGui::Text("Exporting...");
+                    ImGui::Text("%s", status.c_str());
+                    float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
+                    ImGui::ProgressBar(progress, ImVec2(250, 20));
+                }
+                ImGui::End();
+                ImGui::PopStyleVar();
             }
-            ImGuiFileDialog::Instance()->Close();
-            sExportingFBX = false;
-        }
 
-        if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
+            if (sShowExportResult)
             {
-                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
-                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
-                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
-
-                size_t extPos = fileName.rfind('.');
-                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
-
-                sExportInProgress = true;
-                sExportProgress = 0;
-                sExportTotal = 100;
-                sExportStatus = "Starting export...";
-
-                std::thread([render, dirPath, exportName]() {
-                    M3Export::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.customName = exportName;
-                    settings.activeVariant = render->getActiveVariant();
-                    settings.exportTextures = true;
-                    settings.exportAnimations = true;
-                    settings.exportSkeleton = true;
-
-                    auto result = M3Export::ExportToGLB(render, gPendingModelArchive, settings,
-                        [](int cur, int total, const std::string& status) {
-                            sExportProgress = cur;
-                            sExportTotal = total;
-                            std::lock_guard<std::mutex> lock(sExportMutex);
-                            sExportStatus = status;
-                        });
-
-                    {
-                        std::lock_guard<std::mutex> lock(sExportMutex);
-                        sExportResult = result;
-                    }
-                    sExportInProgress = false;
-                    sShowExportResult = true;
-                }).detach();
-            }
-            ImGuiFileDialog::Instance()->Close();
-            sExportingGLB = false;
-        }
-
-        if (sExportInProgress.load())
-        {
-            ImGuiViewport* vp = ImGui::GetMainViewport();
-            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
-            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowBgAlpha(0.95f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-
-            ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
-
-            if (ImGui::Begin("##ExportProgress", nullptr, flags))
-            {
-                std::string status;
+                M3Export::ExportResult result;
                 {
                     std::lock_guard<std::mutex> lock(sExportMutex);
-                    status = sExportStatus;
+                    result = sExportResult;
                 }
-
-                ImGui::Text("Exporting...");
-                ImGui::Text("%s", status.c_str());
-                float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
-                ImGui::ProgressBar(progress, ImVec2(250, 20));
+                sNotificationSuccess = result.success;
+                sNotificationMessage = result.success ? "Export successful!" : ("Export failed: " + result.errorMessage);
+                sNotificationTimer = 3.0f;
+                sShowExportResult = false;
             }
-            ImGui::End();
-            ImGui::PopStyleVar();
-        }
 
-        if (sShowExportResult)
-        {
-            M3Export::ExportResult result;
+            if (sNotificationTimer > 0.0f)
             {
-                std::lock_guard<std::mutex> lock(sExportMutex);
-                result = sExportResult;
+                sNotificationTimer -= ImGui::GetIO().DeltaTime;
+                float alpha = std::min(1.0f, sNotificationTimer);
+
+                ImGuiViewport* vp = ImGui::GetMainViewport();
+                ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 60.0f);
+
+                ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+                ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+                ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+
+                ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+
+                if (ImGui::Begin("##ExportNotification", nullptr, flags))
+                {
+                    if (sNotificationSuccess)
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+                    else
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+                }
+                ImGui::End();
+                ImGui::PopStyleVar(2);
             }
-            sNotificationSuccess = result.success;
-            sNotificationMessage = result.success ? "Export successful!" : ("Export failed: " + result.errorMessage);
-            sNotificationTimer = 3.0f;
-            sShowExportResult = false;
-        }
-
-        if (sNotificationTimer > 0.0f)
-        {
-            sNotificationTimer -= ImGui::GetIO().DeltaTime;
-            float alpha = std::min(1.0f, sNotificationTimer);
-
-            ImGuiViewport* vp = ImGui::GetMainViewport();
-            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 60.0f);
-
-            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-            ImGui::SetNextWindowBgAlpha(0.85f * alpha);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
-
-            ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
-
-            if (ImGui::Begin("##ExportNotification", nullptr, flags))
-            {
-                if (sNotificationSuccess)
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
-                else
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
-            }
-            ImGui::End();
-            ImGui::PopStyleVar(2);
         }
     }
 }
