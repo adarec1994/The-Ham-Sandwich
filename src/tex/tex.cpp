@@ -8,16 +8,6 @@
 #include "../Archive.h"
 #include "imgui.h"
 
-#ifndef GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
-#define GL_COMPRESSED_RGBA_S3TC_DXT1_EXT 0x83F1
-#endif
-#ifndef GL_COMPRESSED_RGBA_S3TC_DXT3_EXT
-#define GL_COMPRESSED_RGBA_S3TC_DXT3_EXT 0x83F2
-#endif
-#ifndef GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
-#define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT 0x83F3
-#endif
-
 static inline uint32_t rd_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 static inline uint16_t rd_u16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 
@@ -31,20 +21,23 @@ static bool read_bytes(const uint8_t* data, size_t size, size_t& off, void* dst,
 
 namespace Tex
 {
-    void PreviewState::clearGL()
+    static ID3D11Device* sDevice = nullptr;
+    static ID3D11DeviceContext* sContext = nullptr;
+
+    void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context)
     {
-        if (texture != 0 && ownsTexture)
-        {
-            if (glIsTexture(texture)) {
-                glDeleteTextures(1, &texture);
-            }
-        }
-        texture = 0;
+        sDevice = device;
+        sContext = context;
+    }
+
+    void PreviewState::clear()
+    {
+        textureSRV.Reset();
         texW = texH = 0;
         hasTexture = false;
         title.clear();
         open = false;
-        ownsTexture = true;  // Reset for next use
+        ownsTexture = true;
 
         showR = true;
         showG = true;
@@ -647,60 +640,82 @@ namespace Tex
         return false;
     }
 
-    static bool UploadToGL(const Tex::File& tf, GLuint& outTex, int& outW, int& outH)
+    ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf)
     {
-        if (tf.mipData.empty()) return false;
+        if (!sDevice || tf.mipData.empty()) return nullptr;
 
-        const auto& data = tf.mipData.back();
         int w = tf.header.width;
         int h = tf.header.height;
 
-        if (outTex != 0) glDeleteTextures(1, &outTex);
-        glGenTextures(1, &outTex);
-        glBindTexture(GL_TEXTURE_2D, outTex);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        GLenum compressedFmt = 0;
+        DXGI_FORMAT compressedFmt = DXGI_FORMAT_UNKNOWN;
         switch(tf.header.textureType) {
-            case Tex::TextureType::DXT1: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; break;
-            case Tex::TextureType::DXT3: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
-            case Tex::TextureType::DXT5: compressedFmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; break;
+            case TextureType::DXT1: compressedFmt = DXGI_FORMAT_BC1_UNORM; break;
+            case TextureType::DXT3: compressedFmt = DXGI_FORMAT_BC2_UNORM; break;
+            case TextureType::DXT5: compressedFmt = DXGI_FORMAT_BC3_UNORM; break;
             default: break;
         }
 
-        if (compressedFmt != 0) {
-            glCompressedTexImage2D(GL_TEXTURE_2D, 0, compressedFmt, w, h, 0, (GLsizei)data.size(), data.data());
-        } else {
-            Tex::ImageRGBA img;
-            if (!tf.decodeLargestMipToRGBA(img)) {
-                glDeleteTextures(1, &outTex);
-                outTex = 0;
-                return false;
-            }
+        ComPtr<ID3D11Texture2D> tex;
+        ComPtr<ID3D11ShaderResourceView> srv;
+
+        if (compressedFmt != DXGI_FORMAT_UNKNOWN)
+        {
+            const auto& data = tf.mipData.back();
+
+            D3D11_TEXTURE2D_DESC td = {};
+            td.Width = w;
+            td.Height = h;
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = compressedFmt;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_IMMUTABLE;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            int blockSize = (compressedFmt == DXGI_FORMAT_BC1_UNORM) ? 8 : 16;
+            UINT rowPitch = ((w + 3) / 4) * blockSize;
+
+            D3D11_SUBRESOURCE_DATA initData = {};
+            initData.pSysMem = data.data();
+            initData.SysMemPitch = rowPitch;
+
+            if (FAILED(sDevice->CreateTexture2D(&td, &initData, &tex))) return nullptr;
+        }
+        else
+        {
+            ImageRGBA img;
+            if (!tf.decodeLargestMipToRGBA(img)) return nullptr;
+
             w = img.width;
             h = img.height;
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+
+            D3D11_TEXTURE2D_DESC td = {};
+            td.Width = w;
+            td.Height = h;
+            td.MipLevels = 1;
+            td.ArraySize = 1;
+            td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage = D3D11_USAGE_IMMUTABLE;
+            td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            D3D11_SUBRESOURCE_DATA initData = {};
+            initData.pSysMem = img.rgba.data();
+            initData.SysMemPitch = w * 4;
+
+            if (FAILED(sDevice->CreateTexture2D(&td, &initData, &tex))) return nullptr;
         }
 
-        outW = w;
-        outH = h;
-        return true;
+        if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), nullptr, &srv))) return nullptr;
+
+        return srv;
     }
 
     bool OpenTexPreviewFromEntry(AppState& state, const ArchivePtr& arc, const FileEntryPtr& fileEntry)
     {
         if (!state.texPreview) return false;
 
-        // Clear previous texture if we own it
-        if (state.texPreview->texture != 0 && state.texPreview->ownsTexture) {
-            glDeleteTextures(1, &state.texPreview->texture);
-        }
-        state.texPreview->texture = 0;
+        state.texPreview->textureSRV.Reset();
         state.texPreview->hasTexture = false;
         state.texPreview->texW = 0;
         state.texPreview->texH = 0;
@@ -715,39 +730,39 @@ namespace Tex
 
         if (bytes.empty()) return false;
 
-        Tex::File tf;
+        File tf;
         if (!tf.readFromMemory(bytes.data(), bytes.size())) {
             state.texPreview->title = "Error reading texture";
             return false;
         }
 
-        bool uploaded = UploadToGL(tf, state.texPreview->texture, state.texPreview->texW, state.texPreview->texH);
-        state.texPreview->hasTexture = uploaded;
+        state.texPreview->textureSRV = CreateSRVFromFile(tf);
+        state.texPreview->hasTexture = (state.texPreview->textureSRV != nullptr);
+        state.texPreview->texW = tf.header.width;
+        state.texPreview->texH = tf.header.height;
 
-        if (uploaded) {
+        if (state.texPreview->hasTexture) {
             state.texPreview->title = "Texture Preview";
         } else {
             state.texPreview->title = "Error uploading texture";
         }
 
-        return uploaded;
+        return state.texPreview->hasTexture;
     }
 
-    void OpenTexPreviewFromGLTexture(AppState& state, GLuint texId, int width, int height, const std::string& title)
+    void OpenTexPreviewFromSRV(AppState& state, ID3D11ShaderResourceView* srv, int width, int height, const std::string& title)
     {
         if (!state.texPreview) return;
 
-        // Clear previous texture if we own it
-        if (state.texPreview->texture != 0 && state.texPreview->ownsTexture) {
-            glDeleteTextures(1, &state.texPreview->texture);
+        if (state.texPreview->ownsTexture) {
+            state.texPreview->textureSRV.Reset();
         }
 
-        // Use the existing texture - don't delete it when done
-        state.texPreview->texture = texId;
+        state.texPreview->textureSRV = srv;
         state.texPreview->texW = width;
         state.texPreview->texH = height;
-        state.texPreview->hasTexture = (texId != 0);
-        state.texPreview->ownsTexture = false;  // We're borrowing this texture
+        state.texPreview->hasTexture = (srv != nullptr);
+        state.texPreview->ownsTexture = false;
         state.texPreview->open = true;
         state.texPreview->title = title;
     }
@@ -766,7 +781,7 @@ namespace Tex
 
         if (ImGui::Begin(ps.title.c_str(), &ps.open, flags))
         {
-            if (ps.hasTexture && ps.texture != 0)
+            if (ps.hasTexture && ps.textureSRV)
             {
                 float controlWidth = ImGui::CalcTextSize("Opaque Preview").x + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::GetStyle().WindowPadding.x * 2.0f;
                 if (controlWidth < 120.0f) controlWidth = 120.0f;
@@ -800,19 +815,14 @@ namespace Tex
 
                     ImGui::SetCursorPos(ImVec2(cursorX, cursorY));
 
-                    glBindTexture(GL_TEXTURE_2D, ps.texture);
-
-                    GLint swizzle = ps.opaquePreview ? GL_ONE : GL_ALPHA;
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, swizzle);
-
                     ImVec4 tint(
                         ps.showR ? 1.0f : 0.0f,
                         ps.showG ? 1.0f : 0.0f,
                         ps.showB ? 1.0f : 0.0f,
-                        ps.showA ? 1.0f : 0.0f
+                        ps.showA && !ps.opaquePreview ? 1.0f : 1.0f
                     );
 
-                    ImGui::Image((void*)(intptr_t)ps.texture, drawSize, ImVec2(0,0), ImVec2(1,1), tint, ImVec4(0,0,0,0));
+                    ImGui::Image((ImTextureID)ps.textureSRV.Get(), drawSize, ImVec2(0,0), ImVec2(1,1), tint, ImVec4(0,0,0,0));
 
                     ImGui::TableSetColumnIndex(1);
                     ImGui::Text("Channels");
@@ -840,7 +850,7 @@ namespace Tex
 
         if (!ps.open)
         {
-            ps.clearGL();
+            ps.clear();
         }
     }
 }

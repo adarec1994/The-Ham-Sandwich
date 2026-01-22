@@ -1,11 +1,9 @@
-// camera.cpp (or wherever UpdateCamera lives)
-
 #include "UI.h"
 #include "../Area/AreaFile.h"
 #include <vector>
 #include <cmath>
 #include <limits>
-#include <GLFW/glfw3.h>
+#include <Windows.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -31,8 +29,11 @@ void SnapCameraToLoaded(AppState& state)
         {
             if (chunk && chunk->isFullyInitialized())
             {
-                targetMin = glm::min(targetMin, chunk->getMinBounds() + area->getWorldOffset());
-                targetMax = glm::max(targetMax, chunk->getMaxBounds() + area->getWorldOffset());
+                DirectX::XMFLOAT3 minB = chunk->getMinBounds();
+                DirectX::XMFLOAT3 maxB = chunk->getMaxBounds();
+                DirectX::XMFLOAT3 offset = area->getWorldOffset();
+                targetMin = glm::min(targetMin, glm::vec3(minB.x, minB.y, minB.z) + glm::vec3(offset.x, offset.y, offset.z));
+                targetMax = glm::max(targetMax, glm::vec3(maxB.x, maxB.y, maxB.z) + glm::vec3(offset.x, offset.y, offset.z));
                 found = true;
             }
         }
@@ -145,21 +146,21 @@ void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale)
     state.camera.MovementSpeed = std::max(10.0f, estimatedSize * 2.0f);
 }
 
-void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
+void scroll_callback(HWND hwnd, short delta, AppState* state)
 {
-    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
+    if (GetAsyncKeyState(VK_RBUTTON) & 0x8000)
     {
-        AppState* state = (AppState*)glfwGetWindowUserPointer(window);
         if (state)
         {
-            state->camera.MovementSpeed += (float)yoffset * 5.0f;
+            float scrollAmount = static_cast<float>(delta) / WHEEL_DELTA;
+            state->camera.MovementSpeed += scrollAmount * 5.0f;
             if (state->camera.MovementSpeed < 1.0f) state->camera.MovementSpeed = 1.0f;
             if (state->camera.MovementSpeed > 500.0f) state->camera.MovementSpeed = 500.0f;
         }
     }
 }
 
-void UpdateCamera(GLFWwindow* window, AppState& state)
+void UpdateCamera(HWND hwnd, AppState& state)
 {
     ImGuiIO& io = ImGui::GetIO();
     float dt = io.DeltaTime;
@@ -176,7 +177,8 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
 
     if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
     {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        SetCapture(hwnd);
+        ShowCursor(FALSE);
 
         ImVec2 mouse_delta = io.MouseDelta;
 
@@ -205,6 +207,7 @@ void UpdateCamera(GLFWwindow* window, AppState& state)
     }
     else
     {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        ReleaseCapture();
+        ShowCursor(TRUE);
     }
 }

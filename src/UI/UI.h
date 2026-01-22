@@ -1,7 +1,9 @@
 #pragma once
 
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <wrl/client.h>
+#include <DirectXMath.h>
 #include "imgui.h"
 #include "../tex/tex.h"
 
@@ -12,6 +14,8 @@
 #include <vector>
 #include <memory>
 #include <string>
+
+using Microsoft::WRL::ComPtr;
 
 class Archive;
 class AreaFile;
@@ -37,9 +41,11 @@ struct Camera {
 };
 
 struct Grid {
-    GLuint VAO = 0;
-    GLuint VBO = 0;
-    GLuint ShaderProgram = 0;
+    ComPtr<ID3D11Buffer> VertexBuffer;
+    ComPtr<ID3D11VertexShader> VertexShader;
+    ComPtr<ID3D11PixelShader> PixelShader;
+    ComPtr<ID3D11InputLayout> InputLayout;
+    ComPtr<ID3D11Buffer> ConstantBuffer;
     int VertexCount = 0;
 };
 
@@ -61,11 +67,14 @@ struct AppState {
 
     Camera camera;
     Grid grid;
+
+    ID3D11Device* device = nullptr;
+    ID3D11DeviceContext* context = nullptr;
 };
 
 void InitUI(AppState& state);
 void InitGrid(AppState& state);
-void UpdateCamera(GLFWwindow* window, AppState& state);
-void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
+void UpdateCamera(HWND hwnd, AppState& state);
+void scroll_callback(HWND hwnd, short delta, AppState* state);
 void RenderAreas(const AppState& state, int display_w, int display_h);
 void RenderUI(AppState& state);

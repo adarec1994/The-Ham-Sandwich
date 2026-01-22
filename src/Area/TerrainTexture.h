@@ -5,7 +5,10 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
-#include <glad/glad.h>
+#include <d3d11.h>
+#include <wrl/client.h>
+
+using Microsoft::WRL::ComPtr;
 
 class Archive;
 using ArchivePtr = std::shared_ptr<Archive>;
@@ -14,8 +17,8 @@ namespace TerrainTexture
 {
     struct CachedTexture
     {
-        GLuint diffuse = 0;
-        GLuint normal = 0;
+        ComPtr<ID3D11ShaderResourceView> diffuse;
+        ComPtr<ID3D11ShaderResourceView> normal;
         int width = 0;
         int height = 0;
         bool loaded = false;
@@ -43,6 +46,8 @@ namespace TerrainTexture
     public:
         static Manager& Instance();
 
+        void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
+
         bool LoadWorldLayerTable(const ArchivePtr& archive);
         const CachedTexture* GetLayerTexture(const ArchivePtr& archive, uint32_t layerId);
         const WorldLayerEntry* GetLayerEntry(uint32_t layerId) const;
@@ -51,37 +56,45 @@ namespace TerrainTexture
 
         bool LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData);
 
-        GLuint CreateBlendMapTexture(const uint8_t* data, int width, int height);
-        GLuint CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height);
-        GLuint CreateColorMapTexture(const uint8_t* data, int width, int height);
-        GLuint CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height);
+        ComPtr<ID3D11ShaderResourceView> CreateBlendMapTexture(const uint8_t* data, int width, int height);
+        ComPtr<ID3D11ShaderResourceView> CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height);
+        ComPtr<ID3D11ShaderResourceView> CreateColorMapTexture(const uint8_t* data, int width, int height);
+        ComPtr<ID3D11ShaderResourceView> CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height);
 
         void ClearCache();
         bool IsTableLoaded() const { return mTableLoaded; }
+
+        ID3D11ShaderResourceView* GetFallbackWhite();
+        ID3D11ShaderResourceView* GetFallbackNormal();
 
     private:
         Manager() = default;
         ~Manager();
 
-        bool LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH);
+        bool LoadTextureFromPath(const ArchivePtr& archive, const std::string& path,
+                                 ComPtr<ID3D11ShaderResourceView>& outSRV, int& outW, int& outH);
 
         std::unordered_map<uint32_t, WorldLayerEntry> mLayerTable;
         std::unordered_map<uint32_t, CachedTexture> mTextureCache;
 
         struct PathCachedTexture
         {
-            GLuint texture = 0;
+            ComPtr<ID3D11ShaderResourceView> srv;
             int width = 0;
             int height = 0;
         };
         std::unordered_map<std::string, PathCachedTexture> mPathTextureCache;
 
-        GLuint mFallbackWhite = 0;
-        GLuint mFallbackNormal = 0;
+        ComPtr<ID3D11ShaderResourceView> mFallbackWhite;
+        ComPtr<ID3D11ShaderResourceView> mFallbackNormal;
         void EnsureFallbackTextures();
 
         bool mTableLoaded = false;
+
+        ID3D11Device* mDevice = nullptr;
+        ID3D11DeviceContext* mContext = nullptr;
     };
 
-    GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips = true);
+    ComPtr<ID3D11ShaderResourceView> UploadRGBATexture(ID3D11Device* device, ID3D11DeviceContext* context,
+                                                       const uint8_t* data, int width, int height, bool generateMips = true);
 }

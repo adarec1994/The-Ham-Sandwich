@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "UI_Models.h"
 #include "imgui.h"
 #include "../models/M3Render.h"
@@ -8,6 +9,8 @@
 #include "ImGuiFileDialog.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <d3d11.h>
+#include <DirectXMath.h>
 #include <algorithm>
 #include <set>
 #include <thread>
@@ -63,7 +66,9 @@ namespace UI_Models
         glm::vec3 rayWorld = glm::normalize(glm::vec3(invView * rayEye));
         glm::vec3 rayOrigin = glm::vec3(invView[3]);
 
-        int hit = render->rayPickSubmesh(rayOrigin, rayWorld);
+        DirectX::XMFLOAT3 dxRayOrigin(rayOrigin.x, rayOrigin.y, rayOrigin.z);
+        DirectX::XMFLOAT3 dxRayDir(rayWorld.x, rayWorld.y, rayWorld.z);
+        int hit = render->rayPickSubmesh(dxRayOrigin, dxRayDir);
         render->setSelectedSubmesh(hit);
 
         if (hit >= 0)
@@ -228,12 +233,12 @@ namespace UI_Models
                         ImGui::PushID(static_cast<int>(i));
                         if (ImGui::TreeNode((void*)(intptr_t)i, "Material %zu", i))
                         {
-                            int currentVariant = render->getMaterialSelectedVariant(i);
+                            int currentVar = render->getMaterialSelectedVariant(i);
                             int variantCount = (int)render->getMaterialVariantCount(i);
                             if (variantCount > 1)
                             {
-                                if (ImGui::SliderInt("Variant", &currentVariant, 0, variantCount - 1))
-                                    render->setMaterialSelectedVariant(i, currentVariant);
+                                if (ImGui::SliderInt("Variant", &currentVar, 0, variantCount - 1))
+                                    render->setMaterialSelectedVariant(i, currentVar);
                             }
                             ImGui::Text("Variants: %d", variantCount);
                             ImGui::TreePop();
@@ -245,7 +250,7 @@ namespace UI_Models
                 if (ImGui::CollapsingHeader("Textures"))
                 {
                     const auto& textures = render->getAllTextures();
-                    const auto& glTextures = render->getGLTextures();
+                    const auto& srvTextures = render->getGLTextures();
                     float thumbSize = 48.0f;
                     float windowWidth = ImGui::GetContentRegionAvail().x;
                     int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
@@ -254,11 +259,11 @@ namespace UI_Models
                     {
                         const auto& tex = textures[i];
                         ImGui::PushID(static_cast<int>(i));
-                        unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
+                        ID3D11ShaderResourceView* srv = (i < srvTextures.size()) ? srvTextures[i].Get() : nullptr;
 
-                        if (glTex != 0)
+                        if (srv != nullptr)
                         {
-                            if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
+                            if (ImGui::ImageButton("##texbtn", reinterpret_cast<ImTextureID>(srv), ImVec2(thumbSize, thumbSize)))
                             {
                                 selectedTextureIndex = static_cast<int>(i);
                                 showTexturePopup = true;
@@ -286,7 +291,6 @@ namespace UI_Models
                     const auto& bones = render->getAllBones();
                     int selectedBone = render->getSelectedBone();
 
-                    // Deselect button
                     if (selectedBone >= 0)
                     {
                         if (ImGui::Button("Deselect"))
@@ -301,7 +305,6 @@ namespace UI_Models
 
                         bool isSelected = (selectedBone == static_cast<int>(i));
 
-                        // Highlight selected bone
                         if (isSelected)
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
 
@@ -316,7 +319,6 @@ namespace UI_Models
                         if (isSelected)
                             ImGui::PopStyleColor();
 
-                        // Show tooltip with bone info on hover
                         if (ImGui::IsItemHovered())
                         {
                             ImGui::BeginTooltip();
@@ -364,7 +366,7 @@ namespace UI_Models
             if (showTexturePopup && selectedTextureIndex >= 0)
             {
                 const auto& textures = render->getAllTextures();
-                const auto& glTextures = render->getGLTextures();
+                const auto& srvTextures = render->getGLTextures();
 
                 if (selectedTextureIndex < (int)textures.size())
                 {
@@ -377,14 +379,14 @@ namespace UI_Models
                         ImGui::Checkbox("Show UVs", &showUVs);
                         ImGui::Separator();
 
-                        unsigned int glTex = (selectedTextureIndex < (int)glTextures.size()) ? glTextures[selectedTextureIndex] : 0;
-                        if (glTex != 0)
+                        ID3D11ShaderResourceView* srv = (selectedTextureIndex < (int)srvTextures.size()) ? srvTextures[selectedTextureIndex].Get() : nullptr;
+                        if (srv != nullptr)
                         {
                             ImVec2 avail = ImGui::GetContentRegionAvail();
                             float maxDim = std::min(avail.x, avail.y - 60.0f);
 
                             ImVec2 imgPos = ImGui::GetCursorScreenPos();
-                            ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
+                            ImGui::Image(reinterpret_cast<ImTextureID>(srv), ImVec2(maxDim, maxDim));
 
                             if (showUVs)
                             {

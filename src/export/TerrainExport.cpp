@@ -13,6 +13,11 @@
 #include <sstream>
 #include <iomanip>
 
+static inline glm::vec3 ToGlm(const DirectX::XMFLOAT3& v)
+{
+    return glm::vec3(v.x, v.y, v.z);
+}
+
 namespace TerrainExport
 {
     static std::string WideToNarrow(const std::wstring& wide)
@@ -245,7 +250,7 @@ namespace TerrainExport
         for (const auto& area : areas)
         {
             if (!area) continue;
-            glm::vec3 offset = area->getWorldOffset();
+            glm::vec3 offset = ToGlm(area->getWorldOffset());
 
             for (const auto& chunk : area->getChunks())
             {

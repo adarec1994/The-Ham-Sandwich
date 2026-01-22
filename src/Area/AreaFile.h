@@ -4,14 +4,19 @@
 #include <string>
 #include <memory>
 #include <functional>
-#include <glm/glm.hpp>
+#include <d3d11.h>
+#include <DirectXMath.h>
+#include <wrl/client.h>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
 #include "Props.h"
 
-typedef glm::mat4 Matrix;
-typedef glm::vec3 Vector3;
-typedef glm::vec4 Vector4;
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
+typedef XMMATRIX Matrix;
+typedef XMFLOAT3 Vector3;
+typedef XMFLOAT4 Vector4;
 
 #pragma pack(push, 1)
 struct AreaVertex
@@ -120,50 +125,36 @@ struct ParsedChunk
 
     float maxHeight = -100000.0f;
     float avgHeight = 0.0f;
-    glm::vec3 minBounds{std::numeric_limits<float>::max()};
-    glm::vec3 maxBounds{std::numeric_limits<float>::lowest()};
+    XMFLOAT3 minBounds;
+    XMFLOAT3 maxBounds;
 
     bool valid = false;
+
+    ParsedChunk() : minBounds(FLT_MAX, FLT_MAX, FLT_MAX), maxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX) {}
 };
 
 class AreaChunkRender
 {
 public:
-    struct Uniforms
-    {
-        uint32 colorTexture = 0;
-        uint32 alphaTexture = 0;
-        uint32 hasColorMap = 0;
-        uint32 textures[4]{};
-        uint32 normalTextures[4]{};
-        uint32 texScale = 0;
-        uint32 camPosition = 0;
-        uint32 model = 0;
-        uint32 highlightColor = 0;
-        uint32 baseColor = 0;
-    };
+    static void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
 
 private:
     static std::vector<uint32> indices;
-    static Uniforms uniforms;
+    static ComPtr<ID3D11Buffer> sIndexBuffer;
+    static ID3D11Device* sDevice;
+    static ID3D11DeviceContext* sContext;
 
     std::vector<uint8> mChunkData;
-    unsigned int mVAO = 0;
-    unsigned int mVBO = 0;
-    unsigned int mEBO = 0;
+    ComPtr<ID3D11Buffer> mVertexBuffer;
     int mIndexCount = 0;
 
     float mMaxHeight = -100000.0f;
     float mAverageHeight = 0.0f;
 
-    glm::vec3 mMinBounds;
-    glm::vec3 mMaxBounds;
+    XMFLOAT3 mMinBounds;
+    XMFLOAT3 mMaxBounds;
 
     std::vector<AreaVertex> mVertices;
-
-    uint32 mSplatTexture = 0;
-    uint32 mColorMapTexture = 0;
-    std::vector<uint32> mLayerTextures;
 
     uint32 mFlags = 0;
     uint32 mZoneIds[4] = {0};
@@ -187,10 +178,10 @@ private:
     std::vector<WaterData> mWaters;
     bool mHasWater = false;
 
-    unsigned int mBlendMapTexture = 0;
-    unsigned int mColorMapTextureGPU = 0;
-    unsigned int mLayerDiffuse[4] = {0, 0, 0, 0};
-    unsigned int mLayerNormal[4] = {0, 0, 0, 0};
+    ComPtr<ID3D11ShaderResourceView> mBlendMapSRV;
+    ComPtr<ID3D11ShaderResourceView> mColorMapSRV;
+    ComPtr<ID3D11ShaderResourceView> mLayerDiffuse[4];
+    ComPtr<ID3D11ShaderResourceView> mLayerNormal[4];
     float mLayerScale[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mTexturesLoaded = false;
 
@@ -206,8 +197,8 @@ public:
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
     [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }
-    [[nodiscard]] glm::vec3 getMinBounds() const { return mMinBounds; }
-    [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
+    [[nodiscard]] XMFLOAT3 getMinBounds() const { return mMinBounds; }
+    [[nodiscard]] XMFLOAT3 getMaxBounds() const { return mMaxBounds; }
     [[nodiscard]] uint32 getFlags() const { return mFlags; }
 
     [[nodiscard]] bool hasHeightmap() const { return (mFlags & ChnkCellFlags::HeightMap) != 0; }
@@ -237,14 +228,13 @@ public:
     [[nodiscard]] static const std::vector<uint32>& getIndices() { return indices; }
     [[nodiscard]] const float* getLayerScales() const { return mLayerScale; }
 
-    [[nodiscard]] bool isFullyInitialized() const { return mVAO != 0; }
+    [[nodiscard]] bool isFullyInitialized() const { return mVertexBuffer != nullptr; }
 
     void loadTextures(const ArchivePtr& archive);
-    void bindTextures(unsigned int program) const;
-    void render();
+    void bindTextures(ID3D11DeviceContext* context) const;
+    void render(ID3D11DeviceContext* context);
 
-    static void geometryInit(uint32 program);
-    static const Uniforms& getUniforms();
+    static void geometryInit();
     static ParsedChunk parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY);
 };
 
@@ -261,9 +251,11 @@ struct ParsedArea
     std::vector<CurtData> curts;
     float maxHeight = -100000.0f;
     float avgHeight = 0.0f;
-    glm::vec3 minBounds{std::numeric_limits<float>::max()};
-    glm::vec3 maxBounds{std::numeric_limits<float>::lowest()};
+    XMFLOAT3 minBounds;
+    XMFLOAT3 maxBounds;
     bool valid = false;
+
+    ParsedArea() : minBounds(FLT_MAX, FLT_MAX, FLT_MAX), maxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX) {}
 };
 
 class AreaFile
@@ -277,18 +269,17 @@ class AreaFile
     float mMaxHeight = -100000.0f;
     float mAverageHeight = 0.0f;
 
-    glm::vec3 mMinBounds;
-    glm::vec3 mMaxBounds;
+    XMFLOAT3 mMinBounds;
+    XMFLOAT3 mMaxBounds;
     float mGlobalRotation = 0.0f;
 
-    glm::vec4 mBaseColor = glm::vec4(1.0f);
+    XMFLOAT4 mBaseColor;
 
     int mTileX = 0;
     int mTileY = 0;
 
-    glm::vec3 mWorldOffset = glm::vec3(0.0f);
+    XMFLOAT3 mWorldOffset;
 
-    unsigned int mTextureID = 0;
     bool mHasTexture = false;
 
     std::vector<Prop> mProps;
@@ -310,24 +301,24 @@ public:
     [[nodiscard]] int getTileX() const { return mTileX; }
     [[nodiscard]] int getTileY() const { return mTileY; }
 
-    void render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk);
+    void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk);
     void renderProps(const Matrix& matView, const Matrix& matProj);
     bool loadProp(uint32_t uniqueID);
     void loadAllProps();
     void loadAllPropsWithProgress(std::function<void(size_t, size_t)> progressCallback);
     void loadAllPropsAsync();
-    void loadPropsInView(const glm::vec3& cameraPos, float radius);
+    void loadPropsInView(const XMFLOAT3& cameraPos, float radius);
     void updatePropLoading();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }
     [[nodiscard]] float getAverageHeight() const { return mAverageHeight; }
 
-    [[nodiscard]] glm::vec3 getMinBounds() const { return mMinBounds; }
-    [[nodiscard]] glm::vec3 getMaxBounds() const { return mMaxBounds; }
+    [[nodiscard]] XMFLOAT3 getMinBounds() const { return mMinBounds; }
+    [[nodiscard]] XMFLOAT3 getMaxBounds() const { return mMaxBounds; }
 
-    [[nodiscard]] glm::vec3 getWorldMinBounds() const { return mMinBounds + mWorldOffset; }
-    [[nodiscard]] glm::vec3 getWorldMaxBounds() const { return mMaxBounds + mWorldOffset; }
-    [[nodiscard]] glm::vec3 getWorldOffset() const { return mWorldOffset; }
+    [[nodiscard]] XMFLOAT3 getWorldMinBounds() const;
+    [[nodiscard]] XMFLOAT3 getWorldMaxBounds() const;
+    [[nodiscard]] XMFLOAT3 getWorldOffset() const { return mWorldOffset; }
 
     [[nodiscard]] ArchivePtr getArchive() const { return mArchive; }
     [[nodiscard]] const std::wstring& getPath() const { return mPath; }
@@ -346,7 +337,6 @@ public:
     }
     [[nodiscard]] float getRotation() const { return mGlobalRotation; }
 
-    // Debug mirror/transform flags
     bool mMirrorX = false;
     bool mMirrorZ = false;
 
@@ -355,11 +345,8 @@ public:
     [[nodiscard]] bool getMirrorX() const { return mMirrorX; }
     [[nodiscard]] bool getMirrorZ() const { return mMirrorZ; }
 
-    // Print all transforms for debugging
     void printTransformDebug() const;
-    // Print all loaded areas' transforms (call from UI)
     static void printAllTransformsDebug(const std::vector<std::shared_ptr<AreaFile>>& areas);
-
     void printRotationDebug() const;
 
     [[nodiscard]] const std::vector<AreaChunkRenderPtr>& getChunks() const { return mChunks; }

@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "M3Render.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -11,80 +12,143 @@
 #include <cfloat>
 #include <set>
 
-const char* m3VertexSrc = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoord;
-layout (location = 3) in vec4 aBoneWeights;
-layout (location = 4) in uvec4 aBoneIndices;
-uniform mat4 model, view, projection;
-uniform mat4 boneMatrices[200];
-uniform int useSkinning;
-out vec3 Normal;
-out vec2 TexCoord;
-void main() {
-    vec4 pos = vec4(aPos, 1.0);
-    vec3 norm = aNormal;
-    if (useSkinning == 1) {
-        mat4 skinMatrix = boneMatrices[aBoneIndices.x] * aBoneWeights.x
-                       + boneMatrices[aBoneIndices.y] * aBoneWeights.y
-                       + boneMatrices[aBoneIndices.z] * aBoneWeights.z
-                       + boneMatrices[aBoneIndices.w] * aBoneWeights.w;
-        pos = skinMatrix * pos;
-        norm = mat3(skinMatrix) * norm;
+ID3D11Device* M3Render::sDevice = nullptr;
+ID3D11DeviceContext* M3Render::sContext = nullptr;
+
+void M3Render::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+    sDevice = device;
+    sContext = context;
+}
+
+const char* m3VertexHLSL = R"(
+cbuffer M3CB : register(b0)
+{
+    matrix model;
+    matrix view;
+    matrix projection;
+    float3 highlightColor;
+    float highlightMix;
+    int useSkinning;
+    float3 pad;
+};
+
+cbuffer BoneBuffer : register(b1)
+{
+    matrix boneMatrices[200];
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+    float2 texCoord : TEXCOORD0;
+    float4 boneWeights : BLENDWEIGHT;
+    uint4 boneIndices : BLENDINDICES;
+};
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 normal : TEXCOORD0;
+    float2 texCoord : TEXCOORD1;
+};
+
+PSInput main(VSInput input)
+{
+    PSInput output;
+    float4 pos = float4(input.position, 1.0);
+    float3 norm = input.normal;
+    if (useSkinning == 1)
+    {
+        matrix skinMatrix = boneMatrices[input.boneIndices.x] * input.boneWeights.x
+                         + boneMatrices[input.boneIndices.y] * input.boneWeights.y
+                         + boneMatrices[input.boneIndices.z] * input.boneWeights.z
+                         + boneMatrices[input.boneIndices.w] * input.boneWeights.w;
+        pos = mul(skinMatrix, pos);
+        norm = mul((float3x3)skinMatrix, norm);
     }
-    gl_Position = projection * view * model * pos;
-    Normal = norm;
-    TexCoord = aTexCoord;
+    float4 worldPos = mul(model, pos);
+    output.position = mul(projection, mul(view, worldPos));
+    output.normal = norm;
+    output.texCoord = input.texCoord;
+    return output;
 }
 )";
 
-const char* m3FragSrc = R"(
-#version 330 core
-out vec4 FragColor;
-in vec3 Normal;
-in vec2 TexCoord;
-uniform sampler2D diffTexture;
-uniform vec3 highlightColor;
-uniform float highlightMix;
-void main() {
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
-    float diff = max(dot(normalize(Normal), lightDir), 0.3);
-    vec3 texColor = texture(diffTexture, TexCoord).rgb;
-    vec3 baseColor = texColor * diff;
-    vec3 finalColor = mix(baseColor, highlightColor, highlightMix);
-    FragColor = vec4(finalColor, 1.0);
+const char* m3PixelHLSL = R"(
+cbuffer M3CB : register(b0)
+{
+    matrix model;
+    matrix view;
+    matrix projection;
+    float3 highlightColor;
+    float highlightMix;
+    int useSkinning;
+    float3 pad;
+};
+
+Texture2D diffTexture : register(t0);
+SamplerState samplerState : register(s0);
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 normal : TEXCOORD0;
+    float2 texCoord : TEXCOORD1;
+};
+
+float4 main(PSInput input) : SV_TARGET
+{
+    float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
+    float diff = max(dot(normalize(input.normal), lightDir), 0.3);
+    float3 texColor = diffTexture.Sample(samplerState, input.texCoord).rgb;
+    float3 baseColor = texColor * diff;
+    float3 finalColor = lerp(baseColor, highlightColor, highlightMix);
+    return float4(finalColor, 1.0);
 }
 )";
 
-const char* skeletonVertSrc = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-uniform mat4 view, projection;
-out vec3 vColor;
-void main() {
-    gl_Position = projection * view * vec4(aPos, 1.0);
-    vColor = aColor;
+const char* skeletonVertHLSL = R"(
+cbuffer SkeletonCB : register(b0)
+{
+    matrix view;
+    matrix projection;
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 color : COLOR;
+};
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 color : COLOR;
+};
+
+PSInput main(VSInput input)
+{
+    PSInput output;
+    output.position = mul(projection, mul(view, float4(input.position, 1.0)));
+    output.color = input.color;
+    return output;
 }
 )";
 
-const char* skeletonFragSrc = R"(
-#version 330 core
-in vec3 vColor;
-out vec4 FragColor;
-void main() {
-    FragColor = vec4(vColor, 1.0);
+const char* skeletonPixelHLSL = R"(
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 color : COLOR;
+};
+
+float4 main(PSInput input) : SV_TARGET
+{
+    return float4(input.color, 1.0);
 }
 )";
-
-static unsigned int CompileShader(GLenum type, const char* src) {
-    unsigned int s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    return s;
-}
 
 struct RenderVertex {
     glm::vec3 position;
@@ -95,7 +159,7 @@ struct RenderVertex {
 };
 
 M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly) {
-    if (!data.success) return;
+    if (!data.success || !sDevice) return;
     geometry = data.geometry;
     submeshes = data.geometry.submeshes;
     materials = data.materials;
@@ -114,7 +178,8 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
         setActiveVariant(*uniqueGroups.begin());
     }
     loadTextures(data, arc);
-    fallbackWhiteTex = createFallbackWhite();
+    mFallbackWhiteSRV = createFallbackWhite();
+
     std::vector<RenderVertex> renderVerts;
     renderVerts.reserve(data.geometry.vertices.size());
     for (const auto& v : data.geometry.vertices) {
@@ -126,88 +191,136 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
         rv.boneIndices = v.boneIndices;
         renderVerts.push_back(rv);
     }
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &EBO);
-    glBindVertexArray(VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, renderVerts.size() * sizeof(RenderVertex), renderVerts.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, data.geometry.indices.size() * sizeof(uint32_t), data.geometry.indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, normal));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, uv));
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneWeights));
-    glEnableVertexAttribArray(4);
-    glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, sizeof(RenderVertex), (void*)offsetof(RenderVertex, boneIndices));
+
+    D3D11_BUFFER_DESC vbd = {};
+    vbd.Usage = D3D11_USAGE_IMMUTABLE;
+    vbd.ByteWidth = static_cast<UINT>(renderVerts.size() * sizeof(RenderVertex));
+    vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA vInit = {};
+    vInit.pSysMem = renderVerts.data();
+    sDevice->CreateBuffer(&vbd, &vInit, &mVertexBuffer);
+
+    D3D11_BUFFER_DESC ibd = {};
+    ibd.Usage = D3D11_USAGE_IMMUTABLE;
+    ibd.ByteWidth = static_cast<UINT>(data.geometry.indices.size() * sizeof(uint32_t));
+    ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA iInit = {};
+    iInit.pSysMem = data.geometry.indices.data();
+    sDevice->CreateBuffer(&ibd, &iInit, &mIndexBuffer);
+
     setupShader();
     setupSkeletonShader();
 }
 
-M3Render::~M3Render() {
-    if (VAO) glDeleteVertexArrays(1, &VAO);
-    if (VBO) glDeleteBuffers(1, &VBO);
-    if (EBO) glDeleteBuffers(1, &EBO);
-    if (shaderProgram) glDeleteProgram(shaderProgram);
-    for (unsigned int tid : glTextures) if (tid != 0) glDeleteTextures(1, &tid);
-    if (fallbackWhiteTex) glDeleteTextures(1, &fallbackWhiteTex);
-    if (skeletonVAO) glDeleteVertexArrays(1, &skeletonVAO);
-    if (skeletonVBO) glDeleteBuffers(1, &skeletonVBO);
-    if (skeletonProgram) glDeleteProgram(skeletonProgram);
-}
+M3Render::~M3Render() = default;
 
 void M3Render::setupShader() {
-    unsigned int v = CompileShader(GL_VERTEX_SHADER, m3VertexSrc);
-    unsigned int f = CompileShader(GL_FRAGMENT_SHADER, m3FragSrc);
-    shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, v);
-    glAttachShader(shaderProgram, f);
-    glLinkProgram(shaderProgram);
-    glDeleteShader(v);
-    glDeleteShader(f);
+    if (!sDevice) return;
+
+    ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
+
+    D3DCompile(m3VertexHLSL, strlen(m3VertexHLSL), "M3VS", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+    D3DCompile(m3PixelHLSL, strlen(m3PixelHLSL), "M3PS", nullptr, nullptr, "main", "ps_5_0", 0, 0, &psBlob, &errBlob);
+
+    if (vsBlob) sDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &mVertexShader);
+    if (psBlob) sDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &mPixelShader);
+
+    if (vsBlob) {
+        D3D11_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"BLENDINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        };
+        sDevice->CreateInputLayout(layout, _countof(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &mInputLayout);
+    }
+
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = sizeof(M3ConstantBuffer);
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    sDevice->CreateBuffer(&cbd, nullptr, &mConstantBuffer);
+
+    cbd.ByteWidth = sizeof(BoneMatrixBuffer);
+    sDevice->CreateBuffer(&cbd, nullptr, &mBoneBuffer);
+
+    D3D11_SAMPLER_DESC sd = {};
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sd.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    sd.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sd.MaxAnisotropy = 1;
+    sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    sDevice->CreateSamplerState(&sd, &mSampler);
 }
 
 void M3Render::setupSkeletonShader() {
-    unsigned int v = CompileShader(GL_VERTEX_SHADER, skeletonVertSrc);
-    unsigned int f = CompileShader(GL_FRAGMENT_SHADER, skeletonFragSrc);
-    skeletonProgram = glCreateProgram();
-    glAttachShader(skeletonProgram, v);
-    glAttachShader(skeletonProgram, f);
-    glLinkProgram(skeletonProgram);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    glGenVertexArrays(1, &skeletonVAO);
-    glGenBuffers(1, &skeletonVBO);
+    if (!sDevice) return;
+
+    ComPtr<ID3DBlob> vsBlob, psBlob, errBlob;
+
+    D3DCompile(skeletonVertHLSL, strlen(skeletonVertHLSL), "SkeletonVS", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vsBlob, &errBlob);
+    D3DCompile(skeletonPixelHLSL, strlen(skeletonPixelHLSL), "SkeletonPS", nullptr, nullptr, "main", "ps_5_0", 0, 0, &psBlob, &errBlob);
+
+    if (vsBlob) sDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &mSkeletonVS);
+    if (psBlob) sDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &mSkeletonPS);
+
+    if (vsBlob) {
+        D3D11_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        };
+        sDevice->CreateInputLayout(layout, _countof(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &mSkeletonLayout);
+    }
+
+    D3D11_BUFFER_DESC cbd = {};
+    cbd.ByteWidth = sizeof(SkeletonCB);
+    cbd.Usage = D3D11_USAGE_DYNAMIC;
+    cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    sDevice->CreateBuffer(&cbd, nullptr, &mSkeletonCB);
 }
 
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
-    glTextures.clear();
-    glTextures.reserve(data.textures.size());
+    mTextureSRVs.clear();
+    mTextureSRVs.reserve(data.textures.size());
     for (const auto& tex : data.textures) {
-        glTextures.push_back(loadTextureFromArchive(arc, tex.path));
+        mTextureSRVs.push_back(loadTextureFromArchive(arc, tex.path));
     }
 }
 
-unsigned int M3Render::createFallbackWhite() {
-    unsigned int tid = 0;
-    glGenTextures(1, &tid);
-    glBindTexture(GL_TEXTURE_2D, tid);
+ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
+    if (!sDevice) return nullptr;
+
     uint32_t px = 0xFFFFFFFFu;
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &px);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    return tid;
+
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = 1;
+    td.Height = 1;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_IMMUTABLE;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = &px;
+    initData.SysMemPitch = 4;
+
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(sDevice->CreateTexture2D(&td, &initData, &tex))) return nullptr;
+
+    ComPtr<ID3D11ShaderResourceView> srv;
+    sDevice->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+    return srv;
 }
 
-unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
-    if (!arc || path.empty()) return 0;
+ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
+    if (!arc || path.empty() || !sDevice) return nullptr;
 
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring wp = conv.from_bytes(path);
@@ -217,68 +330,117 @@ unsigned int M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::
         std::replace(wp.begin(), wp.end(), L'/', L'\\');
         entry = arc->getByPath(wp);
     }
-    if (!entry) return 0;
+    if (!entry) return nullptr;
 
     std::vector<uint8_t> buffer;
     arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
-    if (buffer.empty()) return 0;
+    if (buffer.empty()) return nullptr;
 
     Tex::File tf;
-    if (!tf.readFromMemory(buffer.data(), buffer.size())) return 0;
+    if (!tf.readFromMemory(buffer.data(), buffer.size())) return nullptr;
 
     Tex::ImageRGBA img;
-    if (!tf.decodeLargestMipToRGBA(img)) return 0;
+    if (!tf.decodeLargestMipToRGBA(img)) return nullptr;
 
-    unsigned int tid = 0;
-    glGenTextures(1, &tid);
-    glBindTexture(GL_TEXTURE_2D, tid);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = img.width;
+    td.Height = img.height;
+    td.MipLevels = 0;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
-    return tid;
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) return nullptr;
+
+    if (sContext) {
+        sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
+    }
+
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.MipLevels = static_cast<UINT>(-1);
+
+    ComPtr<ID3D11ShaderResourceView> srv;
+    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvDesc, &srv))) return nullptr;
+
+    if (sContext) {
+        sContext->GenerateMips(srv.Get());
+    }
+
+    return srv;
 }
 
-unsigned int M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
-    if (materialId >= materials.size()) return fallbackWhiteTex;
+ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
+    if (materialId >= materials.size()) return mFallbackWhiteSRV.Get();
     const auto& m = materials[materialId];
-    if (m.variants.empty()) return fallbackWhiteTex;
+    if (m.variants.empty()) return mFallbackWhiteSRV.Get();
     int v = variant;
     if (v < 0) v = 0;
     if (v >= (int)m.variants.size()) v = (int)m.variants.size() - 1;
     int idx = m.variants[v].textureIndexA;
-    if (idx >= 0 && idx < (int)glTextures.size()) {
-        unsigned int tid = glTextures[idx];
-        if (tid != 0) return tid;
+    if (idx >= 0 && idx < (int)mTextureSRVs.size()) {
+        auto srv = mTextureSRVs[idx].Get();
+        if (srv) return srv;
     }
-    return fallbackWhiteTex;
+    return mFallbackWhiteSRV.Get();
 }
 
-void M3Render::render(const glm::mat4& view, const glm::mat4& proj) {
-    render(view, proj, glm::mat4(1.0f));
+void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj) {
+    render(view, proj, XMMatrixIdentity());
 }
 
-void M3Render::render(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model) {
-    if (!shaderProgram || !VAO) return;
-    glDisable(GL_BLEND);
-    glUseProgram(shaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(model));
-    glUniform1i(glGetUniformLocation(shaderProgram, "diffTexture"), 0);
-    GLint highlightColorLoc = glGetUniformLocation(shaderProgram, "highlightColor");
-    GLint highlightMixLoc = glGetUniformLocation(shaderProgram, "highlightMix");
+void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model) {
+    if (!mVertexShader || !mVertexBuffer || !sContext) return;
+
     bool useSkinning = (playingAnimation >= 0 && !boneMatrices.empty());
-    glUniform1i(glGetUniformLocation(shaderProgram, "useSkinning"), useSkinning ? 1 : 0);
-    if (useSkinning && !boneMatrices.empty()) {
-        GLint loc = glGetUniformLocation(shaderProgram, "boneMatrices");
-        glUniformMatrix4fv(loc, (GLsizei)std::min(boneMatrices.size(), (size_t)200), GL_FALSE, glm::value_ptr(boneMatrices[0]));
+
+    M3ConstantBuffer cb;
+    cb.model = model;
+    cb.view = view;
+    cb.projection = proj;
+    cb.highlightColor = XMFLOAT3(0, 0, 0);
+    cb.highlightMix = 0.0f;
+    cb.useSkinning = useSkinning ? 1 : 0;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(sContext->Map(mConstantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, &cb, sizeof(cb));
+        sContext->Unmap(mConstantBuffer.Get(), 0);
     }
-    glBindVertexArray(VAO);
+
+    if (useSkinning && mBoneBuffer) {
+        BoneMatrixBuffer bb = {};
+        size_t count = std::min(boneMatrices.size(), (size_t)200);
+        for (size_t i = 0; i < count; ++i) {
+            bb.bones[i] = boneMatrices[i];
+        }
+        if (SUCCEEDED(sContext->Map(mBoneBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            memcpy(mapped.pData, &bb, sizeof(bb));
+            sContext->Unmap(mBoneBuffer.Get(), 0);
+        }
+    }
+
+    sContext->IASetInputLayout(mInputLayout.Get());
+    UINT stride = sizeof(RenderVertex);
+    UINT offset = 0;
+    sContext->IASetVertexBuffers(0, 1, mVertexBuffer.GetAddressOf(), &stride, &offset);
+    sContext->IASetIndexBuffer(mIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+    sContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    sContext->VSSetShader(mVertexShader.Get(), nullptr, 0);
+    sContext->PSSetShader(mPixelShader.Get(), nullptr, 0);
+
+    ID3D11Buffer* cbs[] = { mConstantBuffer.Get(), mBoneBuffer.Get() };
+    sContext->VSSetConstantBuffers(0, 2, cbs);
+    sContext->PSSetConstantBuffers(0, 1, cbs);
+    sContext->PSSetSamplers(0, 1, mSampler.GetAddressOf());
+
     for (size_t i = 0; i < submeshes.size(); ++i) {
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
         const auto& sm = submeshes[i];
@@ -288,23 +450,23 @@ void M3Render::render(const glm::mat4& view, const glm::mat4& proj, const glm::m
         } else if (sm.materialID < materialSelectedVariant.size()) {
             variant = materialSelectedVariant[sm.materialID];
         }
-        unsigned int tid = resolveDiffuseTexture(sm.materialID, variant);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tid);
+
+        ID3D11ShaderResourceView* srv = resolveDiffuseTexture(sm.materialID, variant);
+        sContext->PSSetShaderResources(0, 1, &srv);
+
         if ((int)i == selectedSubmesh) {
-            glUniform3f(highlightColorLoc, 0.3f, 1.0f, 0.3f);
-            glUniform1f(highlightMixLoc, 0.4f);
+            cb.highlightColor = XMFLOAT3(0.3f, 1.0f, 0.3f);
+            cb.highlightMix = 0.4f;
         } else {
-            glUniform3f(highlightColorLoc, 0.0f, 0.0f, 0.0f);
-            glUniform1f(highlightMixLoc, 0.0f);
+            cb.highlightColor = XMFLOAT3(0, 0, 0);
+            cb.highlightMix = 0.0f;
         }
-        glDrawElementsBaseVertex(
-            GL_TRIANGLES,
-            sm.indexCount,
-            GL_UNSIGNED_INT,
-            (void*)(uintptr_t)(sm.startIndex * 4),
-            sm.startVertex
-        );
+        if (SUCCEEDED(sContext->Map(mConstantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            memcpy(mapped.pData, &cb, sizeof(cb));
+            sContext->Unmap(mConstantBuffer.Get(), 0);
+        }
+
+        sContext->DrawIndexed(sm.indexCount, sm.startIndex, sm.startVertex);
     }
 }
 
@@ -460,6 +622,15 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
     return glm::mix(prev->translation, next->translation, t);
 }
 
+static XMMATRIX GlmToXM(const glm::mat4& m) {
+    return XMMATRIX(
+        m[0][0], m[0][1], m[0][2], m[0][3],
+        m[1][0], m[1][1], m[1][2], m[1][3],
+        m[2][0], m[2][1], m[2][2], m[2][3],
+        m[3][0], m[3][1], m[3][2], m[3][3]
+    );
+}
+
 void M3Render::updateAnimation(float deltaTime) {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) {
         boneMatrices.clear();
@@ -537,12 +708,14 @@ void M3Render::updateAnimation(float deltaTime) {
         } else {
             worldTransforms[i] = localTransform;
         }
-        boneMatrices[i] = worldTransforms[i] * bone.inverseGlobalMatrix;
+        glm::mat4 final = worldTransforms[i] * bone.inverseGlobalMatrix;
+        boneMatrices[i] = GlmToXM(final);
     }
 }
 
-void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
-    if (!showSkeleton || bones.empty() || !skeletonProgram || !skeletonVAO) return;
+void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj) {
+    if (!showSkeleton || bones.empty() || !mSkeletonVS || !sContext || !sDevice) return;
+
     struct SkeletonVertex {
         glm::vec3 pos;
         glm::vec3 color;
@@ -550,20 +723,23 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
     std::vector<SkeletonVertex> verts;
     verts.reserve(bones.size() * 8);
     std::vector<glm::vec3> boneWorldPos(bones.size());
+
     if (playingAnimation >= 0 && !boneMatrices.empty()) {
         for (size_t i = 0; i < bones.size(); ++i) {
-            glm::mat4 worldTransform = boneMatrices[i] * bones[i].globalMatrix;
-            boneWorldPos[i] = glm::vec3(worldTransform[3]);
+            XMMATRIX worldTransform = XMMatrixMultiply(boneMatrices[i], GlmToXM(bones[i].globalMatrix));
+            XMFLOAT4X4 wt;
+            XMStoreFloat4x4(&wt, worldTransform);
+            boneWorldPos[i] = glm::vec3(wt._41, wt._42, wt._43);
         }
     } else {
         for (size_t i = 0; i < bones.size(); ++i) {
             boneWorldPos[i] = glm::vec3(bones[i].globalMatrix[3]);
         }
     }
+
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
         glm::vec3 bonePos = boneWorldPos[i];
-
         bool isSelected = (selectedBone == static_cast<int>(i));
         float ptSize = isSelected ? 0.06f : 0.02f;
         glm::vec3 jointColor = isSelected ? glm::vec3(1.0f, 0.3f, 0.0f) : glm::vec3(1.0f, 1.0f, 0.0f);
@@ -575,27 +751,6 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
         verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
         verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
 
-        if (isSelected) {
-            float s = ptSize * 0.8f;
-            glm::vec3 top = bonePos + glm::vec3(0, s, 0);
-            glm::vec3 bot = bonePos + glm::vec3(0, -s, 0);
-            glm::vec3 corners[4] = {
-                bonePos + glm::vec3(s, 0, 0),
-                bonePos + glm::vec3(0, 0, s),
-                bonePos + glm::vec3(-s, 0, 0),
-                bonePos + glm::vec3(0, 0, -s)
-            };
-            for (int j = 0; j < 4; ++j) {
-                int next = (j + 1) % 4;
-                verts.push_back({top, jointColor});
-                verts.push_back({corners[j], jointColor});
-                verts.push_back({corners[j], jointColor});
-                verts.push_back({corners[next], jointColor});
-                verts.push_back({bot, jointColor});
-                verts.push_back({corners[j], jointColor});
-            }
-        }
-
         if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
             glm::vec3 parentPos = boneWorldPos[bone.parentId];
             bool parentSelected = (selectedBone == bone.parentId);
@@ -604,22 +759,41 @@ void M3Render::renderSkeleton(const glm::mat4& view, const glm::mat4& proj) {
             verts.push_back({parentPos, boneColor});
         }
     }
+
     if (verts.empty()) return;
-    glBindVertexArray(skeletonVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, skeletonVBO);
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(SkeletonVertex), verts.data(), GL_DYNAMIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SkeletonVertex), (void*)offsetof(SkeletonVertex, color));
-    glUseProgram(skeletonProgram);
-    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(skeletonProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
-    glDisable(GL_DEPTH_TEST);
-    glLineWidth(2.0f);
-    glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
-    glLineWidth(1.0f);
-    glEnable(GL_DEPTH_TEST);
+
+    if (!mSkeletonVB || verts.size() * sizeof(SkeletonVertex) > 65536) {
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth = static_cast<UINT>(verts.size() * sizeof(SkeletonVertex));
+        bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        sDevice->CreateBuffer(&bd, nullptr, &mSkeletonVB);
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(sContext->Map(mSkeletonVB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, verts.data(), verts.size() * sizeof(SkeletonVertex));
+        sContext->Unmap(mSkeletonVB.Get(), 0);
+    }
+
+    SkeletonCB scb;
+    scb.view = view;
+    scb.projection = proj;
+    if (SUCCEEDED(sContext->Map(mSkeletonCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, &scb, sizeof(scb));
+        sContext->Unmap(mSkeletonCB.Get(), 0);
+    }
+
+    sContext->IASetInputLayout(mSkeletonLayout.Get());
+    UINT stride = sizeof(SkeletonVertex);
+    UINT offset = 0;
+    sContext->IASetVertexBuffers(0, 1, mSkeletonVB.GetAddressOf(), &stride, &offset);
+    sContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    sContext->VSSetShader(mSkeletonVS.Get(), nullptr, 0);
+    sContext->PSSetShader(mSkeletonPS.Get(), nullptr, 0);
+    sContext->VSSetConstantBuffers(0, 1, mSkeletonCB.GetAddressOf());
+    sContext->Draw(static_cast<UINT>(verts.size()), 0);
 }
 
 static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
@@ -642,27 +816,30 @@ static bool rayTriangleIntersect(const glm::vec3& orig, const glm::vec3& dir,
     return t > EPSILON;
 }
 
-int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
+int M3Render::rayPickSubmesh(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const
 {
+    glm::vec3 orig(rayOrigin.x, rayOrigin.y, rayOrigin.z);
+    glm::vec3 dir(rayDir.x, rayDir.y, rayDir.z);
+
     float closestT = FLT_MAX;
     int closestSubmesh = -1;
     const auto& verts = geometry.vertices;
-    const auto& indices = geometry.indices;
+    const auto& inds = geometry.indices;
     for (size_t si = 0; si < submeshes.size(); ++si)
     {
         if (si < submeshVisible.size() && submeshVisible[si] == 0) continue;
         const auto& sm = submeshes[si];
         for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3)
         {
-            uint32_t i0 = indices[sm.startIndex + i] + sm.startVertex;
-            uint32_t i1 = indices[sm.startIndex + i + 1] + sm.startVertex;
-            uint32_t i2 = indices[sm.startIndex + i + 2] + sm.startVertex;
+            uint32_t i0 = inds[sm.startIndex + i] + sm.startVertex;
+            uint32_t i1 = inds[sm.startIndex + i + 1] + sm.startVertex;
+            uint32_t i2 = inds[sm.startIndex + i + 2] + sm.startVertex;
             if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
             const glm::vec3& v0 = verts[i0].position;
             const glm::vec3& v1 = verts[i1].position;
             const glm::vec3& v2 = verts[i2].position;
             float t;
-            if (rayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, t))
+            if (rayTriangleIntersect(orig, dir, v0, v1, v2, t))
             {
                 if (t < closestT)
                 {
@@ -675,9 +852,12 @@ int M3Render::rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir
     return closestSubmesh;
 }
 
-int M3Render::rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const
+int M3Render::rayPickBone(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const
 {
     if (bones.empty()) return -1;
+
+    glm::vec3 orig(rayOrigin.x, rayOrigin.y, rayOrigin.z);
+    glm::vec3 dir(rayDir.x, rayDir.y, rayDir.z);
 
     int closestBone = -1;
     float closestDist = FLT_MAX;
@@ -688,8 +868,10 @@ int M3Render::rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) c
     {
         for (size_t i = 0; i < bones.size(); ++i)
         {
-            glm::mat4 worldTransform = boneMatrices[i] * bones[i].globalMatrix;
-            boneWorldPos[i] = glm::vec3(worldTransform[3]);
+            XMMATRIX worldTransform = XMMatrixMultiply(boneMatrices[i], GlmToXM(bones[i].globalMatrix));
+            XMFLOAT4X4 wt;
+            XMStoreFloat4x4(&wt, worldTransform);
+            boneWorldPos[i] = glm::vec3(wt._41, wt._42, wt._43);
         }
     }
     else
@@ -703,14 +885,11 @@ int M3Render::rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) c
     for (size_t i = 0; i < bones.size(); ++i)
     {
         glm::vec3 bonePos = boneWorldPos[i];
-
-        glm::vec3 toPoint = bonePos - rayOrigin;
-        float t = glm::dot(toPoint, rayDir);
+        glm::vec3 toPoint = bonePos - orig;
+        float t = glm::dot(toPoint, dir);
         if (t < 0) continue;
-
-        glm::vec3 closestPoint = rayOrigin + rayDir * t;
+        glm::vec3 closestPoint = orig + dir * t;
         float dist = glm::length(bonePos - closestPoint);
-
         if (dist < pickRadius && t < closestDist)
         {
             closestDist = t;
@@ -720,3 +899,6 @@ int M3Render::rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) c
 
     return closestBone;
 }
+
+void M3Render::queueTexturesForLoading() {}
+bool M3Render::uploadNextTexture(const ArchivePtr&) { return false; }

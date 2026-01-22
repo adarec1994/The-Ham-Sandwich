@@ -3,202 +3,245 @@
 namespace TerrainShader
 {
     const char* VertexSource = R"(
-#version 330 core
-
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec4 aTangent;
-layout (location = 3) in vec2 aTexCoord;
-
-uniform mat4 view;
-uniform mat4 projection;
-uniform mat4 model;
-
-out vec3 FragPos;
-out vec3 Normal;
-out vec2 TexCoord;
-out vec2 BlendCoord;
-out mat3 TBN;
-
-void main()
+cbuffer TerrainCB : register(b0)
 {
-    vec4 worldPos = model * vec4(aPos, 1.0);
-    FragPos = worldPos.xyz;
+    matrix view;
+    matrix projection;
+    matrix model;
+    float4 texScale;
+    float4 highlightColor;
+    float4 baseColor;
+    float3 camPosition;
+    int hasColorMap;
+};
 
-    mat3 normalMatrix = transpose(inverse(mat3(model)));
-    Normal = normalize(normalMatrix * aNormal);
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+    float4 tangent : TANGENT;
+    float2 texCoord : TEXCOORD0;
+};
 
-    vec3 T = normalize(normalMatrix * aTangent.xyz);
-    vec3 N = Normal;
-    vec3 B = cross(N, T) * aTangent.w;
-    TBN = mat3(T, B, N);
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 fragPos : TEXCOORD0;
+    float3 normal : TEXCOORD1;
+    float2 texCoord : TEXCOORD2;
+    float2 blendCoord : TEXCOORD3;
+    float3 tangent : TEXCOORD4;
+    float3 bitangent : TEXCOORD5;
+};
 
-    TexCoord = aTexCoord;
-    BlendCoord = aTexCoord;
+PSInput main(VSInput input)
+{
+    PSInput output;
 
-    gl_Position = projection * view * worldPos;
+    float4 worldPos = mul(model, float4(input.position, 1.0));
+    output.fragPos = worldPos.xyz;
+
+    float3x3 normalMatrix = (float3x3)model;
+    output.normal = normalize(mul(normalMatrix, input.normal));
+
+    float3 T = normalize(mul(normalMatrix, input.tangent.xyz));
+    float3 N = output.normal;
+    float3 B = cross(N, T) * input.tangent.w;
+
+    output.tangent = T;
+    output.bitangent = B;
+
+    output.texCoord = input.texCoord;
+    output.blendCoord = input.texCoord;
+
+    output.position = mul(projection, mul(view, worldPos));
+
+    return output;
 }
 )";
 
     const char* FragmentSource = R"(
-#version 330 core
-
-in vec3 FragPos;
-in vec3 Normal;
-in vec2 TexCoord;
-in vec2 BlendCoord;
-in mat3 TBN;
-
-uniform sampler2D blendMap;
-uniform sampler2D colorMap;
-uniform int hasColorMap;
-
-uniform sampler2D layer0;
-uniform sampler2D layer1;
-uniform sampler2D layer2;
-uniform sampler2D layer3;
-
-uniform sampler2D layer0Normal;
-uniform sampler2D layer1Normal;
-uniform sampler2D layer2Normal;
-uniform sampler2D layer3Normal;
-
-uniform vec4 texScale;
-uniform vec3 camPosition;
-uniform vec4 highlightColor;
-uniform vec4 baseColor;
-
-out vec4 FragColor;
-
-vec3 sampleNormal(sampler2D normalTex, vec2 uv)
+cbuffer TerrainCB : register(b0)
 {
-    vec3 n = texture(normalTex, uv).rgb;
+    matrix view;
+    matrix projection;
+    matrix model;
+    float4 texScale;
+    float4 highlightColor;
+    float4 baseColor;
+    float3 camPosition;
+    int hasColorMap;
+};
+
+Texture2D blendMap : register(t0);
+Texture2D colorMap : register(t1);
+Texture2D layer0 : register(t2);
+Texture2D layer1 : register(t3);
+Texture2D layer2 : register(t4);
+Texture2D layer3 : register(t5);
+Texture2D layer0Normal : register(t6);
+Texture2D layer1Normal : register(t7);
+Texture2D layer2Normal : register(t8);
+Texture2D layer3Normal : register(t9);
+
+SamplerState samplerWrap : register(s0);
+SamplerState samplerClamp : register(s1);
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 fragPos : TEXCOORD0;
+    float3 normal : TEXCOORD1;
+    float2 texCoord : TEXCOORD2;
+    float2 blendCoord : TEXCOORD3;
+    float3 tangent : TEXCOORD4;
+    float3 bitangent : TEXCOORD5;
+};
+
+float3 sampleNormal(Texture2D normalTex, float2 uv)
+{
+    float3 n = normalTex.Sample(samplerWrap, uv).rgb;
     return normalize(n * 2.0 - 1.0);
 }
 
-void main()
+float4 main(PSInput input) : SV_TARGET
 {
-    vec4 blend = texture(blendMap, BlendCoord);
+    float4 blend = blendMap.Sample(samplerClamp, input.blendCoord);
 
     float blendSum = blend.r + blend.g + blend.b + blend.a;
     if (blendSum > 0.001)
         blend /= blendSum;
     else
-        blend = vec4(1.0, 0.0, 0.0, 0.0);
+        blend = float4(1.0, 0.0, 0.0, 0.0);
 
-    vec2 uv0 = TexCoord * texScale.x;
-    vec2 uv1 = TexCoord * texScale.y;
-    vec2 uv2 = TexCoord * texScale.z;
-    vec2 uv3 = TexCoord * texScale.w;
+    float2 uv0 = input.texCoord * texScale.x;
+    float2 uv1 = input.texCoord * texScale.y;
+    float2 uv2 = input.texCoord * texScale.z;
+    float2 uv3 = input.texCoord * texScale.w;
 
-    vec4 col0 = texture(layer0, uv0);
-    vec4 col1 = texture(layer1, uv1);
-    vec4 col2 = texture(layer2, uv2);
-    vec4 col3 = texture(layer3, uv3);
+    float4 col0 = layer0.Sample(samplerWrap, uv0);
+    float4 col1 = layer1.Sample(samplerWrap, uv1);
+    float4 col2 = layer2.Sample(samplerWrap, uv2);
+    float4 col3 = layer3.Sample(samplerWrap, uv3);
 
-    vec4 diffuse = col0 * blend.r + col1 * blend.g + col2 * blend.b + col3 * blend.a;
+    float4 diffuse = col0 * blend.r + col1 * blend.g + col2 * blend.b + col3 * blend.a;
 
-    vec3 n0 = sampleNormal(layer0Normal, uv0);
-    vec3 n1 = sampleNormal(layer1Normal, uv1);
-    vec3 n2 = sampleNormal(layer2Normal, uv2);
-    vec3 n3 = sampleNormal(layer3Normal, uv3);
+    float3 n0 = sampleNormal(layer0Normal, uv0);
+    float3 n1 = sampleNormal(layer1Normal, uv1);
+    float3 n2 = sampleNormal(layer2Normal, uv2);
+    float3 n3 = sampleNormal(layer3Normal, uv3);
 
-    vec3 blendedNormal = normalize(n0 * blend.r + n1 * blend.g + n2 * blend.b + n3 * blend.a);
-    vec3 worldNormal = normalize(TBN * blendedNormal);
+    float3 blendedNormal = normalize(n0 * blend.r + n1 * blend.g + n2 * blend.b + n3 * blend.a);
+
+    float3x3 TBN = float3x3(input.tangent, input.bitangent, input.normal);
+    float3 worldNormal = normalize(mul(blendedNormal, TBN));
 
     if (hasColorMap > 0)
     {
-        vec4 tint = texture(colorMap, BlendCoord);
+        float4 tint = colorMap.Sample(samplerClamp, input.blendCoord);
         diffuse.rgb *= tint.rgb * 2.0;
     }
 
-    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+    float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
     float NdotL = max(dot(worldNormal, lightDir), 0.0);
 
-    vec3 ambient = vec3(0.3);
-    vec3 lighting = ambient + vec3(0.7) * NdotL;
+    float3 ambient = float3(0.3, 0.3, 0.3);
+    float3 lighting = ambient + float3(0.7, 0.7, 0.7) * NdotL;
 
-    vec3 finalColor = diffuse.rgb * lighting * baseColor.rgb;
+    float3 finalColor = diffuse.rgb * lighting * baseColor.rgb;
 
     if (highlightColor.a > 0.0)
     {
-        finalColor = mix(finalColor, highlightColor.rgb, highlightColor.a * 0.3);
+        finalColor = lerp(finalColor, highlightColor.rgb, highlightColor.a * 0.3);
     }
 
-    FragColor = vec4(finalColor, 1.0);
+    return float4(finalColor, 1.0);
 }
 )";
 
-    static GLuint CompileShader(GLenum type, const char* source)
+    bool CreateShaders(ID3D11Device* device, ShaderResources& out)
     {
-        GLuint shader = glCreateShader(type);
-        glShaderSource(shader, 1, &source, nullptr);
-        glCompileShader(shader);
+        if (!device) return false;
 
-        GLint success;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-        if (!success)
+        UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#ifdef _DEBUG
+        flags |= D3DCOMPILE_DEBUG;
+#endif
+
+        ComPtr<ID3DBlob> vsBlob;
+        ComPtr<ID3DBlob> vsError;
+        HRESULT hr = D3DCompile(VertexSource, strlen(VertexSource), "TerrainVS", nullptr, nullptr,
+                                "main", "vs_5_0", flags, 0, &vsBlob, &vsError);
+        if (FAILED(hr)) return false;
+
+        ComPtr<ID3DBlob> psBlob;
+        ComPtr<ID3DBlob> psError;
+        hr = D3DCompile(FragmentSource, strlen(FragmentSource), "TerrainPS", nullptr, nullptr,
+                        "main", "ps_5_0", flags, 0, &psBlob, &psError);
+        if (FAILED(hr)) return false;
+
+        hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+                                        nullptr, &out.vertexShader);
+        if (FAILED(hr)) return false;
+
+        hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(),
+                                       nullptr, &out.pixelShader);
+        if (FAILED(hr)) return false;
+
+        D3D11_INPUT_ELEMENT_DESC layout[] =
         {
-            glDeleteShader(shader);
-            return 0;
-        }
-        return shader;
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        };
+
+        hr = device->CreateInputLayout(layout, _countof(layout),
+                                       vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+                                       &out.inputLayout);
+        if (FAILED(hr)) return false;
+
+        D3D11_BUFFER_DESC cbDesc = {};
+        cbDesc.ByteWidth = sizeof(TerrainCB);
+        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        hr = device->CreateBuffer(&cbDesc, nullptr, &out.constantBuffer);
+        if (FAILED(hr)) return false;
+
+        D3D11_SAMPLER_DESC sampDesc = {};
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.MaxAnisotropy = 1;
+        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerWrap);
+        if (FAILED(hr)) return false;
+
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerClamp);
+        if (FAILED(hr)) return false;
+
+        return true;
     }
 
-    GLuint CreateProgram()
+    void UpdateConstants(ID3D11DeviceContext* context, ID3D11Buffer* cb, const TerrainCB& data)
     {
-        GLuint vs = CompileShader(GL_VERTEX_SHADER, VertexSource);
-        if (vs == 0) return 0;
+        if (!context || !cb) return;
 
-        GLuint fs = CompileShader(GL_FRAGMENT_SHADER, FragmentSource);
-        if (fs == 0)
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        HRESULT hr = context->Map(cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        if (SUCCEEDED(hr))
         {
-            glDeleteShader(vs);
-            return 0;
+            memcpy(mapped.pData, &data, sizeof(TerrainCB));
+            context->Unmap(cb, 0);
         }
-
-        GLuint program = glCreateProgram();
-        glAttachShader(program, vs);
-        glAttachShader(program, fs);
-        glLinkProgram(program);
-
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-
-        GLint success;
-        glGetProgramiv(program, GL_LINK_STATUS, &success);
-        if (!success)
-        {
-            glDeleteProgram(program);
-            return 0;
-        }
-
-        return program;
-    }
-
-    void GetUniforms(GLuint program, Uniforms& out)
-    {
-        out.view = glGetUniformLocation(program, "view");
-        out.projection = glGetUniformLocation(program, "projection");
-        out.model = glGetUniformLocation(program, "model");
-
-        out.blendMap = glGetUniformLocation(program, "blendMap");
-        out.colorMap = glGetUniformLocation(program, "colorMap");
-        out.hasColorMap = glGetUniformLocation(program, "hasColorMap");
-
-        out.layer0 = glGetUniformLocation(program, "layer0");
-        out.layer1 = glGetUniformLocation(program, "layer1");
-        out.layer2 = glGetUniformLocation(program, "layer2");
-        out.layer3 = glGetUniformLocation(program, "layer3");
-
-        out.layer0Normal = glGetUniformLocation(program, "layer0Normal");
-        out.layer1Normal = glGetUniformLocation(program, "layer1Normal");
-        out.layer2Normal = glGetUniformLocation(program, "layer2Normal");
-        out.layer3Normal = glGetUniformLocation(program, "layer3Normal");
-
-        out.texScale = glGetUniformLocation(program, "texScale");
-        out.camPosition = glGetUniformLocation(program, "camPosition");
-        out.highlightColor = glGetUniformLocation(program, "highlightColor");
-        out.baseColor = glGetUniformLocation(program, "baseColor");
     }
 }

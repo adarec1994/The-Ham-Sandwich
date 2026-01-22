@@ -8,65 +8,141 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
-#include <GLFW/glfw3.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include <wrl/client.h>
 
-#include <glad/glad.h>
+using Microsoft::WRL::ComPtr;
 
-static GLuint gHighlightVAO = 0;
-static GLuint gHighlightVBO = 0;
-static GLuint gHighlightProgram = 0;
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
 
-static const char* highlightVertexShader = R"(
-#version 330 core
-layout (location = 0) in vec3 aPos;
-uniform mat4 mvp;
-void main() {
-    gl_Position = mvp * vec4(aPos, 1.0);
+static inline glm::vec3 ToGlm(const DirectX::XMFLOAT3& v)
+{
+    return glm::vec3(v.x, v.y, v.z);
 }
-)";
 
-static const char* highlightFragmentShader = R"(
-#version 330 core
-out vec4 FragColor;
-uniform vec4 color;
-void main() {
-    FragColor = color;
+static inline DirectX::XMFLOAT3 ToDX3(const glm::vec3& v)
+{
+    return DirectX::XMFLOAT3(v.x, v.y, v.z);
+}
+
+static inline DirectX::XMMATRIX ToDXMatrix(const glm::mat4& m)
+{
+    return DirectX::XMMATRIX(
+        m[0][0], m[1][0], m[2][0], m[3][0],
+        m[0][1], m[1][1], m[2][1], m[3][1],
+        m[0][2], m[1][2], m[2][2], m[3][2],
+        m[0][3], m[1][3], m[2][3], m[3][3]
+    );
+}
+
+static ComPtr<ID3D11Buffer> gHighlightVB;
+static ComPtr<ID3D11VertexShader> gHighlightVS;
+static ComPtr<ID3D11PixelShader> gHighlightPS;
+static ComPtr<ID3D11InputLayout> gHighlightInputLayout;
+static ComPtr<ID3D11Buffer> gHighlightCB;
+static ComPtr<ID3D11RasterizerState> gHighlightRasterState;
+static ComPtr<ID3D11DepthStencilState> gHighlightDepthState;
+
+struct HighlightConstants
+{
+    DirectX::XMFLOAT4X4 mvp;
+    DirectX::XMFLOAT4 color;
+};
+
+static const char* highlightShaderSource = R"(
+cbuffer HighlightCB : register(b0)
+{
+    float4x4 mvp;
+    float4 color;
+};
+
+struct VS_INPUT
+{
+    float3 pos : POSITION;
+};
+
+struct PS_INPUT
+{
+    float4 pos : SV_POSITION;
+};
+
+PS_INPUT VS_Main(VS_INPUT input)
+{
+    PS_INPUT output;
+    output.pos = mul(float4(input.pos, 1.0), mvp);
+    return output;
+}
+
+float4 PS_Main(PS_INPUT input) : SV_TARGET
+{
+    return color;
 }
 )";
 
 static void InitHighlightShader()
 {
-    if (gHighlightProgram != 0) return;
+    if (gHighlightVS || !gDevice) return;
 
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vs, 1, &highlightVertexShader, nullptr);
-    glCompileShader(vs);
+    ComPtr<ID3DBlob> vsBlob;
+    ComPtr<ID3DBlob> psBlob;
+    ComPtr<ID3DBlob> errorBlob;
 
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fs, 1, &highlightFragmentShader, nullptr);
-    glCompileShader(fs);
+    HRESULT hr = D3DCompile(highlightShaderSource, strlen(highlightShaderSource), nullptr, nullptr, nullptr,
+                            "VS_Main", "vs_5_0", 0, 0, &vsBlob, &errorBlob);
+    if (FAILED(hr)) return;
 
-    gHighlightProgram = glCreateProgram();
-    glAttachShader(gHighlightProgram, vs);
-    glAttachShader(gHighlightProgram, fs);
-    glLinkProgram(gHighlightProgram);
+    hr = D3DCompile(highlightShaderSource, strlen(highlightShaderSource), nullptr, nullptr, nullptr,
+                    "PS_Main", "ps_5_0", 0, 0, &psBlob, &errorBlob);
+    if (FAILED(hr)) return;
 
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    gDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &gHighlightVS);
+    gDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &gHighlightPS);
 
-    glGenVertexArrays(1, &gHighlightVAO);
-    glGenBuffers(1, &gHighlightVBO);
+    D3D11_INPUT_ELEMENT_DESC layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+    };
+    gDevice->CreateInputLayout(layout, 1, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &gHighlightInputLayout);
+
+    D3D11_BUFFER_DESC cbDesc = {};
+    cbDesc.ByteWidth = sizeof(HighlightConstants);
+    cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    gDevice->CreateBuffer(&cbDesc, nullptr, &gHighlightCB);
+
+    D3D11_BUFFER_DESC vbDesc = {};
+    vbDesc.ByteWidth = 24 * 3 * sizeof(float);
+    vbDesc.Usage = D3D11_USAGE_DYNAMIC;
+    vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    vbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    gDevice->CreateBuffer(&vbDesc, nullptr, &gHighlightVB);
+
+    D3D11_RASTERIZER_DESC rasterDesc = {};
+    rasterDesc.FillMode = D3D11_FILL_WIREFRAME;
+    rasterDesc.CullMode = D3D11_CULL_NONE;
+    rasterDesc.DepthClipEnable = TRUE;
+    gDevice->CreateRasterizerState(&rasterDesc, &gHighlightRasterState);
+
+    D3D11_DEPTH_STENCIL_DESC dsDesc = {};
+    dsDesc.DepthEnable = TRUE;
+    dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dsDesc.DepthFunc = D3D11_COMPARISON_LESS;
+    gDevice->CreateDepthStencilState(&dsDesc, &gHighlightDepthState);
 }
 
 static void RenderAreaHighlight(const AreaFilePtr& area, const glm::mat4& view, const glm::mat4& projection)
 {
-    if (!area) return;
+    if (!area || !gContext) return;
 
     InitHighlightShader();
+    if (!gHighlightVS) return;
 
-    glm::vec3 worldOffset = area->getWorldOffset();
-    glm::vec3 minB = area->getMinBounds() + worldOffset;
-    glm::vec3 maxB = area->getMaxBounds() + worldOffset;
+    glm::vec3 worldOffset = ToGlm(area->getWorldOffset());
+    glm::vec3 minB = ToGlm(area->getMinBounds()) + worldOffset;
+    glm::vec3 maxB = ToGlm(area->getMaxBounds()) + worldOffset;
 
     float vertices[] = {
         minB.x, minB.y, minB.z,
@@ -97,26 +173,46 @@ static void RenderAreaHighlight(const AreaFilePtr& area, const glm::mat4& view, 
         minB.x, maxB.y, maxB.z,
     };
 
-    glBindVertexArray(gHighlightVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, gHighlightVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-
-    glUseProgram(gHighlightProgram);
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(gContext->Map(gHighlightVB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+    {
+        memcpy(mapped.pData, vertices, sizeof(vertices));
+        gContext->Unmap(gHighlightVB.Get(), 0);
+    }
 
     glm::mat4 mvp = projection * view;
-    GLint mvpLoc = glGetUniformLocation(gHighlightProgram, "mvp");
-    GLint colorLoc = glGetUniformLocation(gHighlightProgram, "color");
+    DirectX::XMFLOAT4X4 mvpDX;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            mvpDX.m[i][j] = mvp[j][i];
 
-    glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
-    glUniform4f(colorLoc, 0.0f, 1.0f, 0.0f, 1.0f);
+    HighlightConstants cb;
+    cb.mvp = mvpDX;
+    cb.color = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-    glLineWidth(3.0f);
-    glDrawArrays(GL_LINES, 0, 24);
+    if (SUCCEEDED(gContext->Map(gHighlightCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+    {
+        memcpy(mapped.pData, &cb, sizeof(cb));
+        gContext->Unmap(gHighlightCB.Get(), 0);
+    }
 
-    glBindVertexArray(0);
+    UINT stride = 3 * sizeof(float);
+    UINT offset = 0;
+    ID3D11Buffer* vb = gHighlightVB.Get();
+    gContext->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+    gContext->IASetInputLayout(gHighlightInputLayout.Get());
+    gContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+
+    gContext->VSSetShader(gHighlightVS.Get(), nullptr, 0);
+    gContext->PSSetShader(gHighlightPS.Get(), nullptr, 0);
+    ID3D11Buffer* cbs[] = { gHighlightCB.Get() };
+    gContext->VSSetConstantBuffers(0, 1, cbs);
+    gContext->PSSetConstantBuffers(0, 1, cbs);
+
+    gContext->RSSetState(gHighlightRasterState.Get());
+    gContext->OMSetDepthStencilState(gHighlightDepthState.Get(), 0);
+
+    gContext->Draw(24, 0);
 }
 
 static void HandleModelPicking(AppState& state)
@@ -141,15 +237,18 @@ static void HandleModelPicking(AppState& state)
     glm::vec3 rayWorld = glm::normalize(glm::vec3(invView * rayEye));
     glm::vec3 rayOrigin = glm::vec3(invView[3]);
 
+    DirectX::XMFLOAT3 dxOrigin = ToDX3(rayOrigin);
+    DirectX::XMFLOAT3 dxDir = ToDX3(rayWorld);
+
     if (render->getShowSkeleton())
     {
-        int hit = render->rayPickBone(rayOrigin, rayWorld);
+        int hit = render->rayPickBone(dxOrigin, dxDir);
         render->setSelectedBone(hit);
         render->setSelectedSubmesh(-1);
     }
     else
     {
-        int hit = render->rayPickSubmesh(rayOrigin, rayWorld);
+        int hit = render->rayPickSubmesh(dxOrigin, dxDir);
         render->setSelectedSubmesh(hit);
         render->setSelectedBone(-1);
     }
@@ -173,10 +272,7 @@ void HandleAreaPicking(AppState& state)
 void RenderAreas(const AppState& state, int display_w, int display_h)
 {
     if (display_w <= 0 || display_h <= 0) return;
-
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glDisable(GL_CULL_FACE);
+    if (!gContext) return;
 
     const glm::mat4 view = glm::lookAt(
         state.camera.Position,
@@ -194,32 +290,21 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
     gViewMatrix = view;
     gProjMatrix = projection;
 
+    DirectX::XMMATRIX dxView = ToDXMatrix(view);
+    DirectX::XMMATRIX dxProj = ToDXMatrix(projection);
+
     if (gLoadedModel)
     {
         gLoadedModel->updateAnimation(ImGui::GetIO().DeltaTime);
-        gLoadedModel->render(view, projection);
-        gLoadedModel->renderSkeleton(view, projection);
+        gLoadedModel->render(dxView, dxProj);
+        gLoadedModel->renderSkeleton(dxView, dxProj);
     }
-    else if (!gLoadedAreas.empty() && state.areaRender)
+    else if (!gLoadedAreas.empty())
     {
-        const uint32_t prog = state.areaRender->getProgram();
-        if (prog != 0)
+        for (const auto& area : gLoadedAreas)
         {
-            glUseProgram(prog);
-
-            const GLint viewLoc = glGetUniformLocation(prog, "view");
-            const GLint projLoc = glGetUniformLocation(prog, "projection");
-
-            if (viewLoc != -1)
-                glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-            if (projLoc != -1)
-                glUniformMatrix4fv(projLoc, 1, GL_FALSE, glm::value_ptr(projection));
-
-            for (const auto& area : gLoadedAreas)
-            {
-                if (area)
-                    area->render(view, projection, prog, nullptr);
-            }
+            if (area)
+                area->render(gContext, dxView, dxProj, nullptr, gSelectedChunk);
         }
 
         if (gShowProps)
@@ -227,7 +312,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
             for (const auto& area : gLoadedAreas)
             {
                 if (area)
-                    area->renderProps(view, projection);
+                    area->renderProps(dxView, dxProj);
             }
         }
 

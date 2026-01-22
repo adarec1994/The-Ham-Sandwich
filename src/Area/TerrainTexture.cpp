@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "TerrainTexture.h"
 #include "../Archive.h"
 #include "../tex/tex.h"
@@ -23,25 +24,18 @@ namespace TerrainTexture
         ClearCache();
     }
 
+    void Manager::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context)
+    {
+        mDevice = device;
+        mContext = context;
+    }
+
     void Manager::ClearCache()
     {
-        for (auto& [path, tex] : mPathTextureCache)
-        {
-            if (tex.texture != 0) glDeleteTextures(1, &tex.texture);
-        }
         mPathTextureCache.clear();
         mTextureCache.clear();
-
-        if (mFallbackWhite != 0)
-        {
-            glDeleteTextures(1, &mFallbackWhite);
-            mFallbackWhite = 0;
-        }
-        if (mFallbackNormal != 0)
-        {
-            glDeleteTextures(1, &mFallbackNormal);
-            mFallbackNormal = 0;
-        }
+        mFallbackWhite.Reset();
+        mFallbackNormal.Reset();
     }
 
     static std::wstring ToLowerW(const std::wstring& s)
@@ -200,7 +194,6 @@ namespace TerrainTexture
 
         if (!fileEntry)
         {
-            // Try recursive filename search as last resort
             auto root = archive->getRoot();
             if (root)
             {
@@ -245,47 +238,62 @@ namespace TerrainTexture
         return LoadRawTextureFromPath(archive, entry->diffusePath, outData);
     }
 
-    bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path, GLuint& outTexture, int& outW, int& outH)
+    bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path,
+                                      ComPtr<ID3D11ShaderResourceView>& outSRV, int& outW, int& outH)
     {
-        if (!archive || path.empty()) return false;
+        if (!archive || path.empty() || !mDevice) return false;
 
         auto cacheIt = mPathTextureCache.find(path);
         if (cacheIt != mPathTextureCache.end())
         {
-            outTexture = cacheIt->second.texture;
+            outSRV = cacheIt->second.srv;
             outW = cacheIt->second.width;
             outH = cacheIt->second.height;
-            return outTexture != 0;
+            return outSRV != nullptr;
         }
 
         RawTextureData rawData;
         if (!LoadRawTextureFromPath(archive, path, rawData))
         {
-            mPathTextureCache[path] = {0, 0, 0};
+            mPathTextureCache[path] = {nullptr, 0, 0};
             return false;
         }
 
-        outTexture = UploadRGBATexture(rawData.rgba.data(), rawData.width, rawData.height, true);
+        outSRV = UploadRGBATexture(mDevice, mContext, rawData.rgba.data(), rawData.width, rawData.height, true);
         outW = rawData.width;
         outH = rawData.height;
 
-        mPathTextureCache[path] = {outTexture, outW, outH};
+        mPathTextureCache[path] = {outSRV, outW, outH};
 
-        return outTexture != 0;
+        return outSRV != nullptr;
     }
 
     void Manager::EnsureFallbackTextures()
     {
-        if (mFallbackWhite == 0)
+        if (!mDevice) return;
+
+        if (!mFallbackWhite)
         {
             uint8_t white[4] = {255, 255, 255, 255};
-            mFallbackWhite = UploadRGBATexture(white, 1, 1, false);
+            mFallbackWhite = UploadRGBATexture(mDevice, mContext, white, 1, 1, false);
         }
-        if (mFallbackNormal == 0)
+        if (!mFallbackNormal)
         {
             uint8_t normal[4] = {128, 128, 255, 255};
-            mFallbackNormal = UploadRGBATexture(normal, 1, 1, false);
+            mFallbackNormal = UploadRGBATexture(mDevice, mContext, normal, 1, 1, false);
         }
+    }
+
+    ID3D11ShaderResourceView* Manager::GetFallbackWhite()
+    {
+        EnsureFallbackTextures();
+        return mFallbackWhite.Get();
+    }
+
+    ID3D11ShaderResourceView* Manager::GetFallbackNormal()
+    {
+        EnsureFallbackTextures();
+        return mFallbackNormal.Get();
     }
 
     const CachedTexture* Manager::GetLayerTexture(const ArchivePtr& archive, uint32_t layerId)
@@ -327,14 +335,14 @@ namespace TerrainTexture
             LoadTextureFromPath(archive, entry->normalPath, tex.normal, nw, nh);
         }
 
-        if (tex.diffuse == 0)
+        if (!tex.diffuse)
         {
             tex.diffuse = mFallbackWhite;
             tex.width = 1;
             tex.height = 1;
         }
 
-        if (tex.normal == 0)
+        if (!tex.normal)
         {
             tex.normal = mFallbackNormal;
         }
@@ -344,33 +352,19 @@ namespace TerrainTexture
         return &mTextureCache[layerId];
     }
 
-    GLuint Manager::CreateBlendMapTexture(const uint8_t* data, int width, int height)
+    ComPtr<ID3D11ShaderResourceView> Manager::CreateBlendMapTexture(const uint8_t* data, int width, int height)
     {
-        if (!data || width <= 0 || height <= 0) return 0;
-
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return tex;
+        if (!data || width <= 0 || height <= 0 || !mDevice) return nullptr;
+        return UploadRGBATexture(mDevice, mContext, data, width, height, false);
     }
 
-    GLuint Manager::CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height)
+    ComPtr<ID3D11ShaderResourceView> Manager::CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height)
     {
-        if (!dxtData || dataSize == 0) return 0;
+        if (!dxtData || dataSize == 0 || !mDevice) return nullptr;
 
         std::vector<uint8_t> rgba;
         if (!Tex::File::decodeDXT1(dxtData, width, height, rgba))
-            return 0;
+            return nullptr;
 
         for (size_t i = 0; i < rgba.size(); i += 4)
         {
@@ -381,71 +375,79 @@ namespace TerrainTexture
             rgba[i + 3] = static_cast<uint8_t>(std::max(0, 255 - sum));
         }
 
-        return CreateBlendMapTexture(rgba.data(), width, height);
+        return UploadRGBATexture(mDevice, mContext, rgba.data(), width, height, false);
     }
 
-    GLuint Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
+    ComPtr<ID3D11ShaderResourceView> Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
     {
-        if (!data || width <= 0 || height <= 0) return 0;
-
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return tex;
+        if (!data || width <= 0 || height <= 0 || !mDevice) return nullptr;
+        return UploadRGBATexture(mDevice, mContext, data, width, height, false);
     }
 
-    GLuint Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
+    ComPtr<ID3D11ShaderResourceView> Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
     {
-        if (!dxtData || dataSize == 0) return 0;
+        if (!dxtData || dataSize == 0 || !mDevice) return nullptr;
 
         std::vector<uint8_t> rgba;
         if (!Tex::File::decodeDXT5(dxtData, width, height, rgba))
-            return 0;
+            return nullptr;
 
-        return CreateColorMapTexture(rgba.data(), width, height);
+        return UploadRGBATexture(mDevice, mContext, rgba.data(), width, height, false);
     }
 
-    GLuint UploadRGBATexture(const uint8_t* data, int width, int height, bool generateMips)
+    ComPtr<ID3D11ShaderResourceView> UploadRGBATexture(ID3D11Device* device, ID3D11DeviceContext* context,
+                                                       const uint8_t* data, int width, int height, bool generateMips)
     {
-        if (!data || width <= 0 || height <= 0) return 0;
+        if (!device || !data || width <= 0 || height <= 0) return nullptr;
 
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = generateMips ? 0 : 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_DEFAULT;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (generateMips ? D3D11_BIND_RENDER_TARGET : 0);
+        texDesc.MiscFlags = generateMips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
 
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        ComPtr<ID3D11Texture2D> texture;
 
         if (generateMips)
         {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            HRESULT hr = device->CreateTexture2D(&texDesc, nullptr, &texture);
+            if (FAILED(hr)) return nullptr;
+
+            if (context)
+            {
+                context->UpdateSubresource(texture.Get(), 0, nullptr, data, width * 4, 0);
+            }
         }
         else
         {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            D3D11_SUBRESOURCE_DATA initData = {};
+            initData.pSysMem = data;
+            initData.SysMemPitch = width * 4;
+
+            HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &texture);
+            if (FAILED(hr)) return nullptr;
         }
 
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = generateMips ? static_cast<UINT>(-1) : 1;
 
-        if (generateMips)
+        ComPtr<ID3D11ShaderResourceView> srv;
+        HRESULT hr = device->CreateShaderResourceView(texture.Get(), &srvDesc, &srv);
+        if (FAILED(hr)) return nullptr;
+
+        if (generateMips && context)
         {
-            glGenerateMipmap(GL_TEXTURE_2D);
+            context->GenerateMips(srv.Get());
         }
 
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return tex;
+        return srv;
     }
 }

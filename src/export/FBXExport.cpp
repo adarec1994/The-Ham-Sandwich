@@ -18,6 +18,11 @@
 #endif
 #include <stb_image_write.h>
 
+static inline glm::vec3 ToGlm(const DirectX::XMFLOAT3& v)
+{
+    return glm::vec3(v.x, v.y, v.z);
+}
+
 namespace FBXExport
 {
     static int64_t gUIDCounter = 1000000000;
@@ -204,7 +209,7 @@ namespace FBXExport
                                 std::vector<MeshData>& meshes, int& totalVerts, int& totalTris)
     {
         const auto& chunks = area->getChunks();
-        glm::vec3 worldOffset = area->getWorldOffset();
+        glm::vec3 worldOffset = ToGlm(area->getWorldOffset());
 
         static std::vector<int> sharedIndices;
         if (sharedIndices.empty())

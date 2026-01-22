@@ -16,7 +16,7 @@
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
-#include <glad/glad.h>
+#include <d3d11.h>
 #include <thread>
 #include <mutex>
 #include <deque>
@@ -25,6 +25,8 @@
 
 extern void SnapCameraToLoaded(AppState& state);
 extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
 
 namespace UI_ContentBrowser {
     static bool sIsOpen = false;
@@ -237,6 +239,42 @@ namespace UI_ContentBrowser {
         }
     }
 
+    static ID3D11ShaderResourceView* CreateTextureFromRGBA(const uint8_t* data, int width, int height)
+    {
+        if (!gDevice || !data || width <= 0 || height <= 0) return nullptr;
+
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = data;
+        initData.SysMemPitch = width * 4;
+
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
+        if (FAILED(hr)) return nullptr;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        ID3D11ShaderResourceView* srv = nullptr;
+        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &srv);
+        texture->Release();
+
+        if (FAILED(hr)) return nullptr;
+        return srv;
+    }
+
     static void ProcessThumbnailResults()
     {
         std::lock_guard<std::mutex> lock(sQueueMutex);
@@ -251,16 +289,8 @@ namespace UI_ContentBrowser {
             auto& file = sCachedFiles[res.fileIndex];
             if (res.success && !file.textureID)
             {
-                GLuint tex = 0;
-                glGenTextures(1, &tex);
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, res.width, res.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, res.data.data());
-
-                file.textureID = (ImTextureID)(intptr_t)tex;
+                ID3D11ShaderResourceView* srv = CreateTextureFromRGBA(res.data.data(), res.width, res.height);
+                file.textureID = reinterpret_cast<ImTextureID>(srv);
             }
         }
     }
@@ -347,8 +377,8 @@ namespace UI_ContentBrowser {
         {
             if (file.textureID)
             {
-                GLuint tex = (GLuint)(intptr_t)file.textureID;
-                glDeleteTextures(1, &tex);
+                ID3D11ShaderResourceView* srv = reinterpret_cast<ID3D11ShaderResourceView*>(file.textureID);
+                if (srv) srv->Release();
             }
         }
         sCachedFiles.clear();
@@ -1000,8 +1030,8 @@ namespace UI_ContentBrowser {
         {
             if (file.textureID)
             {
-                GLuint tex = (GLuint)(intptr_t)file.textureID;
-                glDeleteTextures(1, &tex);
+                ID3D11ShaderResourceView* srv = reinterpret_cast<ID3D11ShaderResourceView*>(file.textureID);
+                if (srv) srv->Release();
             }
         }
 
@@ -1180,7 +1210,7 @@ namespace UI_ContentBrowser {
 
             if (sContentBrowserIcon) {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + imgOffset);
-                ImGui::Image((void*)(intptr_t)sContentBrowserIcon, ImVec2(iconSize, iconSize), ImVec2(0,0), ImVec2(1,1));
+                ImGui::Image(sContentBrowserIcon, ImVec2(iconSize, iconSize), ImVec2(0,0), ImVec2(1,1));
                 ImGui::SameLine(0, spacing);
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - imgOffset);
             }

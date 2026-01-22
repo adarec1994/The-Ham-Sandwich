@@ -5,13 +5,15 @@
 #include <codecvt>
 #include <locale>
 
-// Added for Texture Loading
-#include <glad/glad.h>
+#include <d3d11.h>
 #include <stb_image.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
 
 std::string wstring_to_utf8(const std::wstring& str)
 {
@@ -65,34 +67,48 @@ namespace UI_Utils {
 
     ImTextureID LoadTexture(const char* filename)
     {
+        if (!gDevice) return (ImTextureID)0;
+
         int width, height, nrChannels;
-        unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 0);
+        unsigned char* data = stbi_load(filename, &width, &height, &nrChannels, 4);
 
         if (!data)
-            return 0;
+            return (ImTextureID)0;
 
-        GLuint textureID;
-        glGenTextures(1, &textureID);
-        glBindTexture(GL_TEXTURE_2D, textureID);
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-        GLenum format = GL_RGB;
-        if (nrChannels == 1)
-            format = GL_RED;
-        else if (nrChannels == 3)
-            format = GL_RGB;
-        else if (nrChannels == 4)
-            format = GL_RGBA;
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = data;
+        initData.SysMemPitch = width * 4;
 
-        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
         stbi_image_free(data);
 
-        return (ImTextureID)(intptr_t)textureID;
+        if (FAILED(hr) || !texture)
+            return (ImTextureID)0;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        ID3D11ShaderResourceView* srv = nullptr;
+        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &srv);
+        texture->Release();
+
+        if (FAILED(hr))
+            return (ImTextureID)0;
+
+        return reinterpret_cast<ImTextureID>(srv);
     }
 }

@@ -6,43 +6,32 @@
 
 AreaRender::AreaRender() = default;
 
-AreaRender::~AreaRender()
+AreaRender::~AreaRender() = default;
+
+void AreaRender::init(ID3D11Device* device)
 {
-    if (mShaderProgram) glDeleteProgram(mShaderProgram);
+    if (!device) return;
+
+    mResources = TerrainShader::ShaderResources();
+    mInitialized = TerrainShader::CreateShaders(device, mResources);
 }
 
-void AreaRender::init()
+void AreaRender::bind(ID3D11DeviceContext* context)
 {
-    if (mShaderProgram != 0)
-    {
-        glDeleteProgram(mShaderProgram);
-        mShaderProgram = 0;
-    }
+    if (!mInitialized || !context) return;
 
-    mShaderProgram = TerrainShader::CreateProgram();
-    if (mShaderProgram == 0)
-        return;
+    context->IASetInputLayout(mResources.inputLayout.Get());
+    context->VSSetShader(mResources.vertexShader.Get(), nullptr, 0);
+    context->PSSetShader(mResources.pixelShader.Get(), nullptr, 0);
+    context->VSSetConstantBuffers(0, 1, mResources.constantBuffer.GetAddressOf());
+    context->PSSetConstantBuffers(0, 1, mResources.constantBuffer.GetAddressOf());
 
-    TerrainShader::GetUniforms(mShaderProgram, mUniforms);
+    ID3D11SamplerState* samplers[] = {mResources.samplerWrap.Get(), mResources.samplerClamp.Get()};
+    context->PSSetSamplers(0, 2, samplers);
+}
 
-    glUseProgram(mShaderProgram);
-
-    glUniform1i(mUniforms.blendMap, 0);
-    glUniform1i(mUniforms.colorMap, 1);
-    glUniform1i(mUniforms.layer0, 2);
-    glUniform1i(mUniforms.layer1, 3);
-    glUniform1i(mUniforms.layer2, 4);
-    glUniform1i(mUniforms.layer3, 5);
-    glUniform1i(mUniforms.layer0Normal, 6);
-    glUniform1i(mUniforms.layer1Normal, 7);
-    glUniform1i(mUniforms.layer2Normal, 8);
-    glUniform1i(mUniforms.layer3Normal, 9);
-
-    glUniform4f(mUniforms.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
-    glUniform4f(mUniforms.highlightColor, 0.0f, 0.0f, 0.0f, 0.0f);
-    glUniform4f(mUniforms.texScale, 8.0f, 8.0f, 8.0f, 8.0f);
-
-    AreaChunkRender::geometryInit(mShaderProgram);
-
-    glUseProgram(0);
+void AreaRender::updateConstants(ID3D11DeviceContext* context, const TerrainShader::TerrainCB& cb)
+{
+    if (!mInitialized || !context) return;
+    TerrainShader::UpdateConstants(context, mResources.constantBuffer.Get(), cb);
 }

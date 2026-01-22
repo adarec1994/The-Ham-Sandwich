@@ -9,9 +9,12 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <DirectXMath.h>
 
 #include <imgui.h>
-#include <GLFW/glfw3.h>
+#include <windows.h>
+
+extern HWND gHwnd;
 
 static bool RayIntersectsBox(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                              const glm::vec3& boxMin, const glm::vec3& boxMax, float& tOut)
@@ -56,7 +59,16 @@ void CheckAreaSelection(AppState& state)
 
     int display_w = 0;
     int display_h = 0;
-    glfwGetFramebufferSize(glfwGetCurrentContext(), &display_w, &display_h);
+
+    if (gHwnd)
+    {
+        RECT rect;
+        if (GetClientRect(gHwnd, &rect))
+        {
+            display_w = rect.right - rect.left;
+            display_h = rect.bottom - rect.top;
+        }
+    }
 
     if (display_w <= 0 || display_h <= 0) return;
 
@@ -103,9 +115,13 @@ void CheckAreaSelection(AppState& state)
         const auto& area = gLoadedAreas[areaIdx];
         if (!area) continue;
 
-        const glm::vec3 worldOffset = area->getWorldOffset();
-        const glm::vec3 localMin = area->getMinBounds();
-        const glm::vec3 localMax = area->getMaxBounds();
+        const auto dxWorldOffset = area->getWorldOffset();
+        const auto dxLocalMin = area->getMinBounds();
+        const auto dxLocalMax = area->getMaxBounds();
+
+        const glm::vec3 worldOffset(dxWorldOffset.x, dxWorldOffset.y, dxWorldOffset.z);
+        const glm::vec3 localMin(dxLocalMin.x, dxLocalMin.y, dxLocalMin.z);
+        const glm::vec3 localMax(dxLocalMax.x, dxLocalMax.y, dxLocalMax.z);
 
         if (localMin.x > localMax.x || localMin.y > localMax.y || localMin.z > localMax.z)
             continue;
@@ -130,7 +146,6 @@ void CheckAreaSelection(AppState& state)
         gSelectedAreaIndex = hitAreaIdx;
         gSelectedAreaName = hitAreaName;
 
-        // Also select the first valid chunk in this area for texture preview
         const auto& area = gLoadedAreas[hitAreaIdx];
         if (area)
         {

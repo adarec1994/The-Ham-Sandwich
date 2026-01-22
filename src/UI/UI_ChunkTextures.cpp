@@ -6,15 +6,18 @@
 #include "../Archive.h"
 #include "../tex/tex.h"
 #include <imgui.h>
-#include <glad/glad.h>
+#include <d3d11.h>
 #include <vector>
 #include <algorithm>
+
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
 
 namespace UI_ChunkTextures
 {
     struct ChunkTexturePreview
     {
-        GLuint textureID = 0;
+        ID3D11ShaderResourceView* textureID = nullptr;
         int width = 0;
         int height = 0;
         std::string name;
@@ -25,28 +28,48 @@ namespace UI_ChunkTextures
     static AreaChunkRenderPtr sLastChunk = nullptr;
     static bool sWindowOpen = true;
 
-    static GLuint CreateTexture(const std::vector<uint8_t>& data, int w, int h)
+    static ID3D11ShaderResourceView* CreateTexture(const std::vector<uint8_t>& data, int w, int h)
     {
-        if (data.empty() || w <= 0 || h <= 0) return 0;
+        if (data.empty() || w <= 0 || h <= 0 || !gDevice) return nullptr;
 
-        GLuint tex;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        return tex;
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = w;
+        texDesc.Height = h;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = data.data();
+        initData.SysMemPitch = w * 4;
+
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
+        if (FAILED(hr)) return nullptr;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        ID3D11ShaderResourceView* srv = nullptr;
+        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &srv);
+        texture->Release();
+
+        if (FAILED(hr)) return nullptr;
+        return srv;
     }
 
     static void ClearPreviews()
     {
         for (auto& p : sPreviews)
         {
-            if (p.ownsTexture && p.textureID != 0)
-                glDeleteTextures(1, &p.textureID);
+            if (p.ownsTexture && p.textureID != nullptr)
+                p.textureID->Release();
         }
         sPreviews.clear();
     }
@@ -91,10 +114,10 @@ namespace UI_ChunkTextures
             const auto* cached = texMgr.GetLayerTexture(archive, layerId);
             if (!cached || !cached->loaded) continue;
 
-            if (cached->diffuse != 0)
+            if (cached->diffuse != nullptr)
             {
                 ChunkTexturePreview p;
-                p.textureID = cached->diffuse;
+                p.textureID = cached->diffuse.Get();
                 p.width = cached->width;
                 p.height = cached->height;
                 p.name = "Layer " + std::to_string(i) + " Diffuse (ID:" + std::to_string(layerId) + ")";
@@ -102,10 +125,10 @@ namespace UI_ChunkTextures
                 sPreviews.push_back(p);
             }
 
-            if (cached->normal != 0)
+            if (cached->normal != nullptr)
             {
                 ChunkTexturePreview p;
-                p.textureID = cached->normal;
+                p.textureID = cached->normal.Get();
                 p.width = cached->width;
                 p.height = cached->height;
                 p.name = "Layer " + std::to_string(i) + " Normal (ID:" + std::to_string(layerId) + ")";
@@ -122,7 +145,7 @@ namespace UI_ChunkTextures
         sWindowOpen = true;
     }
 
-    static GLuint sPreviewTexture = 0;
+    static ID3D11ShaderResourceView* sPreviewTexture = nullptr;
     static int sPreviewWidth = 0;
     static int sPreviewHeight = 0;
     static std::string sPreviewName;
@@ -175,7 +198,7 @@ namespace UI_ChunkTextures
                 for (size_t i = 0; i < sPreviews.size(); i++)
                 {
                     auto& p = sPreviews[i];
-                    if (p.textureID == 0) continue;
+                    if (p.textureID == nullptr) continue;
 
                     ImGui::PushID(static_cast<int>(i));
 
@@ -183,7 +206,7 @@ namespace UI_ChunkTextures
                     {
                         ImGui::Text("Size: %dx%d", p.width, p.height);
 
-                        if (ImGui::ImageButton("##tex", (ImTextureID)(intptr_t)p.textureID, ImVec2(previewSize, previewSize)))
+                        if (ImGui::ImageButton("##tex", reinterpret_cast<ImTextureID>(p.textureID), ImVec2(previewSize, previewSize)))
                         {
                             sPreviewTexture = p.textureID;
                             sPreviewWidth = p.width;
@@ -199,7 +222,7 @@ namespace UI_ChunkTextures
         }
         ImGui::End();
 
-        if (sShowPreview && sPreviewTexture != 0)
+        if (sShowPreview && sPreviewTexture != nullptr)
         {
             ImGui::SetNextWindowSize(ImVec2(0, 0), ImGuiCond_Always);
 
@@ -216,7 +239,7 @@ namespace UI_ChunkTextures
                 float displayW = sPreviewWidth * scale;
                 float displayH = sPreviewHeight * scale;
 
-                ImGui::Image((ImTextureID)(intptr_t)sPreviewTexture, ImVec2(displayW, displayH));
+                ImGui::Image(reinterpret_cast<ImTextureID>(sPreviewTexture), ImVec2(displayW, displayH));
             }
             ImGui::End();
         }

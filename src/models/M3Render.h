@@ -2,17 +2,25 @@
 #include "M3Common.h"
 #include "../Archive.h"
 #include "../tex/tex.h"
-#include <glad/glad.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include <wrl/client.h>
 #include <vector>
 #include <memory>
 
+using Microsoft::WRL::ComPtr;
+using namespace DirectX;
+
 class M3Render {
 public:
+    static void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
+
     M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly = false);
     ~M3Render();
 
-    void render(const glm::mat4& view, const glm::mat4& proj);
-    void render(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model);
+    void render(const XMMATRIX& view, const XMMATRIX& proj);
+    void render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model);
 
     size_t getSubmeshCount() const;
     const M3Submesh& getSubmesh(size_t i) const;
@@ -20,6 +28,7 @@ public:
     const std::vector<M3Material>& getAllMaterials() const { return materials; }
     const std::vector<M3Bone>& getAllBones() const { return bones; }
     const std::vector<M3Texture>& getAllTextures() const { return textures; }
+    const std::vector<ComPtr<ID3D11ShaderResourceView>>& getGLTextures() const { return mTextureSRVs; }
     const std::vector<M3ModelAnimation>& getAllAnimations() const { return animations; }
 
     size_t getMaterialCount() const;
@@ -45,30 +54,28 @@ public:
 
     void setModelName(const std::string& name) { modelName = name; }
     const std::string& getModelName() const { return modelName; }
-    const std::vector<unsigned int>& getGLTextures() const { return glTextures; }
     const std::vector<M3SubmeshGroup>& getSubmeshGroups() const { return submeshGroups; }
 
-    // Deferred texture loading
     bool hasTexturesLoaded() const { return texturesLoaded; }
     bool hasPendingTextures() const { return !pendingTexturePaths.empty(); }
     size_t getPendingTextureCount() const { return pendingTexturePaths.size(); }
     void queueTexturesForLoading();
-    bool uploadNextTexture(const ArchivePtr& arc); // Returns true if more textures pending
+    bool uploadNextTexture(const ArchivePtr& arc);
 
     void setActiveVariant(int variantIndex);
     int getActiveVariant() const { return activeVariant; }
 
     void setShowSkeleton(bool show) { showSkeleton = show; }
     bool getShowSkeleton() const { return showSkeleton; }
-    void renderSkeleton(const glm::mat4& view, const glm::mat4& proj);
+    void renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj);
 
     void setSelectedSubmesh(int idx) { selectedSubmesh = idx; }
     int getSelectedSubmesh() const { return selectedSubmesh; }
-    int rayPickSubmesh(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const;
+    int rayPickSubmesh(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const;
 
     void setSelectedBone(int idx) { selectedBone = idx; }
     int getSelectedBone() const { return selectedBone; }
-    int rayPickBone(const glm::vec3& rayOrigin, const glm::vec3& rayDir) const;
+    int rayPickBone(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const;
 
     void playAnimation(int index);
     void stopAnimation();
@@ -82,15 +89,24 @@ public:
     float getAnimationDuration() const;
 
 private:
-    unsigned int VAO = 0, VBO = 0, EBO = 0;
-    unsigned int shaderProgram = 0;
+    static ID3D11Device* sDevice;
+    static ID3D11DeviceContext* sContext;
+
+    ComPtr<ID3D11Buffer> mVertexBuffer;
+    ComPtr<ID3D11Buffer> mIndexBuffer;
+    ComPtr<ID3D11Buffer> mConstantBuffer;
+    ComPtr<ID3D11Buffer> mBoneBuffer;
+    ComPtr<ID3D11VertexShader> mVertexShader;
+    ComPtr<ID3D11PixelShader> mPixelShader;
+    ComPtr<ID3D11InputLayout> mInputLayout;
+    ComPtr<ID3D11SamplerState> mSampler;
 
     std::vector<M3Submesh> submeshes;
     std::vector<M3Material> materials;
     std::vector<M3Bone> bones;
     std::vector<M3Texture> textures;
     std::vector<M3ModelAnimation> animations;
-    std::vector<unsigned int> glTextures;
+    std::vector<ComPtr<ID3D11ShaderResourceView>> mTextureSRVs;
     M3Geometry geometry;
 
     std::vector<int> materialSelectedVariant;
@@ -106,12 +122,15 @@ private:
     int playingAnimation = -1;
     float animationTime = 0.0f;
     bool animationPaused = false;
-    std::vector<glm::mat4> boneMatrices;
+    std::vector<XMMATRIX> boneMatrices;
 
-    unsigned int skeletonVAO = 0, skeletonVBO = 0;
-    unsigned int skeletonProgram = 0;
+    ComPtr<ID3D11Buffer> mSkeletonVB;
+    ComPtr<ID3D11VertexShader> mSkeletonVS;
+    ComPtr<ID3D11PixelShader> mSkeletonPS;
+    ComPtr<ID3D11InputLayout> mSkeletonLayout;
+    ComPtr<ID3D11Buffer> mSkeletonCB;
 
-    unsigned int fallbackWhiteTex = 0;
+    ComPtr<ID3D11ShaderResourceView> mFallbackWhiteSRV;
     bool texturesLoaded = false;
     std::vector<std::string> pendingTexturePaths;
     size_t nextTextureToLoad = 0;
@@ -120,7 +139,26 @@ private:
     void setupShader();
     void setupSkeletonShader();
     void loadTextures(const M3ModelData& data, const ArchivePtr& arc);
-    unsigned int loadTextureFromArchive(const ArchivePtr& arc, const std::string& path);
-    unsigned int createFallbackWhite();
-    unsigned int resolveDiffuseTexture(uint16_t materialId, int variant) const;
+    ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path);
+    ComPtr<ID3D11ShaderResourceView> createFallbackWhite();
+    ID3D11ShaderResourceView* resolveDiffuseTexture(uint16_t materialId, int variant) const;
+
+    struct alignas(16) M3ConstantBuffer {
+        XMMATRIX model;
+        XMMATRIX view;
+        XMMATRIX projection;
+        XMFLOAT3 highlightColor;
+        float highlightMix;
+        int useSkinning;
+        XMFLOAT3 pad;
+    };
+
+    struct alignas(16) BoneMatrixBuffer {
+        XMMATRIX bones[200];
+    };
+
+    struct alignas(16) SkeletonCB {
+        XMMATRIX view;
+        XMMATRIX projection;
+    };
 };

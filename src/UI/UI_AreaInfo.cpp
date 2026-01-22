@@ -5,7 +5,7 @@
 #include "../Area/AreaFile.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
-#include <glad/glad.h>
+#include <d3d11.h>
 #include <filesystem>
 #include <fstream>
 #include <cstring>
@@ -17,6 +17,13 @@
 #include <stb_image_write.h>
 
 extern void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale);
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
+
+static inline glm::vec3 ToGlm(const DirectX::XMFLOAT3& v)
+{
+    return glm::vec3(v.x, v.y, v.z);
+}
 
 static std::string GetFilenameFromPath(const std::string& path)
 {
@@ -55,7 +62,7 @@ namespace UI_AreaInfo
     static float sWindowBottomY = 50.0f;
 
     static bool sShowHeightmapWindow = false;
-    static GLuint sHeightmapTexture = 0;
+    static ID3D11ShaderResourceView* sHeightmapTexture = nullptr;
     static int sHeightmapWidth = 0;
     static int sHeightmapHeight = 0;
     static std::vector<uint8_t> sHeightmapData;
@@ -204,16 +211,40 @@ namespace UI_AreaInfo
             sHeightmapData[i * 4 + 3] = alpha;
         }
 
-        if (sHeightmapTexture == 0)
-            glGenTextures(1, &sHeightmapTexture);
+        if (sHeightmapTexture)
+        {
+            sHeightmapTexture->Release();
+            sHeightmapTexture = nullptr;
+        }
 
-        glBindTexture(GL_TEXTURE_2D, sHeightmapTexture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sHeightmapWidth, sHeightmapHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, sHeightmapData.data());
-        glBindTexture(GL_TEXTURE_2D, 0);
+        if (!gDevice) return;
+
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = sHeightmapWidth;
+        texDesc.Height = sHeightmapHeight;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = sHeightmapData.data();
+        initData.SysMemPitch = sHeightmapWidth * 4;
+
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
+        if (FAILED(hr)) return;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &sHeightmapTexture);
+        texture->Release();
     }
 
     static std::string GetHeightmapFilename()
@@ -243,7 +274,7 @@ namespace UI_AreaInfo
 
         if (ImGui::Begin("Heightmap Preview", &sShowHeightmapWindow))
         {
-            if (sHeightmapTexture != 0 && sHeightmapWidth > 0 && sHeightmapHeight > 0)
+            if (sHeightmapTexture != nullptr && sHeightmapWidth > 0 && sHeightmapHeight > 0)
             {
                 ImGui::Text("Size: %d x %d", sHeightmapWidth, sHeightmapHeight);
                 ImGui::Text("Height Range: %.2f to %.2f", sHeightmapMin, sHeightmapMax);
@@ -267,7 +298,7 @@ namespace UI_AreaInfo
                     imgSize.x = avail.y * imgAspect;
                 }
 
-                ImGui::Image((ImTextureID)(intptr_t)sHeightmapTexture, imgSize);
+                ImGui::Image(reinterpret_cast<ImTextureID>(sHeightmapTexture), imgSize);
 
                 ImGui::Separator();
 
@@ -514,11 +545,11 @@ namespace UI_AreaInfo
                 ImGui::Separator();
                 ImGui::Text("Tile: %d, %d", area->getTileX(), area->getTileY());
 
-                glm::vec3 minB = area->getMinBounds();
-                glm::vec3 maxB = area->getMaxBounds();
-                glm::vec3 worldMin = area->getWorldMinBounds();
-                glm::vec3 worldMax = area->getWorldMaxBounds();
-                glm::vec3 worldOffset = area->getWorldOffset();
+                glm::vec3 minB = ToGlm(area->getMinBounds());
+                glm::vec3 maxB = ToGlm(area->getMaxBounds());
+                glm::vec3 worldMin = ToGlm(area->getWorldMinBounds());
+                glm::vec3 worldMax = ToGlm(area->getWorldMaxBounds());
+                glm::vec3 worldOffset = ToGlm(area->getWorldOffset());
 
                 ImGui::Spacing();
                 ImGui::Text("Local Bounds:");
@@ -530,7 +561,6 @@ namespace UI_AreaInfo
                 ImGui::Text("  Min: %.1f, %.1f, %.1f", worldMin.x, worldMin.y, worldMin.z);
                 ImGui::Text("  Max: %.1f, %.1f, %.1f", worldMax.x, worldMax.y, worldMax.z);
 
-                // Debug: Rotation info
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "Transform Debug");
@@ -540,12 +570,10 @@ namespace UI_AreaInfo
                 glm::vec3 areaCenter = (minB + maxB) * 0.5f;
                 ImGui::Text("Area Center (local): %.1f, %.1f, %.1f", areaCenter.x, areaCenter.y, areaCenter.z);
 
-                // Rotation buttons
                 ImGui::Spacing();
                 float buttonWidth = (ImGui::GetContentRegionAvail().x - 8) / 2;
                 if (ImGui::Button("Rotate 90 CW", ImVec2(buttonWidth, 0)))
                 {
-                    // Rotate the selected area or all areas
                     if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
                     {
                         gLoadedAreas[gSelectedAreaIndex]->rotate90();
@@ -570,7 +598,6 @@ namespace UI_AreaInfo
                     }
                 }
 
-                // Mirror controls (debug)
                 ImGui::Spacing();
                 ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 1.0f), "Mirror Debug:");
 
@@ -617,7 +644,6 @@ namespace UI_AreaInfo
                 ImGui::Text("Props");
                 ImGui::Separator();
 
-                // Show/Hide Props toggle
                 ImGui::Checkbox("Show Props", &gShowProps);
 
                 size_t totalProps = 0;
@@ -658,7 +684,7 @@ namespace UI_AreaInfo
                     {
                         if (!a) continue;
                         const auto& props = a->getProps();
-                        glm::vec3 areaOffset = a->getWorldOffset();
+                        glm::vec3 areaOffset = ToGlm(a->getWorldOffset());
 
                         for (size_t i = 0; i < props.size() && displayCount < maxDisplay; i++)
                         {

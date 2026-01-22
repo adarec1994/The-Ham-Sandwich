@@ -11,6 +11,11 @@
 #include <algorithm>
 #include <cstring>
 
+static inline glm::vec3 ToGlm(const DirectX::XMFLOAT3& v)
+{
+    return glm::vec3(v.x, v.y, v.z);
+}
+
 namespace GLBExport
 {
     static std::string WideToNarrow(const std::wstring& wide)
@@ -293,7 +298,7 @@ namespace GLBExport
         for (const auto& area : areas)
         {
             if (!area) continue;
-            glm::vec3 offset = area->getWorldOffset();
+            glm::vec3 offset = ToGlm(area->getWorldOffset());
 
             for (const auto& chunk : area->getChunks())
             {

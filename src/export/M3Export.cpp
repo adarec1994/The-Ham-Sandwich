@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "M3Export.h"
 #include "../models/M3Render.h"
 #include "../Archive.h"

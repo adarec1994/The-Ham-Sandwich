@@ -1,21 +1,19 @@
 #include "AreaFile.h"
 #include "TerrainTexture.h"
+#include "TerrainShader.h"
 #include "Props.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
 #include <cmath>
 #include <algorithm>
 #include <string>
 #include <memory>
 #include <cstring>
 #include <limits>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <iostream>
 #include <thread>
 #include <chrono>
+
+using namespace DirectX;
 
 static std::string NormalizePropPath(const std::string& path)
 {
@@ -34,9 +32,15 @@ static int gReferenceTileX = -1;
 static int gReferenceTileY = -1;
 
 std::vector<uint32> AreaChunkRender::indices;
-AreaChunkRender::Uniforms AreaChunkRender::uniforms;
+ComPtr<ID3D11Buffer> AreaChunkRender::sIndexBuffer;
+ID3D11Device* AreaChunkRender::sDevice = nullptr;
+ID3D11DeviceContext* AreaChunkRender::sContext = nullptr;
 
-const AreaChunkRender::Uniforms& AreaChunkRender::getUniforms() { return uniforms; }
+void AreaChunkRender::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context)
+{
+    sDevice = device;
+    sContext = context;
+}
 
 void ResetAreaReferencePosition() { gReferenceTileX = -1; gReferenceTileY = -1; }
 
@@ -56,32 +60,6 @@ static inline bool parseHexByte(const std::wstring& s, size_t pos, int& outByte)
     if (hi < 0 || lo < 0) return false;
     outByte = (hi << 4) | lo;
     return true;
-}
-
-static GLuint gFallbackWhite = 0;
-static GLuint gFallbackNormal = 0;
-static uint32 gLastTerrainProgram = 0;
-
-static void EnsureFallbackTextures()
-{
-    if (gFallbackWhite == 0)
-    {
-        uint8_t px[4] = { 255, 255, 255, 255 };
-        glGenTextures(1, &gFallbackWhite);
-        glBindTexture(GL_TEXTURE_2D, gFallbackWhite);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    }
-    if (gFallbackNormal == 0)
-    {
-        uint8_t px[4] = { 128, 128, 255, 255 };
-        glGenTextures(1, &gFallbackNormal);
-        glBindTexture(GL_TEXTURE_2D, gFallbackNormal);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    }
 }
 
 void AreaFile::parseTileXYFromFilename()
@@ -106,7 +84,6 @@ void AreaFile::calculateWorldOffset()
         gReferenceTileX = mTileX;
         gReferenceTileY = mTileY;
     }
-    // Swapped: TileX -> Z, TileY -> X
     mWorldOffset.x = static_cast<float>(mTileY - gReferenceTileY) * GRID_SIZE;
     mWorldOffset.y = 0.0f;
     mWorldOffset.z = static_cast<float>(mTileX - gReferenceTileX) * GRID_SIZE;
@@ -114,10 +91,11 @@ void AreaFile::calculateWorldOffset()
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
     : mArchive(std::move(archive)), mFile(std::move(file))
-    , mMinBounds(std::numeric_limits<float>::max())
-    , mMaxBounds(std::numeric_limits<float>::lowest())
+    , mMinBounds(FLT_MAX, FLT_MAX, FLT_MAX)
+    , mMaxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX)
+    , mBaseColor(1.0f, 1.0f, 1.0f, 1.0f)
+    , mWorldOffset(0.0f, 0.0f, 0.0f)
 {
-    mBaseColor = glm::vec4(1.0f);
     if (mArchive && mFile)
     {
         mPath = mFile->getFullPath();
@@ -132,12 +110,19 @@ AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
     }
 }
 
-AreaFile::~AreaFile()
-{
-    if (mTextureID != 0) glDeleteTextures(1, &mTextureID);
-}
+AreaFile::~AreaFile() = default;
 
 bool AreaFile::loadTexture() { return false; }
+
+XMFLOAT3 AreaFile::getWorldMinBounds() const
+{
+    return XMFLOAT3(mMinBounds.x + mWorldOffset.x, mMinBounds.y + mWorldOffset.y, mMinBounds.z + mWorldOffset.z);
+}
+
+XMFLOAT3 AreaFile::getWorldMaxBounds() const
+{
+    return XMFLOAT3(mMaxBounds.x + mWorldOffset.x, mMaxBounds.y + mWorldOffset.y, mMaxBounds.z + mWorldOffset.z);
+}
 
 bool AreaFile::load()
 {
@@ -177,7 +162,7 @@ bool AreaFile::load()
 
     if (!propData.empty()) ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
     if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
-    if (chnkData.empty()) { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); return true; }
+    if (chnkData.empty()) { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); return true; }
 
     struct ChunkJob
     {
@@ -244,13 +229,19 @@ bool AreaFile::load()
             totalH += chunk->getAverageHeight();
             validCount++;
             mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
-            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
-            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
+            XMFLOAT3 cmin = chunk->getMinBounds();
+            XMFLOAT3 cmax = chunk->getMaxBounds();
+            mMinBounds.x = std::min(mMinBounds.x, cmin.x);
+            mMinBounds.y = std::min(mMinBounds.y, cmin.y);
+            mMinBounds.z = std::min(mMinBounds.z, cmin.z);
+            mMaxBounds.x = std::max(mMaxBounds.x, cmax.x);
+            mMaxBounds.y = std::max(mMaxBounds.y, cmax.y);
+            mMaxBounds.z = std::max(mMaxBounds.z, cmax.z);
         }
     }
 
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
-    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
+    else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
     return true;
 }
 
@@ -276,61 +267,76 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
             totalH += chunk->getAverageHeight();
             validCount++;
             mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
-            mMinBounds = glm::min(mMinBounds, chunk->getMinBounds());
-            mMaxBounds = glm::max(mMaxBounds, chunk->getMaxBounds());
+            XMFLOAT3 cmin = chunk->getMinBounds();
+            XMFLOAT3 cmax = chunk->getMaxBounds();
+            mMinBounds.x = std::min(mMinBounds.x, cmin.x);
+            mMinBounds.y = std::min(mMinBounds.y, cmin.y);
+            mMinBounds.z = std::min(mMinBounds.z, cmin.z);
+            mMaxBounds.x = std::max(mMaxBounds.x, cmax.x);
+            mMaxBounds.y = std::max(mMaxBounds.y, cmax.y);
+            mMaxBounds.z = std::max(mMaxBounds.z, cmax.z);
         }
     }
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
-    else { mMinBounds = glm::vec3(0, 0, 0); mMaxBounds = glm::vec3(512, 50, 512); }
+    else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
     return true;
 }
 
-void AreaFile::render(const Matrix& matView, const Matrix& matProj, uint32 shaderProgram, const AreaChunkRenderPtr& selectedChunk)
+void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk)
 {
-    glUseProgram(shaderProgram);
-    GLint viewLoc = glGetUniformLocation(shaderProgram, "view");
-    GLint projLoc = glGetUniformLocation(shaderProgram, "projection");
-    if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, &matView[0][0]);
-    if (projLoc != -1) glUniformMatrix4fv(projLoc, 1, GL_FALSE, &matProj[0][0]);
-    EnsureFallbackTextures();
-    if (gLastTerrainProgram != shaderProgram) { AreaChunkRender::geometryInit(shaderProgram); gLastTerrainProgram = shaderProgram; }
+    if (!context || !constantBuffer) return;
 
-    glm::mat4 worldModel(1.0f);
-    worldModel = glm::translate(worldModel, mWorldOffset);
+    XMVECTOR offsetVec = XMLoadFloat3(&mWorldOffset);
+    XMMATRIX worldModel = XMMatrixTranslationFromVector(offsetVec);
 
-    // All transforms happen around center (256, 0, 256)
-    glm::vec3 center(256.0f, 0.0f, 256.0f);
-    worldModel = glm::translate(worldModel, center);
+    XMFLOAT3 center(256.0f, 0.0f, 256.0f);
+    XMVECTOR centerVec = XMLoadFloat3(&center);
 
-    // Apply rotation
+    worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(centerVec));
+
     if (mGlobalRotation != 0.0f)
-        worldModel = glm::rotate(worldModel, glm::radians(mGlobalRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+        worldModel = XMMatrixMultiply(worldModel, XMMatrixRotationY(XMConvertToRadians(mGlobalRotation)));
 
-    // Apply mirroring (scale by -1 on axis)
     if (mMirrorX || mMirrorZ)
     {
         float scaleX = mMirrorX ? -1.0f : 1.0f;
         float scaleZ = mMirrorZ ? -1.0f : 1.0f;
-        worldModel = glm::scale(worldModel, glm::vec3(scaleX, 1.0f, scaleZ));
+        worldModel = XMMatrixMultiply(worldModel, XMMatrixScaling(scaleX, 1.0f, scaleZ));
     }
 
-    worldModel = glm::translate(worldModel, -center);
+    worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(XMVectorNegate(centerVec)));
 
-    const auto& u = AreaChunkRender::getUniforms();
-    if (u.model != static_cast<uint32>(-1)) glUniformMatrix4fv(u.model, 1, GL_FALSE, &worldModel[0][0]);
-    if (u.baseColor != static_cast<uint32>(-1)) glUniform4f(u.baseColor, 1.0f, 1.0f, 1.0f, 1.0f);
     for (auto& c : mChunks)
     {
         if (!c || !c->isFullyInitialized()) continue;
         c->loadTextures(mArchive);
-        GLint highlightLoc = glGetUniformLocation(shaderProgram, "highlightColor");
-        if (highlightLoc != -1)
-        {
-            if (c == selectedChunk) glUniform4f(highlightLoc, 1.0f, 1.0f, 0.0f, 0.5f);
-            else glUniform4f(highlightLoc, 0.0f, 0.0f, 0.0f, 0.0f);
-        }
-        c->bindTextures(shaderProgram);
-        c->render();
+
+        TerrainShader::TerrainCB cb;
+        cb.view = matView;
+        cb.projection = matProj;
+        cb.model = worldModel;
+
+        const float* scales = c->getLayerScales();
+        float s0 = scales[0] > 0.0f ? 32.0f / scales[0] : 8.0f;
+        float s1 = scales[1] > 0.0f ? 32.0f / scales[1] : 8.0f;
+        float s2 = scales[2] > 0.0f ? 32.0f / scales[2] : 8.0f;
+        float s3 = scales[3] > 0.0f ? 32.0f / scales[3] : 8.0f;
+        cb.texScale = XMFLOAT4(s0, s1, s2, s3);
+
+        cb.baseColor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+
+        if (c == selectedChunk)
+            cb.highlightColor = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.5f);
+        else
+            cb.highlightColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        cb.camPosition = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        cb.hasColorMap = c->hasColorMap() ? 1 : 0;
+
+        TerrainShader::UpdateConstants(context, constantBuffer, cb);
+
+        c->bindTextures(context);
+        c->render(context);
     }
 }
 
@@ -408,7 +414,7 @@ void AreaFile::loadAllPropsAsync()
         loader.QueueProps(toLoad);
 }
 
-void AreaFile::loadPropsInView(const glm::vec3& cameraPos, float radius)
+void AreaFile::loadPropsInView(const XMFLOAT3& cameraPos, float radius)
 {
     auto& loader = PropLoader::Instance();
     loader.SetArchive(mArchive);
@@ -418,8 +424,14 @@ void AreaFile::loadPropsInView(const glm::vec3& cameraPos, float radius)
     for (auto& prop : mProps)
     {
         if (prop.loaded || prop.loadRequested) continue;
-        glm::vec3 propWorldPos = prop.position + mWorldOffset;
-        float distSq = glm::dot(propWorldPos - cameraPos, propWorldPos - cameraPos);
+        XMFLOAT3 propWorldPos;
+        propWorldPos.x = prop.position.x + mWorldOffset.x;
+        propWorldPos.y = prop.position.y + mWorldOffset.y;
+        propWorldPos.z = prop.position.z + mWorldOffset.z;
+        float dx = propWorldPos.x - cameraPos.x;
+        float dy = propWorldPos.y - cameraPos.y;
+        float dz = propWorldPos.z - cameraPos.z;
+        float distSq = dx*dx + dy*dy + dz*dz;
         if (distSq <= radiusSq)
             sorted.push_back({distSq, &prop});
     }
@@ -443,10 +455,15 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, prop.position + mWorldOffset);
-        model = model * glm::mat4_cast(prop.rotation);
-        model = glm::scale(model, glm::vec3(prop.scale));
+        XMFLOAT3 pos;
+        pos.x = prop.position.x + mWorldOffset.x;
+        pos.y = prop.position.y + mWorldOffset.y;
+        pos.z = prop.position.z + mWorldOffset.z;
+
+        XMMATRIX model = XMMatrixScaling(prop.scale, prop.scale, prop.scale);
+        XMVECTOR quat = XMVectorSet(prop.rotation.x, prop.rotation.y, prop.rotation.z, prop.rotation.w);
+        model = XMMatrixMultiply(model, XMMatrixRotationQuaternion(quat));
+        model = XMMatrixMultiply(model, XMMatrixTranslation(pos.x, pos.y, pos.z));
 
         prop.render->render(matView, matProj, model);
     }
@@ -525,8 +542,8 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
     if (chnkData.empty())
     {
         result.valid = true;
-        result.minBounds = glm::vec3(0, 0, 0);
-        result.maxBounds = glm::vec3(512, 50, 512);
+        result.minBounds = XMFLOAT3(0, 0, 0);
+        result.maxBounds = XMFLOAT3(512, 50, 512);
         return result;
     }
     result.chunks.resize(256);
@@ -558,13 +575,17 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
             totalH += chunk.avgHeight;
             validCount++;
             result.maxHeight = std::max(result.maxHeight, chunk.maxHeight);
-            result.minBounds = glm::min(result.minBounds, chunk.minBounds);
-            result.maxBounds = glm::max(result.maxBounds, chunk.maxBounds);
+            result.minBounds.x = std::min(result.minBounds.x, chunk.minBounds.x);
+            result.minBounds.y = std::min(result.minBounds.y, chunk.minBounds.y);
+            result.minBounds.z = std::min(result.minBounds.z, chunk.minBounds.z);
+            result.maxBounds.x = std::max(result.maxBounds.x, chunk.maxBounds.x);
+            result.maxBounds.y = std::max(result.maxBounds.y, chunk.maxBounds.y);
+            result.maxBounds.z = std::max(result.maxBounds.z, chunk.maxBounds.z);
         }
         result.chunks[index] = std::move(chunk);
     }
     if (validCount > 0) result.avgHeight = totalH / static_cast<float>(validCount);
-    else { result.minBounds = glm::vec3(0, 0, 0); result.maxBounds = glm::vec3(512, 50, 512); }
+    else { result.minBounds = XMFLOAT3(0, 0, 0); result.maxBounds = XMFLOAT3(512, 50, 512); }
     result.valid = true;
     return result;
 }
@@ -574,55 +595,166 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
     if (mTexturesLoaded) return;
     auto& texMgr = TerrainTexture::Manager::Instance();
     texMgr.LoadWorldLayerTable(archive);
-    if (!mBlendMap.empty()) mBlendMapTexture = texMgr.CreateBlendMapTexture(mBlendMap.data(), 65, 65);
-    else if (!mBlendMapDXT.empty()) mBlendMapTexture = texMgr.CreateBlendMapFromDXT1(mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
-    else { uint8_t defaultBlend[4] = {255, 0, 0, 0}; mBlendMapTexture = texMgr.CreateBlendMapTexture(defaultBlend, 1, 1); }
-    if (!mColorMap.empty()) mColorMapTextureGPU = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
-    else if (!mColorMapDXT.empty()) mColorMapTextureGPU = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
+
+    if (!mBlendMap.empty())
+        mBlendMapSRV = texMgr.CreateBlendMapTexture(mBlendMap.data(), 65, 65);
+    else if (!mBlendMapDXT.empty())
+        mBlendMapSRV = texMgr.CreateBlendMapFromDXT1(mBlendMapDXT.data(), mBlendMapDXT.size(), 65, 65);
+
+    if (!mColorMap.empty())
+        mColorMapSRV = texMgr.CreateColorMapTexture(mColorMap.data(), 65, 65);
+    else if (!mColorMapDXT.empty())
+        mColorMapSRV = texMgr.CreateColorMapFromDXT5(mColorMapDXT.data(), mColorMapDXT.size(), 65, 65);
+
     for (int i = 0; i < 4; ++i)
     {
         uint32_t layerId = mWorldLayerIDs[i];
-        if (layerId == 0) { mLayerDiffuse[i] = gFallbackWhite; mLayerNormal[i] = gFallbackNormal; mLayerScale[i] = 4.0f; continue; }
+        if (layerId == 0)
+        {
+            mLayerDiffuse[i] = nullptr;
+            mLayerNormal[i] = nullptr;
+            mLayerScale[i] = 4.0f;
+            continue;
+        }
         const auto* cached = texMgr.GetLayerTexture(archive, layerId);
-        if (cached && cached->loaded) { mLayerDiffuse[i] = cached->diffuse; mLayerNormal[i] = cached->normal ? cached->normal : gFallbackNormal; }
-        else { mLayerDiffuse[i] = gFallbackWhite; mLayerNormal[i] = gFallbackNormal; }
+        if (cached && cached->loaded)
+        {
+            mLayerDiffuse[i] = cached->diffuse;
+            mLayerNormal[i] = cached->normal ? cached->normal : nullptr;
+        }
         const auto* layerEntry = texMgr.GetLayerEntry(layerId);
-        if (layerEntry && layerEntry->scaleU > 0.0f) mLayerScale[i] = layerEntry->scaleU;
-        else mLayerScale[i] = 4.0f;
+        if (layerEntry && layerEntry->scaleU > 0.0f)
+            mLayerScale[i] = layerEntry->scaleU;
+        else
+            mLayerScale[i] = 4.0f;
     }
     mTexturesLoaded = true;
 }
 
-void AreaChunkRender::bindTextures(unsigned int program) const
+void AreaChunkRender::bindTextures(ID3D11DeviceContext* context) const
 {
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, mBlendMapTexture ? mBlendMapTexture : gFallbackWhite);
-    glUniform1i(glGetUniformLocation(program, "blendMap"), 0);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, mColorMapTextureGPU ? mColorMapTextureGPU : gFallbackWhite);
-    glUniform1i(glGetUniformLocation(program, "colorMap"), 1);
-    glUniform1i(glGetUniformLocation(program, "hasColorMap"), mColorMapTextureGPU ? 1 : 0);
+    if (!context) return;
+
+    auto& texMgr = TerrainTexture::Manager::Instance();
+    ID3D11ShaderResourceView* fallbackWhite = texMgr.GetFallbackWhite();
+    ID3D11ShaderResourceView* fallbackNormal = texMgr.GetFallbackNormal();
+
+    ID3D11ShaderResourceView* srvs[10] = {};
+
+    srvs[0] = mBlendMapSRV ? mBlendMapSRV.Get() : fallbackWhite;
+    srvs[1] = mColorMapSRV ? mColorMapSRV.Get() : fallbackWhite;
+
     for (int i = 0; i < 4; ++i)
-    {
-        glActiveTexture(GL_TEXTURE2 + i);
-        glBindTexture(GL_TEXTURE_2D, mLayerDiffuse[i] ? mLayerDiffuse[i] : gFallbackWhite);
-        const char* names[] = {"layer0", "layer1", "layer2", "layer3"};
-        glUniform1i(glGetUniformLocation(program, names[i]), 2 + i);
-    }
+        srvs[2 + i] = mLayerDiffuse[i] ? mLayerDiffuse[i].Get() : fallbackWhite;
+
     for (int i = 0; i < 4; ++i)
-    {
-        glActiveTexture(GL_TEXTURE6 + i);
-        glBindTexture(GL_TEXTURE_2D, mLayerNormal[i] ? mLayerNormal[i] : gFallbackNormal);
-        const char* names[] = {"layer0Normal", "layer1Normal", "layer2Normal", "layer3Normal"};
-        glUniform1i(glGetUniformLocation(program, names[i]), 6 + i);
-    }
-    float s0 = mLayerScale[0] > 0.0f ? 32.0f / mLayerScale[0] : 8.0f;
-    float s1 = mLayerScale[1] > 0.0f ? 32.0f / mLayerScale[1] : 8.0f;
-    float s2 = mLayerScale[2] > 0.0f ? 32.0f / mLayerScale[2] : 8.0f;
-    float s3 = mLayerScale[3] > 0.0f ? 32.0f / mLayerScale[3] : 8.0f;
-    glUniform4f(glGetUniformLocation(program, "texScale"), s0, s1, s2, s3);
-    glActiveTexture(GL_TEXTURE0);
+        srvs[6 + i] = mLayerNormal[i] ? mLayerNormal[i].Get() : fallbackNormal;
+
+    context->PSSetShaderResources(0, 10, srvs);
 }
+
+void AreaChunkRender::render(ID3D11DeviceContext* context)
+{
+    if (!mVertexBuffer || !sIndexBuffer || !context) return;
+
+    UINT stride = sizeof(AreaVertex);
+    UINT offset = 0;
+    context->IASetVertexBuffers(0, 1, mVertexBuffer.GetAddressOf(), &stride, &offset);
+    context->IASetIndexBuffer(sIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->DrawIndexed(static_cast<UINT>(indices.size()), 0, 0);
+}
+
+void AreaChunkRender::geometryInit()
+{
+    if (!sDevice) return;
+
+    if (indices.empty())
+    {
+        indices.reserve(16 * 16 * 6);
+        for (uint32 y = 0; y < 16; y++)
+        {
+            for (uint32 x = 0; x < 16; x++)
+            {
+                uint32 tl = y * 17 + x;
+                uint32 tr = y * 17 + x + 1;
+                uint32 bl = (y + 1) * 17 + x;
+                uint32 br = (y + 1) * 17 + x + 1;
+                indices.push_back(tl);
+                indices.push_back(bl);
+                indices.push_back(tr);
+                indices.push_back(tr);
+                indices.push_back(bl);
+                indices.push_back(br);
+            }
+        }
+    }
+
+    if (!sIndexBuffer && !indices.empty())
+    {
+        D3D11_BUFFER_DESC ibd = {};
+        ibd.Usage = D3D11_USAGE_IMMUTABLE;
+        ibd.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint32));
+        ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = indices.data();
+
+        sDevice->CreateBuffer(&ibd, &initData, &sIndexBuffer);
+    }
+}
+
+void AreaChunkRender::calcNormals()
+{
+    for (int y = 0; y < 17; y++)
+    {
+        for (int x = 0; x < 17; x++)
+        {
+            auto getPos = [&](int px, int py) -> XMVECTOR
+            {
+                px = std::clamp(px, 0, 16);
+                py = std::clamp(py, 0, 16);
+                auto& v = mVertices[py * 17 + px];
+                return XMVectorSet(v.x, v.y, v.z, 0.0f);
+            };
+            XMVECTOR left = getPos(x - 1, y);
+            XMVECTOR right = getPos(x + 1, y);
+            XMVECTOR up = getPos(x, y - 1);
+            XMVECTOR down = getPos(x, y + 1);
+            XMVECTOR dx = XMVectorSubtract(right, left);
+            XMVECTOR dz = XMVectorSubtract(down, up);
+            XMVECTOR normal = XMVector3Normalize(XMVector3Cross(dz, dx));
+            XMFLOAT3 n;
+            XMStoreFloat3(&n, normal);
+            mVertices[y * 17 + x].nx = n.x;
+            mVertices[y * 17 + x].ny = n.y;
+            mVertices[y * 17 + x].nz = n.z;
+        }
+    }
+}
+
+void AreaChunkRender::calcTangentBitangent() {}
+void AreaChunkRender::extendBuffer() {}
+
+void AreaChunkRender::uploadGPU()
+{
+    if (!sDevice || mVertices.empty()) return;
+
+    geometryInit();
+
+    D3D11_BUFFER_DESC vbd = {};
+    vbd.Usage = D3D11_USAGE_IMMUTABLE;
+    vbd.ByteWidth = static_cast<UINT>(mVertices.size() * sizeof(AreaVertex));
+    vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = mVertices.data();
+
+    sDevice->CreateBuffer(&vbd, &initData, &mVertexBuffer);
+    mIndexCount = static_cast<int>(indices.size());
+}
+
+AreaChunkRender::~AreaChunkRender() = default;
 
 ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY)
 {
@@ -713,9 +845,12 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
             if (height > result.maxHeight) result.maxHeight = height;
             totalHeight += height;
             validHeights++;
-            glm::vec3 pos(v.x, v.y, v.z);
-            result.minBounds = glm::min(result.minBounds, pos);
-            result.maxBounds = glm::max(result.maxBounds, pos);
+            result.minBounds.x = std::min(result.minBounds.x, v.x);
+            result.minBounds.y = std::min(result.minBounds.y, v.y);
+            result.minBounds.z = std::min(result.minBounds.z, v.z);
+            result.maxBounds.x = std::max(result.maxBounds.x, v.x);
+            result.maxBounds.y = std::max(result.maxBounds.y, v.y);
+            result.maxBounds.z = std::max(result.maxBounds.z, v.z);
             result.vertices[y * 17 + x] = v;
         }
     }
@@ -724,17 +859,23 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     {
         for (int x = 0; x < 17; x++)
         {
-            auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& vtx = result.vertices[py * 17 + px]; return glm::vec3(vtx.x, vtx.y, vtx.z); };
-            glm::vec3 left = getPos(x - 1, y);
-            glm::vec3 right = getPos(x + 1, y);
-            glm::vec3 up = getPos(x, y - 1);
-            glm::vec3 down = getPos(x, y + 1);
-            glm::vec3 dx = right - left;
-            glm::vec3 dz = down - up;
-            glm::vec3 normal = glm::normalize(glm::cross(dz, dx));
-            result.vertices[y * 17 + x].nx = normal.x;
-            result.vertices[y * 17 + x].ny = normal.y;
-            result.vertices[y * 17 + x].nz = normal.z;
+            auto getPos = [&](int px, int py) -> XMFLOAT3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& vtx = result.vertices[py * 17 + px]; return XMFLOAT3(vtx.x, vtx.y, vtx.z); };
+            XMFLOAT3 left = getPos(x - 1, y);
+            XMFLOAT3 right = getPos(x + 1, y);
+            XMFLOAT3 up = getPos(x, y - 1);
+            XMFLOAT3 down = getPos(x, y + 1);
+            XMVECTOR leftV = XMLoadFloat3(&left);
+            XMVECTOR rightV = XMLoadFloat3(&right);
+            XMVECTOR upV = XMLoadFloat3(&up);
+            XMVECTOR downV = XMLoadFloat3(&down);
+            XMVECTOR dx = XMVectorSubtract(rightV, leftV);
+            XMVECTOR dz = XMVectorSubtract(downV, upV);
+            XMVECTOR normal = XMVector3Normalize(XMVector3Cross(dz, dx));
+            XMFLOAT3 n;
+            XMStoreFloat3(&n, normal);
+            result.vertices[y * 17 + x].nx = n.x;
+            result.vertices[y * 17 + x].ny = n.y;
+            result.vertices[y * 17 + x].nz = n.z;
         }
     }
     result.valid = true;
@@ -742,7 +883,7 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
 }
 
 AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
-    : mFlags(parsed.flags), mMinBounds(parsed.minBounds), mMaxBounds(parsed.maxBounds), mSplatTexture(0), mColorMapTexture(0)
+    : mFlags(parsed.flags), mMinBounds(parsed.minBounds), mMaxBounds(parsed.maxBounds)
 {
     mMaxHeight = parsed.maxHeight;
     mAverageHeight = parsed.avgHeight;
@@ -770,7 +911,7 @@ AreaChunkRender::AreaChunkRender(ParsedChunk&& parsed, ArchivePtr)
 }
 
 AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cellX, uint32 cellY, ArchivePtr)
-    : mChunkData(cellData), mFlags(0), mMinBounds(std::numeric_limits<float>::max()), mMaxBounds(std::numeric_limits<float>::lowest()), mSplatTexture(0), mColorMapTexture(0)
+    : mChunkData(cellData), mFlags(0), mMinBounds(FLT_MAX, FLT_MAX, FLT_MAX), mMaxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX)
 {
     for (int i = 0; i < 4; ++i) mLayerScale[i] = 0.0f;
     if (cellData.size() < 4) return;
@@ -782,7 +923,6 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
         uint16 u16le() { uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8); p += 2; return v; }
         uint8 u8() { return *p++; }
         void skip(size_t n) { p += n; }
-        size_t remaining() const { return static_cast<size_t>(e - p); }
     };
     R r{ cellData.data(), cellData.data() + cellData.size() };
     mFlags = r.u32le();
@@ -858,9 +998,12 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
             if (height > mMaxHeight) mMaxHeight = height;
             totalHeight += height;
             validHeights++;
-            glm::vec3 pos(v.x, v.y, v.z);
-            mMinBounds = glm::min(mMinBounds, pos);
-            mMaxBounds = glm::max(mMaxBounds, pos);
+            mMinBounds.x = std::min(mMinBounds.x, v.x);
+            mMinBounds.y = std::min(mMinBounds.y, v.y);
+            mMinBounds.z = std::min(mMinBounds.z, v.z);
+            mMaxBounds.x = std::max(mMaxBounds.x, v.x);
+            mMaxBounds.y = std::max(mMaxBounds.y, v.y);
+            mMaxBounds.z = std::max(mMaxBounds.z, v.z);
             mVertices[y * 17 + x] = v;
         }
     }
@@ -869,141 +1012,6 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
     uploadGPU();
 }
 
-void AreaChunkRender::uploadGPU()
-{
-    if (indices.empty())
-    {
-        indices.reserve(16 * 16 * 6);
-        for (uint32 y = 0; y < 16; y++)
-        {
-            for (uint32 x = 0; x < 16; x++)
-            {
-                uint32 tl = y * 17 + x;
-                uint32 tr = y * 17 + x + 1;
-                uint32 bl = (y + 1) * 17 + x;
-                uint32 br = (y + 1) * 17 + x + 1;
-                indices.push_back(tl);
-                indices.push_back(bl);
-                indices.push_back(tr);
-                indices.push_back(tr);
-                indices.push_back(bl);
-                indices.push_back(br);
-            }
-        }
-    }
-    glGenVertexArrays(1, &mVAO);
-    glGenBuffers(1, &mVBO);
-    glGenBuffers(1, &mEBO);
-    glBindVertexArray(mVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, mVBO);
-    glBufferData(GL_ARRAY_BUFFER, mVertices.size() * sizeof(AreaVertex), mVertices.data(), GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32), indices.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, nx));
-    glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, tanx));
-    glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(AreaVertex), (void*)offsetof(AreaVertex, u));
-    glBindVertexArray(0);
-    mIndexCount = static_cast<int>(indices.size());
-}
-
-AreaChunkRender::~AreaChunkRender()
-{
-    if (mSplatTexture != 0) glDeleteTextures(1, &mSplatTexture);
-    if (mColorMapTexture != 0) glDeleteTextures(1, &mColorMapTexture);
-    for (auto tex : mLayerTextures) if (tex != 0) glDeleteTextures(1, &tex);
-    if (mBlendMapTexture) glDeleteTextures(1, &mBlendMapTexture);
-    if (mColorMapTextureGPU) glDeleteTextures(1, &mColorMapTextureGPU);
-    if (mVAO) glDeleteVertexArrays(1, &mVAO);
-    if (mVBO) glDeleteBuffers(1, &mVBO);
-    if (mEBO) glDeleteBuffers(1, &mEBO);
-}
-
-void AreaChunkRender::render()
-{
-    if (!mVAO) return;
-    glBindVertexArray(mVAO);
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices.size()), GL_UNSIGNED_INT, 0);
-    glBindVertexArray(0);
-}
-
-void AreaChunkRender::calcNormals()
-{
-    for (int y = 0; y < 17; y++)
-    {
-        for (int x = 0; x < 17; x++)
-        {
-            glm::vec3 normal(0.0f, 0.0f, 0.0f);
-            auto getPos = [&](int px, int py) -> glm::vec3 { px = std::clamp(px, 0, 16); py = std::clamp(py, 0, 16); auto& v = mVertices[py * 17 + px]; return glm::vec3(v.x, v.y, v.z); };
-            glm::vec3 left = getPos(x - 1, y);
-            glm::vec3 right = getPos(x + 1, y);
-            glm::vec3 up = getPos(x, y - 1);
-            glm::vec3 down = getPos(x, y + 1);
-            glm::vec3 dx = right - left;
-            glm::vec3 dz = down - up;
-            normal = glm::normalize(glm::cross(dz, dx));
-            mVertices[y * 17 + x].nx = normal.x;
-            mVertices[y * 17 + x].ny = normal.y;
-            mVertices[y * 17 + x].nz = normal.z;
-        }
-    }
-}
-
-void AreaChunkRender::calcTangentBitangent() {}
-void AreaChunkRender::extendBuffer() {}
-
-void AreaChunkRender::geometryInit(uint32 program)
-{
-    uniforms.colorTexture = glGetUniformLocation(program, "colorTexture");
-    uniforms.alphaTexture = glGetUniformLocation(program, "alphaTexture");
-    uniforms.hasColorMap = glGetUniformLocation(program, "hasColorMap");
-    uniforms.texScale = glGetUniformLocation(program, "texScale");
-    uniforms.camPosition = glGetUniformLocation(program, "camPosition");
-    uniforms.model = glGetUniformLocation(program, "model");
-    uniforms.highlightColor = glGetUniformLocation(program, "highlightColor");
-    uniforms.baseColor = glGetUniformLocation(program, "baseColor");
-    for (int i = 0; i < 4; ++i)
-    {
-        std::string t = "textures[" + std::to_string(i) + "]";
-        std::string n = "normalTextures[" + std::to_string(i) + "]";
-        uniforms.textures[i] = glGetUniformLocation(program, t.c_str());
-        uniforms.normalTextures[i] = glGetUniformLocation(program, n.c_str());
-    }
-}
-
-void AreaFile::printTransformDebug() const
-{
-    // Convert tile coordinates to hex string like the filename
-    char tileStr[8];
-    snprintf(tileStr, sizeof(tileStr), "%02X%02X", mTileX, mTileY);
-
-    std::cout << "Tile " << tileStr
-              << " | Rot: " << mGlobalRotation
-              << " | MirrorX: " << (mMirrorX ? "true" : "false")
-              << " | MirrorZ: " << (mMirrorZ ? "true" : "false")
-              << std::endl;
-}
-
-void AreaFile::printAllTransformsDebug(const std::vector<std::shared_ptr<AreaFile>>& areas)
-{
-    std::cout << "\n=== AREA TRANSFORM DEBUG ===" << std::endl;
-    std::cout << "Format: Tile | Rotation | MirrorX | MirrorZ" << std::endl;
-    std::cout << "-----------------------------" << std::endl;
-
-    for (const auto& area : areas)
-    {
-        if (area)
-            area->printTransformDebug();
-    }
-
-    std::cout << "============================\n" << std::endl;
-}
-
-void AreaFile::printRotationDebug() const
-{
-    printTransformDebug();
-}
+void AreaFile::printTransformDebug() const {}
+void AreaFile::printAllTransformsDebug(const std::vector<std::shared_ptr<AreaFile>>&) {}
+void AreaFile::printRotationDebug() const {}

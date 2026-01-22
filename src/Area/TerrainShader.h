@@ -1,38 +1,39 @@
 #pragma once
+
 #include <cstdint>
-#include <glad/glad.h>
-#include <glm/glm.hpp>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include <wrl/client.h>
+
+using Microsoft::WRL::ComPtr;
 
 namespace TerrainShader
 {
-    struct Uniforms
+    struct alignas(16) TerrainCB
     {
-        GLint view = -1;
-        GLint projection = -1;
-        GLint model = -1;
-
-        GLint blendMap = -1;
-        GLint colorMap = -1;
-        GLint hasColorMap = -1;
-
-        GLint layer0 = -1;
-        GLint layer1 = -1;
-        GLint layer2 = -1;
-        GLint layer3 = -1;
-
-        GLint layer0Normal = -1;
-        GLint layer1Normal = -1;
-        GLint layer2Normal = -1;
-        GLint layer3Normal = -1;
-
-        GLint texScale = -1;
-        GLint camPosition = -1;
-        GLint highlightColor = -1;
-        GLint baseColor = -1;
+        DirectX::XMMATRIX view;
+        DirectX::XMMATRIX projection;
+        DirectX::XMMATRIX model;
+        DirectX::XMFLOAT4 texScale;
+        DirectX::XMFLOAT4 highlightColor;
+        DirectX::XMFLOAT4 baseColor;
+        DirectX::XMFLOAT3 camPosition;
+        int hasColorMap;
     };
 
-    GLuint CreateProgram();
-    void GetUniforms(GLuint program, Uniforms& out);
+    struct ShaderResources
+    {
+        ComPtr<ID3D11VertexShader> vertexShader;
+        ComPtr<ID3D11PixelShader> pixelShader;
+        ComPtr<ID3D11InputLayout> inputLayout;
+        ComPtr<ID3D11Buffer> constantBuffer;
+        ComPtr<ID3D11SamplerState> samplerWrap;
+        ComPtr<ID3D11SamplerState> samplerClamp;
+    };
+
+    bool CreateShaders(ID3D11Device* device, ShaderResources& out);
+    void UpdateConstants(ID3D11DeviceContext* context, ID3D11Buffer* cb, const TerrainCB& data);
 
     extern const char* VertexSource;
     extern const char* FragmentSource;

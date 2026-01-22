@@ -1,17 +1,24 @@
 #pragma once
-#include <glad/glad.h>
+#include <d3d11.h>
+#include <wrl/client.h>
 #include "TerrainShader.h"
+
+using Microsoft::WRL::ComPtr;
 
 class AreaRender
 {
-	GLuint mShaderProgram = 0;
-	TerrainShader::Uniforms mUniforms;
+	TerrainShader::ShaderResources mResources;
+	bool mInitialized = false;
 
 public:
 	AreaRender();
 	~AreaRender();
 
-	void init();
-	[[nodiscard]] GLuint getProgram() const { return mShaderProgram; }
-	[[nodiscard]] const TerrainShader::Uniforms& getUniforms() const { return mUniforms; }
+	void init(ID3D11Device* device);
+	void bind(ID3D11DeviceContext* context);
+	void updateConstants(ID3D11DeviceContext* context, const TerrainShader::TerrainCB& cb);
+
+	[[nodiscard]] bool isInitialized() const { return mInitialized; }
+	[[nodiscard]] const TerrainShader::ShaderResources& getResources() const { return mResources; }
+	[[nodiscard]] ID3D11Buffer* getConstantBuffer() const { return mResources.constantBuffer.Get(); }
 };

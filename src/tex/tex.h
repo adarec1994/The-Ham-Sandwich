@@ -4,7 +4,10 @@
 #include <array>
 #include <string>
 #include <memory>
-#include <glad/glad.h>
+#include <d3d11.h>
+#include <wrl/client.h>
+
+using Microsoft::WRL::ComPtr;
 
 struct AppState;
 class Archive;
@@ -15,6 +18,8 @@ using FileEntryPtr = std::shared_ptr<FileEntry>;
 
 namespace Tex
 {
+    void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
+
     enum class TextureType : uint32_t
     {
         Unknown,
@@ -93,11 +98,11 @@ namespace Tex
     {
         bool open = false;
         std::string title;
-        GLuint texture = 0;
+        ComPtr<ID3D11ShaderResourceView> textureSRV;
         int texW = 0;
         int texH = 0;
         bool hasTexture = false;
-        bool ownsTexture = true;  
+        bool ownsTexture = true;
 
         bool showR = true;
         bool showG = true;
@@ -106,10 +111,12 @@ namespace Tex
 
         bool opaquePreview = false;
 
-        void clearGL();
+        void clear();
     };
 
     bool OpenTexPreviewFromEntry(AppState& state, const ArchivePtr& arc, const FileEntryPtr& fileEntry);
-    void OpenTexPreviewFromGLTexture(AppState& state, GLuint texId, int width, int height, const std::string& title);
+    void OpenTexPreviewFromSRV(AppState& state, ID3D11ShaderResourceView* srv, int width, int height, const std::string& title);
     void RenderTexPreviewWindow(PreviewState& ps);
+
+    ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf);
 }

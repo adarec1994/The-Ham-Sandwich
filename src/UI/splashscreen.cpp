@@ -8,7 +8,7 @@
 namespace fs = std::filesystem;
 
 static bool gSkipIconLoaded = false;
-static GLuint gSkipIconTexture = 0;
+static ID3D11ShaderResourceView* gSkipIconTexture = nullptr;
 static int gSkipIconWidth = 0;
 static int gSkipIconHeight = 0;
 
@@ -68,7 +68,7 @@ void RenderSplashScreen(AppState& state) {
                 &gSkipIconTexture, &gSkipIconWidth, &gSkipIconHeight);
         }
 
-        if (gSkipIconLoaded) {
+        if (gSkipIconLoaded && gSkipIconTexture) {
             float icon_size = 44.0f;
             float pad = 14.0f;
 
@@ -83,7 +83,7 @@ void RenderSplashScreen(AppState& state) {
             ImGui::PushStyleColor(ImGuiCol_Border,        ImVec4(0, 0, 0, 0));
 
             if (ImGui::ImageButton("##SkipSplash",
-                reinterpret_cast<void*>(static_cast<intptr_t>(gSkipIconTexture)),
+                reinterpret_cast<ImTextureID>(gSkipIconTexture),
                 ImVec2(icon_size, icon_size),
                 ImVec2(0, 0), ImVec2(1, 1),
                 ImVec4(0, 0, 0, 0)))

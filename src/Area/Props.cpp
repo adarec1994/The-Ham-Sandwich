@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "Props.h"
 #include "../Archive.h"
 #include "../models/M3Loader.h"

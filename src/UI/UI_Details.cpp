@@ -11,7 +11,7 @@
 #include "../Archive.h"
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
-#include <glad/glad.h>
+#include <d3d11.h>
 #include <set>
 #include <thread>
 #include <atomic>
@@ -154,7 +154,7 @@ namespace UI_Details
         if (ImGui::CollapsingHeader("Textures"))
         {
             const auto& textures = render->getAllTextures();
-            const auto& glTextures = render->getGLTextures();
+            const auto& srvTextures = render->getTextures();
             float thumbSize = 48.0f;
             float windowWidth = ImGui::GetContentRegionAvail().x;
             int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
@@ -163,22 +163,31 @@ namespace UI_Details
             {
                 const auto& tex = textures[i];
                 ImGui::PushID((int)i);
-                unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
+                ID3D11ShaderResourceView* srv = (i < srvTextures.size()) ? srvTextures[i] : nullptr;
 
-                if (glTex != 0)
+                if (srv != nullptr)
                 {
-                    if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
+                    if (ImGui::ImageButton("##texbtn", reinterpret_cast<ImTextureID>(srv), ImVec2(thumbSize, thumbSize)))
                     {
-                        // Query texture dimensions from OpenGL
                         int texWidth = 0, texHeight = 0;
-                        glBindTexture(GL_TEXTURE_2D, glTex);
-                        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &texWidth);
-                        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &texHeight);
-                        glBindTexture(GL_TEXTURE_2D, 0);
+                        ID3D11Resource* resource = nullptr;
+                        srv->GetResource(&resource);
+                        if (resource)
+                        {
+                            ID3D11Texture2D* texture2D = nullptr;
+                            if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&texture2D)))
+                            {
+                                D3D11_TEXTURE2D_DESC desc;
+                                texture2D->GetDesc(&desc);
+                                texWidth = static_cast<int>(desc.Width);
+                                texHeight = static_cast<int>(desc.Height);
+                                texture2D->Release();
+                            }
+                            resource->Release();
+                        }
 
-                        // Open preview instantly using existing texture
                         std::string title = tex.path.empty() ? "Texture Preview" : tex.path;
-                        Tex::OpenTexPreviewFromGLTexture(state, glTex, texWidth, texHeight, title);
+                        Tex::OpenTexPreviewFromSRV(state, srv, texWidth, texHeight, title);
                     }
 
                     if (ImGui::IsItemHovered())
