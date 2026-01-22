@@ -13,6 +13,7 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <algorithm>
 
 namespace UI_Details
 {
@@ -26,6 +27,9 @@ namespace UI_Details
     static float sNotificationTimer = 0.0f;
     static std::string sNotificationMessage;
     static bool sNotificationSuccess = true;
+
+    static int sSelectedTextureIndex = -1;
+    static bool sShowTexturePopup = false;
 
     void Reset()
     {
@@ -100,6 +104,106 @@ namespace UI_Details
 
                 ImGui::EndCombo();
             }
+        }
+
+        if (ImGui::CollapsingHeader("Submeshes"))
+        {
+            for (size_t i = 0; i < submeshCount; ++i)
+            {
+                const auto& sm = render->getSubmesh(i);
+                ImGui::PushID((int)i);
+
+                bool vis = render->getSubmeshVisible(i);
+                if (ImGui::Checkbox("##smvis", &vis))
+                    render->setSubmeshVisible(i, vis);
+                ImGui::SameLine();
+
+                if (ImGui::TreeNode((void*)(intptr_t)i, "Submesh %zu (Group %u)", i, (unsigned)sm.groupId))
+                {
+                    ImGui::Text("Material: %u", (unsigned)sm.materialID);
+                    ImGui::Text("Vertices: %u", (unsigned)sm.vertexCount);
+                    ImGui::Text("Indices: %u", (unsigned)sm.indexCount);
+                    ImGui::TreePop();
+                }
+
+                ImGui::PopID();
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Textures"))
+        {
+            const auto& textures = render->getAllTextures();
+            const auto& glTextures = render->getGLTextures();
+            float thumbSize = 48.0f;
+            float windowWidth = ImGui::GetContentRegionAvail().x;
+            int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
+
+            for (size_t i = 0; i < textures.size(); ++i)
+            {
+                const auto& tex = textures[i];
+                ImGui::PushID((int)i);
+                unsigned int glTex = (i < glTextures.size()) ? glTextures[i] : 0;
+
+                if (glTex != 0)
+                {
+                    if (ImGui::ImageButton("##texbtn", (ImTextureID)(uintptr_t)glTex, ImVec2(thumbSize, thumbSize)))
+                    {
+                        sSelectedTextureIndex = (int)i;
+                        sShowTexturePopup = true;
+                    }
+
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::BeginTooltip();
+                        ImGui::Text("[%zu] %s", i, tex.path.c_str());
+                        ImGui::EndTooltip();
+                    }
+                }
+                else
+                {
+                    ImGui::Button("N/A", ImVec2(thumbSize, thumbSize));
+                }
+
+                if ((i + 1) % columns != 0 && i + 1 < textures.size())
+                    ImGui::SameLine();
+
+                ImGui::PopID();
+            }
+        }
+
+        if (sShowTexturePopup && sSelectedTextureIndex >= 0)
+        {
+            const auto& textures = render->getAllTextures();
+            const auto& glTextures = render->getGLTextures();
+
+            if (sSelectedTextureIndex < (int)textures.size())
+            {
+                const auto& tex = textures[sSelectedTextureIndex];
+                std::string title = tex.path.empty() ? ("Texture " + std::to_string(sSelectedTextureIndex)) : tex.path;
+
+                ImGui::SetNextWindowSize(ImVec2(420, 480), ImGuiCond_FirstUseEver);
+                if (ImGui::Begin(title.c_str(), &sShowTexturePopup))
+                {
+                    unsigned int glTex = (sSelectedTextureIndex < (int)glTextures.size()) ? glTextures[sSelectedTextureIndex] : 0;
+                    if (glTex != 0)
+                    {
+                        ImVec2 avail = ImGui::GetContentRegionAvail();
+                        float maxDim = std::min(avail.x, avail.y - 60.0f);
+                        maxDim = std::max(64.0f, maxDim);
+                        ImGui::Image((ImTextureID)(uintptr_t)glTex, ImVec2(maxDim, maxDim));
+                    }
+
+                    ImGui::Separator();
+                    ImGui::Text("Index: %d", sSelectedTextureIndex);
+                    ImGui::TextWrapped("%s", tex.path.c_str());
+                    if (!tex.textureType.empty())
+                        ImGui::Text("Type: %s (%d)", tex.textureType.c_str(), tex.type);
+                }
+                ImGui::End();
+            }
+
+            if (!sShowTexturePopup)
+                sSelectedTextureIndex = -1;
         }
 
         if (animCount > 0 && ImGui::CollapsingHeader("Animations"))
@@ -389,7 +493,8 @@ namespace UI_Details
             sNotificationTimer -= ImGui::GetIO().DeltaTime;
             float alpha = std::min(1.0f, sNotificationTimer);
 
-            ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + 60.0f);
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 60.0f);
 
             ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
             ImGui::SetNextWindowBgAlpha(0.85f * alpha);
@@ -406,6 +511,7 @@ namespace UI_Details
                     ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
             }
             ImGui::End();
+
             ImGui::PopStyleVar(2);
         }
     }
