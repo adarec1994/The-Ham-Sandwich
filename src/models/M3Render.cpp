@@ -298,7 +298,6 @@ void M3Render::precomputeBoneData() {
     bindLocalTranslation.resize(numBones, glm::vec3(0.0f));
     boneAtOrigin.resize(numBones, false);
 
-    // Step 1: Compute effectiveBindGlobal (must be done in order since children depend on parents)
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
         bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)numBones);
@@ -320,7 +319,6 @@ void M3Render::precomputeBoneData() {
         inverseEffectiveBindGlobal[i] = glm::inverse(effectiveBindGlobal[i]);
     }
 
-    // Step 2: Decompose bind local transforms
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
         bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)numBones);
@@ -345,6 +343,7 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     for (const auto& tex : data.textures) {
         mTextureSRVs.push_back(loadTextureFromArchive(arc, tex.path));
     }
+    texturesLoaded = true;
 }
 
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
@@ -393,35 +392,34 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     Tex::File tf;
     if (!tf.readFromMemory(buffer.data(), buffer.size())) return nullptr;
 
-    Tex::ImageRGBA img;
-    if (!tf.decodeLargestMipToRGBA(img)) return nullptr;
+    return Tex::CreateSRVFromFile(tf);
+}
 
-    D3D11_TEXTURE2D_DESC td = {};
-    td.Width = img.width;
-    td.Height = img.height;
-    td.MipLevels = 0;
-    td.ArraySize = 1;
-    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-    td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+void M3Render::queueTexturesForLoading() {
+    if (texturesLoaded) return;
+    nextTextureToLoad = 0;
+}
 
-    ComPtr<ID3D11Texture2D> tex;
-    if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) return nullptr;
+bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
+    const ArchivePtr& useArc = arc ? arc : archiveRef;
 
-    sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
+    if (nextTextureToLoad >= pendingTexturePaths.size()) {
+        if (!texturesLoaded && !pendingTexturePaths.empty()) {
+            texturesLoaded = true;
+            printf("All %zu textures loaded\n", pendingTexturePaths.size());
+        }
+        return false;
+    }
 
-    ComPtr<ID3D11ShaderResourceView> srv;
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvd = {};
-    srvd.Format = td.Format;
-    srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvd.Texture2D.MostDetailedMip = 0;
-    srvd.Texture2D.MipLevels = (UINT)-1;
-    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvd, &srv))) return nullptr;
+    const std::string& path = pendingTexturePaths[nextTextureToLoad];
+    auto srv = loadTextureFromArchive(useArc, path);
 
-    sContext->GenerateMips(srv.Get());
-    return srv;
+    if (nextTextureToLoad < mTextureSRVs.size()) {
+        mTextureSRVs[nextTextureToLoad] = srv;
+    }
+
+    nextTextureToLoad++;
+    return nextTextureToLoad < pendingTexturePaths.size();
 }
 
 ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
@@ -604,9 +602,7 @@ float M3Render::getAnimationDuration() const {
 
 static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(1.0f);
-
     if (track.keyframes.size() == 1) return track.keyframes[0].scale;
-
     if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().scale;
     if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().scale;
 
@@ -620,20 +616,15 @@ static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
 
     const auto& prev = track.keyframes[idx];
     const auto& next = track.keyframes[idx + 1];
-
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.scale;
-
-    float t = (timeMs - prev.timestamp) / denom;
-    t = glm::clamp(t, 0.0f, 1.0f);
+    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
     return glm::mix(prev.scale, next.scale, t);
 }
 
 static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-
     if (track.keyframes.size() == 1) return track.keyframes[0].rotation;
-
     if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().rotation;
     if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().rotation;
 
@@ -647,28 +638,19 @@ static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs
 
     const auto& prev = track.keyframes[idx];
     const auto& next = track.keyframes[idx + 1];
-
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.rotation;
-
-    float t = (timeMs - prev.timestamp) / denom;
-    t = glm::clamp(t, 0.0f, 1.0f);
+    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
 
     glm::quat q0 = glm::normalize(prev.rotation);
     glm::quat q1 = glm::normalize(next.rotation);
-
-    if (glm::dot(q0, q1) < 0.0f) {
-        q1 = -q1;
-    }
-
+    if (glm::dot(q0, q1) < 0.0f) q1 = -q1;
     return glm::slerp(q0, q1, t);
 }
 
 static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(0.0f);
-
     if (track.keyframes.size() == 1) return track.keyframes[0].translation;
-
     if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().translation;
     if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().translation;
 
@@ -682,24 +664,18 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
 
     const auto& prev = track.keyframes[idx];
     const auto& next = track.keyframes[idx + 1];
-
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.translation;
-
-    float t = (timeMs - prev.timestamp) / denom;
-    t = glm::clamp(t, 0.0f, 1.0f);
+    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
     return glm::mix(prev.translation, next.translation, t);
 }
 
 static XMMATRIX GlmToXM(const glm::mat4& m) {
-    // GLM is column-major: m[col][row]
-    // XMMATRIX constructor takes row-major order: (row0..., row1..., row2..., row3...)
-    // Extract each row from GLM's columns
     return XMMATRIX(
-        m[0][0], m[1][0], m[2][0], m[3][0],  // row 0
-        m[0][1], m[1][1], m[2][1], m[3][1],  // row 1
-        m[0][2], m[1][2], m[2][2], m[3][2],  // row 2
-        m[0][3], m[1][3], m[2][3], m[3][3]   // row 3
+        m[0][0], m[1][0], m[2][0], m[3][0],
+        m[0][1], m[1][1], m[2][1], m[3][1],
+        m[0][2], m[1][2], m[2][2], m[3][2],
+        m[0][3], m[1][3], m[2][3], m[3][3]
     );
 }
 
@@ -729,12 +705,10 @@ void M3Render::updateAnimation(float deltaTime) {
         const auto& bone = bones[i];
         bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)numBones);
 
-        // Start with bind local values as defaults
         glm::vec3 scale = bindLocalScale[i];
         glm::quat rotation = bindLocalRotation[i];
         glm::vec3 translation = bindLocalTranslation[i];
 
-        // Scale: track 0, 1, or 2
         for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 scale = interpolateScale(bone.tracks[t], currentTimeMs);
@@ -742,7 +716,6 @@ void M3Render::updateAnimation(float deltaTime) {
             }
         }
 
-        // Rotation: track 4 or 5
         for (int t = 4; t <= 5; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 rotation = interpolateRotation(bone.tracks[t], currentTimeMs);
@@ -750,26 +723,21 @@ void M3Render::updateAnimation(float deltaTime) {
             }
         }
 
-        // Translation: track 6, but ONLY if boneAtOrigin
         if (boneAtOrigin[i] && !bone.tracks[6].keyframes.empty()) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
 
-        // Build local transform: T * R * S
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
         glm::mat4 R = glm::mat4_cast(glm::normalize(rotation));
         glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
         glm::mat4 localTransform = T * R * S;
 
-        // World transform: parent * local
         if (isRoot) {
             worldTransforms[i] = localTransform;
         } else {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
         }
 
-        // Skinning matrix: worldTransform * inverseBindGlobal
-        // Match GLB export: use inverse of ORIGINAL bone.globalMatrix
         boneMatrices[i] = GlmToXM(worldTransforms[i] * glm::inverse(bone.globalMatrix));
     }
 }
@@ -923,6 +891,3 @@ int M3Render::rayPickBone(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) con
 
     return closestBone;
 }
-
-void M3Render::queueTexturesForLoading() {}
-bool M3Render::uploadNextTexture(const ArchivePtr&) { return false; }

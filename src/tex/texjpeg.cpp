@@ -1,6 +1,5 @@
 #include "texjpeg.h"
 #include <cmath>
-#include <map>
 #include <algorithm>
 #include <cstring>
 
@@ -14,7 +13,7 @@ namespace Tex
         static const uint8_t acChrominanceLengths[] = { 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119 };
 
         static const uint8_t dcLuminanceValues[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
-        static const uint8_t acLuminanceValues[] = { 
+        static const uint8_t acLuminanceValues[] = {
             0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51,
             0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xA1, 0x08, 0x23, 0x42, 0xB1, 0xC1,
             0x15, 0x52, 0xD1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0A, 0x16, 0x17, 0x18,
@@ -29,7 +28,7 @@ namespace Tex
             0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFa };
 
         static const uint8_t dcChrominanceValues[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
-        static const uint8_t acChrominanceValues[] = { 
+        static const uint8_t acChrominanceValues[] = {
             0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07,
             0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91, 0xA1, 0xB1, 0xC1, 0x09,
             0x23, 0x33, 0x52, 0xF0, 0x15, 0x62, 0x72, 0xD1, 0x0A, 0x16, 0x24, 0x34, 0xE1, 0x25,
@@ -43,228 +42,240 @@ namespace Tex
             0xD7, 0xD8, 0xD9, 0xDA, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xF2,
             0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA };
 
-        static const uint8_t zigzagMapping[] = { 
+        static const uint8_t zigzagMapping[] = {
             0, 1, 5, 6, 14, 15, 27, 28, 2, 4, 7, 13, 16, 26, 29, 42, 3, 8, 12, 17, 25, 30, 41, 43,
             9, 11, 18, 24, 31, 40, 44, 53, 10, 19, 23, 32, 39, 45, 52, 54, 20, 22, 33, 38, 46, 51, 55,
             60, 21, 34, 37, 47, 50, 56, 59, 61, 35, 36, 48, 49, 57, 58, 62, 63 };
 
-        static const uint8_t lumQuantizationTemplate[] = { 
+        static const uint8_t lumQuantizationTemplate[] = {
             16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
             14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62,
             18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92,
             49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99 };
 
-        static const uint8_t chromaQuantizationTemplate[] = { 
+        static const uint8_t chromaQuantizationTemplate[] = {
             17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99,
             24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99,
             99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
             99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99 };
 
-        class BitStream
-        {
+        struct HuffmanLookup {
+            uint8_t value;
+            uint8_t bits;
+        };
+
+        class BitStream {
             const uint8_t* mData;
             size_t mSize;
-            size_t mBitPos;
+            size_t mBytePos;
+            int mBitPos;
+            uint32_t mBuffer;
+            int mBufferBits;
 
         public:
-            BitStream(const uint8_t* data, size_t size) : mData(data), mSize(size), mBitPos(0) {}
-
-            uint8_t ReadBit()
-            {
-                size_t bytePos = mBitPos / 8;
-                if (bytePos >= mSize) return 0;
-                size_t bitPos = 7 - (mBitPos % 8);
-                uint8_t ret = (mData[bytePos] >> bitPos) & 1;
-                mBitPos++;
-                return ret;
+            BitStream(const uint8_t* data, size_t size)
+                : mData(data), mSize(size), mBytePos(0), mBitPos(0), mBuffer(0), mBufferBits(0) {
+                Refill();
             }
 
-            uint16_t ReadBits(int numBits)
-            {
-                uint16_t ret = 0;
-                for (int i = 0; i < numBits; ++i)
-                {
-                    ret <<= 1;
-                    ret |= ReadBit();
+            void Refill() {
+                while (mBufferBits <= 24 && mBytePos < mSize) {
+                    mBuffer |= ((uint32_t)mData[mBytePos++]) << (24 - mBufferBits);
+                    mBufferBits += 8;
                 }
-                return ret;
+            }
+
+            uint8_t ReadBit() {
+                if (mBufferBits == 0) Refill();
+                uint8_t bit = (mBuffer >> 31) & 1;
+                mBuffer <<= 1;
+                mBufferBits--;
+                return bit;
+            }
+
+            uint16_t ReadBits(int n) {
+                if (n == 0) return 0;
+                if (mBufferBits < n) Refill();
+                uint16_t val = (uint16_t)(mBuffer >> (32 - n));
+                mBuffer <<= n;
+                mBufferBits -= n;
+                return val;
+            }
+
+            uint16_t PeekBits(int n) {
+                if (mBufferBits < n) Refill();
+                return (uint16_t)(mBuffer >> (32 - n));
+            }
+
+            void SkipBits(int n) {
+                mBuffer <<= n;
+                mBufferBits -= n;
             }
         };
 
-        struct IDCT2
-        {
-            static void DoIdct(int16_t* m)
-            {
-                static bool tablesGenerated = false;
-                static float Dct[64];
-                static float DctT[64];
+        class FastIDCT {
+            static int32_t sDctTable[8][8];
+            static bool sInitialized;
 
-                if (!tablesGenerated)
-                {
-                    for (int y = 0, o = 0; y < 8; y++)
-                    {
-                        for (int x = 0; x < 8; x++)
-                        {
-                            Dct[o++] = (float)(std::sqrt(y == 0 ? 0.125f : 0.250f) * std::cos(((2 * x + 1) * y * 3.1415926535f) * 0.0625f));
-                        }
+        public:
+            static void Init() {
+                if (sInitialized) return;
+                for (int y = 0; y < 8; y++) {
+                    for (int x = 0; x < 8; x++) {
+                        double c = (y == 0) ? 0.353553390593 : 0.5;
+                        double angle = ((2 * x + 1) * y * 3.14159265358979) / 16.0;
+                        sDctTable[y][x] = (int32_t)(c * cos(angle) * 256.0 + 0.5);
                     }
-                    for (int y = 0; y < 8; y++)
-                        for (int x = 0; x < 8; x++)
-                            DctT[x * 8 + y] = Dct[y * 8 + x];
-                    tablesGenerated = true;
                 }
+                sInitialized = true;
+            }
 
-                float source[64];
-                for (int i = 0; i < 64; i++) source[i] = (float)m[i];
+            static void Transform(int16_t* block) {
+                int32_t temp[64];
+                int32_t row[8];
 
-                float temp[64];
-                for (int y = 0; y < 8; y++)
-                {
-                    for (int x = 0; x < 8; x++)
-                    {
-                        float sum = 0;
-                        for (int k = 0; k < 8; k++) sum += DctT[y * 8 + k] * source[k * 8 + x];
+                for (int y = 0; y < 8; y++) {
+                    for (int x = 0; x < 8; x++) {
+                        int32_t sum = 0;
+                        for (int k = 0; k < 8; k++) {
+                            sum += sDctTable[k][y] * block[k * 8 + x];
+                        }
                         temp[y * 8 + x] = sum;
                     }
                 }
 
-                for (int y = 0; y < 8; y++)
-                {
-                    for (int x = 0; x < 8; x++)
-                    {
-                        float sum = 0;
-                        for (int k = 0; k < 8; k++) sum += temp[y * 8 + k] * Dct[k * 8 + x];
-                        source[y * 8 + x] = sum;
+                for (int y = 0; y < 8; y++) {
+                    for (int x = 0; x < 8; x++) {
+                        int32_t sum = 0;
+                        for (int k = 0; k < 8; k++) {
+                            sum += temp[y * 8 + k] * sDctTable[k][x];
+                        }
+                        block[y * 8 + x] = (int16_t)((sum + 32768) >> 16);
                     }
                 }
-
-                for (int i = 0; i < 64; i++) m[i] = (int16_t)std::round(source[i]);
             }
         };
 
-        static int Clamp(int value, int min, int max)
-        {
-            return (value < min) ? min : (value > max) ? max : value;
+        int32_t FastIDCT::sDctTable[8][8];
+        bool FastIDCT::sInitialized = false;
+
+        static inline int Clamp(int value, int minVal, int maxVal) {
+            return (value < minVal) ? minVal : (value > maxVal) ? maxVal : value;
         }
 
-        class Decoder
-        {
-            using HuffmanTable = std::map<uint64_t, uint8_t>;
-            HuffmanTable dcLum, acLum, dcChrom, acChrom;
-            std::vector<float> lumQuantTables[101];
-            std::vector<float> chromQuantTables[101];
+        class Decoder {
+            HuffmanLookup dcLumLookup[65536];
+            HuffmanLookup acLumLookup[65536];
+            HuffmanLookup dcChromLookup[65536];
+            HuffmanLookup acChromLookup[65536];
+            int16_t lumQuantTables[101][64];
+            int16_t chromQuantTables[101][64];
             bool initialized = false;
 
-            HuffmanTable GenerateHuffmanTable(const uint8_t* lengths, int numLengths, const uint8_t* values)
-            {
-                HuffmanTable table;
+            void BuildHuffmanLookup(HuffmanLookup* lookup, const uint8_t* lengths, int numLengths, const uint8_t* values) {
+                memset(lookup, 0xFF, sizeof(HuffmanLookup) * 65536);
                 int curIndex = 0;
                 uint16_t code = 0;
-                for (int length = 0; length < numLengths; length++)
-                {
+                for (int length = 0; length < numLengths; length++) {
                     int numValues = lengths[length];
-                    for (int i = 0; i < numValues; i++)
-                    {
-                        uint64_t mixed = ((uint64_t)(length + 1) << 32) | code;
-                        table[mixed] = values[curIndex++];
+                    int bits = length + 1;
+                    for (int i = 0; i < numValues; i++) {
+                        uint16_t pattern = code << (16 - bits);
+                        int count = 1 << (16 - bits);
+                        for (int j = 0; j < count; j++) {
+                            lookup[pattern + j].value = values[curIndex];
+                            lookup[pattern + j].bits = (uint8_t)bits;
+                        }
+                        curIndex++;
                         code++;
                     }
                     code <<= 1;
                 }
-                return table;
             }
 
-            std::vector<float> GenerateQuantizationTable(int qualityFactor, const uint8_t* templ)
-            {
-                std::vector<float> table(64);
-                float multiplier = (200.0f - qualityFactor * 2.0f) * 0.01f;
-                for (int i = 0; i < 64; i++) table[i] = templ[i] * multiplier;
-                return table;
+            void GenerateQuantizationTable(int16_t* table, int qualityFactor, const uint8_t* templ) {
+                int multiplier = 200 - qualityFactor * 2;
+                for (int i = 0; i < 64; i++) {
+                    table[i] = (int16_t)((templ[i] * multiplier) / 100);
+                }
             }
 
         public:
-            void Initialize()
-            {
+            void Initialize() {
                 if (initialized) return;
-                dcLum = GenerateHuffmanTable(dcLuminanceLengths, 16, dcLuminanceValues);
-                acLum = GenerateHuffmanTable(acLuminanceLengths, 16, acLuminanceValues);
-                dcChrom = GenerateHuffmanTable(dcChrominanceLengths, 16, dcChrominanceValues);
-                acChrom = GenerateHuffmanTable(acChrominanceLengths, 16, acChrominanceValues);
+                FastIDCT::Init();
+                BuildHuffmanLookup(dcLumLookup, dcLuminanceLengths, 16, dcLuminanceValues);
+                BuildHuffmanLookup(acLumLookup, acLuminanceLengths, 16, acLuminanceValues);
+                BuildHuffmanLookup(dcChromLookup, dcChrominanceLengths, 16, dcChrominanceValues);
+                BuildHuffmanLookup(acChromLookup, acChrominanceLengths, 16, acChrominanceValues);
 
-                for (int i = 0; i <= 100; i++)
-                {
-                    lumQuantTables[i] = GenerateQuantizationTable(i, lumQuantizationTemplate);
-                    chromQuantTables[i] = GenerateQuantizationTable(i, chromaQuantizationTemplate);
+                for (int i = 0; i <= 100; i++) {
+                    GenerateQuantizationTable(lumQuantTables[i], i, lumQuantizationTemplate);
+                    GenerateQuantizationTable(chromQuantTables[i], i, chromaQuantizationTemplate);
                 }
                 initialized = true;
             }
 
-            uint8_t DecodeValue(BitStream& s, const HuffmanTable& table)
-            {
-                uint16_t word = 0;
-                uint8_t len = 0;
-                do
-                {
-                    word <<= 1;
-                    word |= s.ReadBit();
-                    len++;
-                    uint64_t key = ((uint64_t)len << 32) | word;
-                    auto it = table.find(key);
-                    if (it != table.end()) return it->second;
-                } while (len < 16);
-                return 0;
+            uint8_t DecodeValue(BitStream& s, const HuffmanLookup* lookup) {
+                uint16_t peek = s.PeekBits(16);
+                const HuffmanLookup& entry = lookup[peek];
+                if (entry.bits == 0xFF) {
+                    uint16_t word = 0;
+                    for (int len = 1; len <= 16; len++) {
+                        word = (word << 1) | s.ReadBit();
+                        uint16_t pattern = word << (16 - len);
+                        if (lookup[pattern].bits == len) return lookup[pattern].value;
+                    }
+                    return 0;
+                }
+                s.SkipBits(entry.bits);
+                return entry.value;
             }
 
-            int16_t Extend(uint16_t val, uint16_t len)
-            {
-                if (val < (1 << (len - 1))) return (int16_t)(val + (-1 << len) + 1);
+            int16_t Extend(uint16_t val, uint16_t len) {
+                if (len == 0) return 0;
+                if (val < (1u << (len - 1))) return (int16_t)(val + (-1 << len) + 1);
                 return (int16_t)val;
             }
 
-            void UnZigZag(int16_t* block)
-            {
+            void UnZigZag(int16_t* block) {
                 int16_t buf[64];
                 for (int i = 0; i < 64; i++) buf[i] = block[zigzagMapping[i]];
-                std::memcpy(block, buf, sizeof(int16_t) * 64);
+                memcpy(block, buf, sizeof(int16_t) * 64);
             }
 
-            void Dequantize(int16_t* block, const std::vector<float>& qTable)
-            {
+            void Dequantize(int16_t* block, const int16_t* qTable) {
                 for (int i = 0; i < 64; i++) block[i] = (int16_t)(block[i] * qTable[i]);
             }
 
-            int16_t DecodeBlock(BitStream& s, int16_t* block, const HuffmanTable& dc, const HuffmanTable& ac, int16_t prevDc)
-            {
+            int16_t DecodeBlock(BitStream& s, int16_t* block, const HuffmanLookup* dc, const HuffmanLookup* ac, int16_t prevDc) {
                 uint8_t dcLen = DecodeValue(s, dc);
                 uint16_t eps = s.ReadBits(dcLen);
                 int16_t delta = Extend(eps, dcLen);
                 int16_t curDc = (int16_t)(delta + prevDc);
                 block[0] = curDc;
 
-                for (int idx = 1; idx < 64;)
-                {
+                for (int idx = 1; idx < 64;) {
                     uint8_t acVal = DecodeValue(s, ac);
                     if (acVal == 0) break;
                     if (acVal == 0xF0) { idx += 16; continue; }
                     idx += (acVal >> 4) & 0xF;
                     uint8_t acLen = acVal & 0xF;
                     eps = s.ReadBits(acLen);
-                    block[idx] = Extend(eps, acLen);
+                    if (idx < 64) block[idx] = Extend(eps, acLen);
                     idx++;
                 }
                 return curDc;
             }
 
-            int16_t ProcessBlock(int16_t prevDc, BitStream& s, const HuffmanTable& dc, const HuffmanTable& ac, 
-                const std::vector<float>& q, bool isLum, int16_t* out)
-            {
+            int16_t ProcessBlock(int16_t prevDc, BitStream& s, const HuffmanLookup* dc, const HuffmanLookup* ac,
+                const int16_t* q, bool isLum, int16_t* out) {
                 int16_t buf[64] = { 0 };
                 int16_t curDc = DecodeBlock(s, buf, dc, ac, prevDc);
                 UnZigZag(buf);
                 Dequantize(buf, q);
-                IDCT2::DoIdct(buf);
-                for (int i = 0; i < 64; i++)
-                {
+                FastIDCT::Transform(buf);
+                for (int i = 0; i < 64; i++) {
                     int val = buf[i];
                     if (isLum) val = Clamp(val + 128, 0, 255);
                     else val = Clamp(val, -256, 255);
@@ -273,164 +284,132 @@ namespace Tex
                 return curDc;
             }
 
-            std::vector<uint8_t> YCbCrToColor32(int y, int lum1, int cb, int cr)
-            {
+            void YCbCrToColor32(int y, int lum1, int cb, int cr, uint8_t* out) {
                 int a = y - (cr >> 1);
-                uint8_t beta = (uint8_t)Clamp(a + cr, 0, 0xFF);
-                uint8_t gamma = (uint8_t)Clamp(a - (cb >> 1), 0, 0xFF);
-                uint8_t delta = (uint8_t)Clamp(gamma + cb, 0, 0xFF);
-                uint8_t alpha = (uint8_t)Clamp(lum1, 0, 0xFF);
-                return { gamma, beta, delta, alpha };
+                out[0] = (uint8_t)Clamp(a - (cb >> 1), 0, 255);
+                out[1] = (uint8_t)Clamp(a + cr, 0, 255);
+                out[2] = (uint8_t)Clamp(out[0] + cb, 0, 255);
+                out[3] = (uint8_t)Clamp(lum1, 0, 255);
             }
 
-            void DecompressFormat0(int w, int h, BitStream& s, const std::vector<float>* lq, const std::vector<float>* cq, std::vector<uint8_t>& data)
-            {
+            void DecompressFormat0(int w, int h, BitStream& s, const int16_t* lq, const int16_t* cq, std::vector<uint8_t>& data) {
                 int16_t l0[4][64], l1[4][64], c0[64], c1[64];
                 int16_t prevDc[4] = { 0 };
                 int mipW = ((w + 15) / 16) * 16;
                 int mipH = ((h + 15) / 16) * 16;
                 data.resize(mipW * mipH * 4);
 
-                for (int y = 0; y < mipH / 16; y++)
-                {
-                    for (int x = 0; x < mipW / 16; x++)
-                    {
-                        for (int i = 0; i < 4; i++) prevDc[0] = ProcessBlock(prevDc[0], s, dcLum, acLum, lq[0], true, l0[i]);
-                        prevDc[1] = ProcessBlock(prevDc[1], s, dcChrom, acChrom, cq[1], false, c0);
-                        prevDc[2] = ProcessBlock(prevDc[2], s, dcChrom, acChrom, cq[2], false, c1);
-                        for (int i = 0; i < 4; i++) prevDc[3] = ProcessBlock(prevDc[3], s, dcLum, acLum, lq[3], true, l1[i]);
+                for (int y = 0; y < mipH / 16; y++) {
+                    for (int x = 0; x < mipW / 16; x++) {
+                        for (int i = 0; i < 4; i++) prevDc[0] = ProcessBlock(prevDc[0], s, dcLumLookup, acLumLookup, lq, true, l0[i]);
+                        prevDc[1] = ProcessBlock(prevDc[1], s, dcChromLookup, acChromLookup, cq + 64, false, c0);
+                        prevDc[2] = ProcessBlock(prevDc[2], s, dcChromLookup, acChromLookup, cq + 128, false, c1);
+                        for (int i = 0; i < 4; i++) prevDc[3] = ProcessBlock(prevDc[3], s, dcLumLookup, acLumLookup, lq + 192, true, l1[i]);
 
-                        for (int r = 0; r < 16; r++)
-                        {
+                        for (int r = 0; r < 16; r++) {
                             if (y * 16 + r >= h) continue;
-                            for (int c = 0; c < 16; c++)
-                            {
+                            for (int c = 0; c < 16; c++) {
                                 if (x * 16 + c >= w) continue;
                                 int blk = ((r >= 8) ? 2 : 0) + ((c >= 8) ? 1 : 0);
                                 int lIdx = (r % 8) * 8 + (c % 8);
                                 int cIdx = (r / 2) * 8 + (c / 2);
-                                auto color = YCbCrToColor32(l0[blk][lIdx], l1[blk][lIdx], c0[cIdx], c1[cIdx]);
                                 int pIdx = ((y * 16 + r) * w + (x * 16 + c)) * 4;
-                                data[pIdx + 0] = color[0]; data[pIdx + 1] = color[1];
-                                data[pIdx + 2] = color[2]; data[pIdx + 3] = color[3];
+                                YCbCrToColor32(l0[blk][lIdx], l1[blk][lIdx], c0[cIdx], c1[cIdx], &data[pIdx]);
                             }
                         }
                     }
                 }
             }
 
-            void DecompressFormat1(int w, int h, BitStream& s, const Header& hdr, const std::vector<float>* lq, std::vector<uint8_t>& data)
-            {
+            void DecompressFormat1(int w, int h, BitStream& s, const Header& hdr, const int16_t* lq, std::vector<uint8_t>& data) {
                 int16_t l[4][64];
                 int16_t prevDc[4] = { 0 };
                 int mipW = ((w + 7) / 8) * 8;
                 int mipH = ((h + 7) / 8) * 8;
                 data.resize(mipW * mipH * 4);
 
-                for (int y = 0; y < mipH / 8; y++)
-                {
-                    for (int x = 0; x < mipW / 8; x++)
-                    {
-                        prevDc[0] = ProcessBlock(prevDc[0], s, dcLum, acLum, lq[0], true, l[0]);
-                        prevDc[1] = ProcessBlock(prevDc[1], s, dcLum, acLum, lq[1], true, l[1]);
+                for (int y = 0; y < mipH / 8; y++) {
+                    for (int x = 0; x < mipW / 8; x++) {
+                        prevDc[0] = ProcessBlock(prevDc[0], s, dcLumLookup, acLumLookup, lq, true, l[0]);
+                        prevDc[1] = ProcessBlock(prevDc[1], s, dcLumLookup, acLumLookup, lq + 64, true, l[1]);
                         if (hdr.layerInfos[2].hasReplacement == 0)
-                            prevDc[2] = ProcessBlock(prevDc[2], s, dcLum, acLum, lq[2], true, l[2]);
+                            prevDc[2] = ProcessBlock(prevDc[2], s, dcLumLookup, acLumLookup, lq + 128, true, l[2]);
                         if (hdr.layerInfos[3].hasReplacement == 0)
-                            prevDc[3] = ProcessBlock(prevDc[3], s, dcLum, acLum, lq[3], true, l[3]);
+                            prevDc[3] = ProcessBlock(prevDc[3], s, dcLumLookup, acLumLookup, lq + 192, true, l[3]);
 
-                        for (int iy = 0; iy < 8; iy++)
-                        {
-                            for (int ix = 0; ix < 8; ix++)
-                            {
+                        for (int iy = 0; iy < 8; iy++) {
+                            for (int ix = 0; ix < 8; ix++) {
                                 int idx = iy * 8 + ix;
-                                uint8_t r = (uint8_t)l[0][idx];
-                                uint8_t g = (uint8_t)l[1][idx];
-                                uint8_t b = 255;
-                                if (hdr.layerInfos[2].hasReplacement == 0) b = (uint8_t)l[2][idx];
-                                uint8_t a = 255;
-                                if (hdr.layerInfos[3].hasReplacement == 0) a = (uint8_t)l[3][idx];
-                                
                                 int pIdx = ((y * 8 + iy) * w + (x * 8 + ix)) * 4;
-                                data[pIdx + 0] = b; data[pIdx + 1] = g;
-                                data[pIdx + 2] = a; data[pIdx + 3] = r;
+                                data[pIdx + 0] = (uint8_t)l[2][idx];
+                                data[pIdx + 1] = (uint8_t)l[1][idx];
+                                data[pIdx + 2] = (uint8_t)l[3][idx];
+                                data[pIdx + 3] = (uint8_t)l[0][idx];
                             }
                         }
                     }
                 }
             }
 
-            void DecompressFormat2(int w, int h, BitStream& s, const Header& hdr, const std::vector<float>* lq, const std::vector<float>* cq, std::vector<uint8_t>& data)
-            {
+            void DecompressFormat2(int w, int h, BitStream& s, const Header& hdr, const int16_t* lq, const int16_t* cq, std::vector<uint8_t>& data) {
                 int16_t l0[64], l1[64], c0[64], c1[64];
                 int16_t prevDc[4] = { 0 };
                 int mipW = ((w + 7) / 8) * 8;
                 int mipH = ((h + 7) / 8) * 8;
                 data.resize(mipW * mipH * 4);
 
-                for (int y = 0; y < mipH / 8; y++)
-                {
-                    for (int x = 0; x < mipW / 8; x++)
-                    {
-                        prevDc[0] = ProcessBlock(prevDc[0], s, dcLum, acLum, lq[0], true, l0);
-                        prevDc[1] = ProcessBlock(prevDc[1], s, dcChrom, acChrom, cq[1], false, c0);
-                        prevDc[2] = ProcessBlock(prevDc[2], s, dcChrom, acChrom, cq[2], false, c1);
+                for (int y = 0; y < mipH / 8; y++) {
+                    for (int x = 0; x < mipW / 8; x++) {
+                        prevDc[0] = ProcessBlock(prevDc[0], s, dcLumLookup, acLumLookup, lq, true, l0);
+                        prevDc[1] = ProcessBlock(prevDc[1], s, dcChromLookup, acChromLookup, cq + 64, false, c0);
+                        prevDc[2] = ProcessBlock(prevDc[2], s, dcChromLookup, acChromLookup, cq + 128, false, c1);
 
                         bool hasL1 = (hdr.layerInfos[3].hasReplacement == 0);
                         if (hasL1)
-                            prevDc[3] = ProcessBlock(prevDc[3], s, dcLum, acLum, lq[3], true, l1);
+                            prevDc[3] = ProcessBlock(prevDc[3], s, dcLumLookup, acLumLookup, lq + 192, true, l1);
 
-                        for (int r = 0; r < 8; r++)
-                        {
+                        for (int r = 0; r < 8; r++) {
                             if (y * 8 + r >= h) continue;
-                            for (int c = 0; c < 8; c++)
-                            {
+                            for (int c = 0; c < 8; c++) {
                                 if (x * 8 + c >= w) continue;
                                 int idx = r * 8 + c;
-
-                                int16_t alpha = 1;
-                                if (hasL1) alpha = l1[idx];
-
-                                auto color = YCbCrToColor32(l0[idx], alpha, c0[idx], c1[idx]);
+                                int16_t alpha = hasL1 ? l1[idx] : 255;
                                 int pIdx = ((y * 8 + r) * w + (x * 8 + c)) * 4;
-                                data[pIdx + 0] = color[0]; data[pIdx + 1] = color[1];
-                                data[pIdx + 2] = color[2]; data[pIdx + 3] = color[3];
+                                YCbCrToColor32(l0[idx], alpha, c0[idx], c1[idx], &data[pIdx]);
                             }
                         }
                     }
                 }
             }
 
-            bool Decompress(const Header& header, int mipLevel, const std::vector<uint8_t>& input, std::vector<uint8_t>& output, int& outW, int& outH)
-            {
+            bool Decompress(const Header& header, int mipLevel, const std::vector<uint8_t>& input, std::vector<uint8_t>& output, int& outW, int& outH) {
                 Initialize();
-                std::vector<float> lq[4], cq[4];
-                for (int i = 0; i < 4; i++)
-                {
+
+                int16_t lq[256], cq[256];
+                for (int i = 0; i < 4; i++) {
                     int q = header.layerInfos[i].quality;
                     if (q > 100) return false;
-                    lq[i] = lumQuantTables[q];
-                    cq[i] = chromQuantTables[q];
+                    memcpy(lq + i * 64, lumQuantTables[q], sizeof(int16_t) * 64);
+                    memcpy(cq + i * 64, chromQuantTables[q], sizeof(int16_t) * 64);
                 }
 
                 BitStream bs(input.data(), input.size());
-                int w = (int)(header.width / std::pow(2, mipLevel));
-                int h = (int)(header.height / std::pow(2, mipLevel));
+                int w = (int)(header.width / std::pow(2.0, (double)mipLevel));
+                int h = (int)(header.height / std::pow(2.0, (double)mipLevel));
                 if (w < 1) w = 1;
                 if (h < 1) h = 1;
                 outW = w; outH = h;
 
                 std::vector<uint8_t> data;
-                switch (header.compressionFormat)
-                {
+                switch (header.compressionFormat) {
                 case 0: DecompressFormat0(w, h, bs, lq, cq, data); break;
                 case 1: DecompressFormat1(w, h, bs, header, lq, data); break;
                 case 2: DecompressFormat2(w, h, bs, header, lq, cq, data); break;
                 default: return false;
                 }
 
-                output = data;
-                for (size_t i = 0; i < output.size(); i += 4)
-                {
+                output = std::move(data);
+                for (size_t i = 0; i < output.size(); i += 4) {
                     uint8_t r = output[i];
                     uint8_t b = output[i + 2];
                     output[i] = b;
@@ -440,8 +419,7 @@ namespace Tex
             }
         };
 
-        bool Decode(const Header& header, int mipLevel, const std::vector<uint8_t>& data, std::vector<uint8_t>& outRGBA, int& outW, int& outH)
-        {
+        bool Decode(const Header& header, int mipLevel, const std::vector<uint8_t>& data, std::vector<uint8_t>& outRGBA, int& outW, int& outH) {
             static Decoder decoder;
             return decoder.Decompress(header, mipLevel, data, outRGBA, outW, outH);
         }
