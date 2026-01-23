@@ -449,7 +449,7 @@ void M3Loader::FixMirroredBones(M3ModelData& model) {
 
         glm::mat4 localMatrix = bone.globalMatrix;
         if (bone.parentId >= 0 && bone.parentId < (int)model.bones.size()) {
-            localMatrix = bone.globalMatrix * model.bones[bone.parentId].inverseGlobalMatrix;
+            localMatrix = model.bones[bone.parentId].inverseGlobalMatrix * bone.globalMatrix;
         }
 
         float det = glm::determinant(glm::mat3(localMatrix));

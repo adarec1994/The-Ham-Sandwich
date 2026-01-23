@@ -293,20 +293,26 @@ void M3Render::precomputeBoneData() {
 
     effectiveBindGlobal.resize(numBones);
     inverseEffectiveBindGlobal.resize(numBones);
-    bindLocalScale.resize(numBones);
-    bindLocalRotation.resize(numBones);
-    bindLocalTranslation.resize(numBones);
+    bindLocalScale.resize(numBones, glm::vec3(1.0f));
+    bindLocalRotation.resize(numBones, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    bindLocalTranslation.resize(numBones, glm::vec3(0.0f));
+    boneAtOrigin.resize(numBones, false);
 
+    // Step 1: Compute effectiveBindGlobal (must be done in order since children depend on parents)
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
-        glm::vec3 globalPos = glm::vec3(bone.globalMatrix[3]);
-        bool boneAtOrigin = glm::length(globalPos) < 0.001f;
+        bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)numBones);
+        bool atOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+        boneAtOrigin[i] = atOrigin;
 
-        if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
-            glm::mat4 rotScale = bone.globalMatrix;
-            rotScale[3] = glm::vec4(0, 0, 0, 1);
+        if (atOrigin && !bone.tracks[6].keyframes.empty()) {
             glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
-            effectiveBindGlobal[i] = glm::translate(glm::mat4(1.0f), track6Pos) * rotScale;
+            glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
+            if (!isRootBone) {
+                effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
+            } else {
+                effectiveBindGlobal[i] = localT;
+            }
         } else {
             effectiveBindGlobal[i] = bone.globalMatrix;
         }
@@ -314,12 +320,13 @@ void M3Render::precomputeBoneData() {
         inverseEffectiveBindGlobal[i] = glm::inverse(effectiveBindGlobal[i]);
     }
 
+    // Step 2: Decompose bind local transforms
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
-        bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)numBones);
+        bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)numBones);
 
         glm::mat4 bindLocal;
-        if (isRoot) {
+        if (isRootBone) {
             bindLocal = effectiveBindGlobal[i];
         } else {
             bindLocal = inverseEffectiveBindGlobal[bone.parentId] * effectiveBindGlobal[i];
@@ -328,6 +335,7 @@ void M3Render::precomputeBoneData() {
         glm::vec3 skew;
         glm::vec4 perspective;
         glm::decompose(bindLocal, bindLocalScale[i], bindLocalRotation[i], bindLocalTranslation[i], skew, perspective);
+        bindLocalRotation[i] = glm::normalize(bindLocalRotation[i]);
     }
 }
 
@@ -402,31 +410,25 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     ComPtr<ID3D11Texture2D> tex;
     if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) return nullptr;
 
-    if (sContext) {
-        sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
-    }
-
-    D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MostDetailedMip = 0;
-    srvDesc.Texture2D.MipLevels = static_cast<UINT>(-1);
+    sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
 
     ComPtr<ID3D11ShaderResourceView> srv;
-    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvDesc, &srv))) return nullptr;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvd = {};
+    srvd.Format = td.Format;
+    srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvd.Texture2D.MostDetailedMip = 0;
+    srvd.Texture2D.MipLevels = (UINT)-1;
+    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvd, &srv))) return nullptr;
 
-    if (sContext) {
-        sContext->GenerateMips(srv.Get());
-    }
-
+    sContext->GenerateMips(srv.Get());
     return srv;
 }
 
 ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
     if (materialId >= materials.size()) return mFallbackWhiteSRV.Get();
     const auto& m = materials[materialId];
-    if (m.variants.empty()) return mFallbackWhiteSRV.Get();
     int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
+    if (v < 0 || v >= (int)m.variants.size()) return mFallbackWhiteSRV.Get();
     int idx = m.variants[v].textureIndexA;
     if (idx >= 0 && idx < (int)mTextureSRVs.size() && mTextureSRVs[idx]) {
         return mTextureSRVs[idx].Get();
@@ -602,55 +604,102 @@ float M3Render::getAnimationDuration() const {
 
 static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(1.0f);
+
+    if (track.keyframes.size() == 1) return track.keyframes[0].scale;
+
+    if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().scale;
+    if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().scale;
+
     size_t idx = 0;
-    for (size_t i = 0; i < track.keyframes.size(); ++i) {
-        if (track.keyframes[i].timestamp <= timeMs) idx = i;
-        else break;
+    for (size_t i = 0; i < track.keyframes.size() - 1; ++i) {
+        if (track.keyframes[i].timestamp <= timeMs && track.keyframes[i + 1].timestamp > timeMs) {
+            idx = i;
+            break;
+        }
     }
+
     const auto& prev = track.keyframes[idx];
-    if (idx + 1 >= track.keyframes.size()) return prev.scale;
     const auto& next = track.keyframes[idx + 1];
-    if (next.timestamp == prev.timestamp) return prev.scale;
-    float t = (timeMs - prev.timestamp) / (float)(next.timestamp - prev.timestamp);
-    return glm::mix(prev.scale, next.scale, glm::clamp(t, 0.0f, 1.0f));
+
+    float denom = (float)(next.timestamp - prev.timestamp);
+    if (denom <= 0.0f) return prev.scale;
+
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
+    return glm::mix(prev.scale, next.scale, t);
 }
 
 static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs) {
-    if (track.keyframes.empty()) return glm::quat(1, 0, 0, 0);
+    if (track.keyframes.empty()) return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    if (track.keyframes.size() == 1) return track.keyframes[0].rotation;
+
+    if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().rotation;
+    if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().rotation;
+
     size_t idx = 0;
-    for (size_t i = 0; i < track.keyframes.size(); ++i) {
-        if (track.keyframes[i].timestamp <= timeMs) idx = i;
-        else break;
+    for (size_t i = 0; i < track.keyframes.size() - 1; ++i) {
+        if (track.keyframes[i].timestamp <= timeMs && track.keyframes[i + 1].timestamp > timeMs) {
+            idx = i;
+            break;
+        }
     }
+
     const auto& prev = track.keyframes[idx];
-    if (idx + 1 >= track.keyframes.size()) return prev.rotation;
     const auto& next = track.keyframes[idx + 1];
-    if (next.timestamp == prev.timestamp) return prev.rotation;
-    float t = (timeMs - prev.timestamp) / (float)(next.timestamp - prev.timestamp);
-    return glm::slerp(prev.rotation, next.rotation, glm::clamp(t, 0.0f, 1.0f));
+
+    float denom = (float)(next.timestamp - prev.timestamp);
+    if (denom <= 0.0f) return prev.rotation;
+
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
+
+    glm::quat q0 = glm::normalize(prev.rotation);
+    glm::quat q1 = glm::normalize(next.rotation);
+
+    if (glm::dot(q0, q1) < 0.0f) {
+        q1 = -q1;
+    }
+
+    return glm::slerp(q0, q1, t);
 }
 
 static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs) {
     if (track.keyframes.empty()) return glm::vec3(0.0f);
+
+    if (track.keyframes.size() == 1) return track.keyframes[0].translation;
+
+    if (timeMs <= track.keyframes.front().timestamp) return track.keyframes.front().translation;
+    if (timeMs >= track.keyframes.back().timestamp) return track.keyframes.back().translation;
+
     size_t idx = 0;
-    for (size_t i = 0; i < track.keyframes.size(); ++i) {
-        if (track.keyframes[i].timestamp <= timeMs) idx = i;
-        else break;
+    for (size_t i = 0; i < track.keyframes.size() - 1; ++i) {
+        if (track.keyframes[i].timestamp <= timeMs && track.keyframes[i + 1].timestamp > timeMs) {
+            idx = i;
+            break;
+        }
     }
+
     const auto& prev = track.keyframes[idx];
-    if (idx + 1 >= track.keyframes.size()) return prev.translation;
     const auto& next = track.keyframes[idx + 1];
-    if (next.timestamp == prev.timestamp) return prev.translation;
-    float t = (timeMs - prev.timestamp) / (float)(next.timestamp - prev.timestamp);
-    return glm::mix(prev.translation, next.translation, glm::clamp(t, 0.0f, 1.0f));
+
+    float denom = (float)(next.timestamp - prev.timestamp);
+    if (denom <= 0.0f) return prev.translation;
+
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
+    return glm::mix(prev.translation, next.translation, t);
 }
 
 static XMMATRIX GlmToXM(const glm::mat4& m) {
+    // GLM is column-major: m[col][row]
+    // XMMATRIX constructor takes row-major order: (row0..., row1..., row2..., row3...)
+    // Extract each row from GLM's columns
     return XMMATRIX(
-        m[0][0], m[0][1], m[0][2], m[0][3],
-        m[1][0], m[1][1], m[1][2], m[1][3],
-        m[2][0], m[2][1], m[2][2], m[2][3],
-        m[3][0], m[3][1], m[3][2], m[3][3]
+        m[0][0], m[1][0], m[2][0], m[3][0],  // row 0
+        m[0][1], m[1][1], m[2][1], m[3][1],  // row 1
+        m[0][2], m[1][2], m[2][2], m[3][2],  // row 2
+        m[0][3], m[1][3], m[2][3], m[3][3]   // row 3
     );
 }
 
@@ -680,10 +729,12 @@ void M3Render::updateAnimation(float deltaTime) {
         const auto& bone = bones[i];
         bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)numBones);
 
+        // Start with bind local values as defaults
         glm::vec3 scale = bindLocalScale[i];
         glm::quat rotation = bindLocalRotation[i];
         glm::vec3 translation = bindLocalTranslation[i];
 
+        // Scale: track 0, 1, or 2
         for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 scale = interpolateScale(bone.tracks[t], currentTimeMs);
@@ -691,6 +742,7 @@ void M3Render::updateAnimation(float deltaTime) {
             }
         }
 
+        // Rotation: track 4 or 5
         for (int t = 4; t <= 5; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
                 rotation = interpolateRotation(bone.tracks[t], currentTimeMs);
@@ -698,21 +750,27 @@ void M3Render::updateAnimation(float deltaTime) {
             }
         }
 
-        if (!bone.tracks[6].keyframes.empty()) {
+        // Translation: track 6, but ONLY if boneAtOrigin
+        if (boneAtOrigin[i] && !bone.tracks[6].keyframes.empty()) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
 
-        glm::mat4 localTransform = glm::translate(glm::mat4(1.0f), translation) *
-                                   glm::mat4_cast(rotation) *
-                                   glm::scale(glm::mat4(1.0f), scale);
+        // Build local transform: T * R * S
+        glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+        glm::mat4 R = glm::mat4_cast(glm::normalize(rotation));
+        glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 localTransform = T * R * S;
 
+        // World transform: parent * local
         if (isRoot) {
             worldTransforms[i] = localTransform;
         } else {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
         }
 
-        boneMatrices[i] = GlmToXM(worldTransforms[i] * inverseEffectiveBindGlobal[i]);
+        // Skinning matrix: worldTransform * inverseBindGlobal
+        // Match GLB export: use inverse of ORIGINAL bone.globalMatrix
+        boneMatrices[i] = GlmToXM(worldTransforms[i] * glm::inverse(bone.globalMatrix));
     }
 }
 

@@ -131,6 +131,7 @@ private:
     std::vector<glm::vec3> bindLocalScale;
     std::vector<glm::quat> bindLocalRotation;
     std::vector<glm::vec3> bindLocalTranslation;
+    std::vector<bool> boneAtOrigin;
     std::vector<glm::mat4> worldTransforms;
     std::vector<XMMATRIX> boneMatrices;
     size_t mSkeletonVBSize = 0;
