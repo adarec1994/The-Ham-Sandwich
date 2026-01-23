@@ -3,6 +3,7 @@
 #include <vector>
 #include <cmath>
 #include <limits>
+#include <cstdio>
 #include <Windows.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -111,6 +112,12 @@ void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::v
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
     state.camera.MovementSpeed = std::max(5.0f, maxExtent * 0.5f);
+
+    printf("SnapCameraToModel: center=(%.2f, %.2f, %.2f), maxExtent=%.2f\n",
+           center.x, center.y, center.z, maxExtent);
+    printf("  Camera pos=(%.2f, %.2f, %.2f), front=(%.2f, %.2f, %.2f)\n",
+           state.camera.Position.x, state.camera.Position.y, state.camera.Position.z,
+           state.camera.Front.x, state.camera.Front.y, state.camera.Front.z);
 }
 
 void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale)
@@ -160,6 +167,9 @@ void scroll_callback(HWND hwnd, short delta, AppState* state)
     }
 }
 
+static bool gCameraActive = false;
+static POINT gLockPos = {0, 0};
+
 void UpdateCamera(HWND hwnd, AppState& state)
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -175,15 +185,39 @@ void UpdateCamera(HWND hwnd, AppState& state)
         UI_ContentBrowser::HideIfNotDocked();
     }
 
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Right))
+    bool wantCamera = ImGui::IsMouseDown(ImGuiMouseButton_Right) && !io.WantCaptureMouse;
+
+    if (wantCamera && !gCameraActive)
     {
+        gCameraActive = true;
         SetCapture(hwnd);
-        ShowCursor(FALSE);
 
-        ImVec2 mouse_delta = io.MouseDelta;
+        // Lock cursor at current position
+        GetCursorPos(&gLockPos);
 
-        state.camera.Yaw   += mouse_delta.x * state.camera.MouseSensitivity;
-        state.camera.Pitch -= mouse_delta.y * state.camera.MouseSensitivity;
+        while (ShowCursor(FALSE) >= 0);
+    }
+    else if (!wantCamera && gCameraActive)
+    {
+        gCameraActive = false;
+        ReleaseCapture();
+
+        while (ShowCursor(TRUE) < 0);
+    }
+
+    if (gCameraActive)
+    {
+        POINT currentPos;
+        GetCursorPos(&currentPos);
+
+        float deltaX = static_cast<float>(currentPos.x - gLockPos.x);
+        float deltaY = static_cast<float>(currentPos.y - gLockPos.y);
+
+        // Reset cursor to locked position
+        SetCursorPos(gLockPos.x, gLockPos.y);
+
+        state.camera.Yaw   += deltaX * state.camera.MouseSensitivity;
+        state.camera.Pitch -= deltaY * state.camera.MouseSensitivity;
 
         if (state.camera.Pitch > 89.0f) state.camera.Pitch = 89.0f;
         if (state.camera.Pitch < -89.0f) state.camera.Pitch = -89.0f;
@@ -204,10 +238,5 @@ void UpdateCamera(HWND hwnd, AppState& state)
         if (ImGui::IsKeyDown(ImGuiKey_D)) state.camera.Position += state.camera.Right * velocity;
         if (ImGui::IsKeyDown(ImGuiKey_Q)) state.camera.Position -= state.camera.Up * velocity;
         if (ImGui::IsKeyDown(ImGuiKey_E)) state.camera.Position += state.camera.Up * velocity;
-    }
-    else
-    {
-        ReleaseCapture();
-        ShowCursor(TRUE);
     }
 }

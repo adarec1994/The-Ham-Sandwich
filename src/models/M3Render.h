@@ -6,6 +6,8 @@
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <vector>
 #include <memory>
 
@@ -15,6 +17,7 @@ using namespace DirectX;
 class M3Render {
 public:
     static void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
+    static void InitSharedResources();
 
     M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly = false);
     ~M3Render();
@@ -91,15 +94,25 @@ public:
 private:
     static ID3D11Device* sDevice;
     static ID3D11DeviceContext* sContext;
+    static ComPtr<ID3D11VertexShader> sSharedVS;
+    static ComPtr<ID3D11PixelShader> sSharedPS;
+    static ComPtr<ID3D11InputLayout> sSharedLayout;
+    static ComPtr<ID3D11VertexShader> sSkeletonVS;
+    static ComPtr<ID3D11PixelShader> sSkeletonPS;
+    static ComPtr<ID3D11InputLayout> sSkeletonLayout;
+    static ComPtr<ID3D11SamplerState> sSharedSampler;
+    static ComPtr<ID3D11RasterizerState> sRasterState;
+    static ComPtr<ID3D11DepthStencilState> sDepthState;
+    static ComPtr<ID3D11BlendState> sBlendState;
+    static bool sShadersInitialized;
 
     ComPtr<ID3D11Buffer> mVertexBuffer;
     ComPtr<ID3D11Buffer> mIndexBuffer;
     ComPtr<ID3D11Buffer> mConstantBuffer;
     ComPtr<ID3D11Buffer> mBoneBuffer;
-    ComPtr<ID3D11VertexShader> mVertexShader;
-    ComPtr<ID3D11PixelShader> mPixelShader;
-    ComPtr<ID3D11InputLayout> mInputLayout;
-    ComPtr<ID3D11SamplerState> mSampler;
+    ComPtr<ID3D11Buffer> mSkeletonVB;
+    ComPtr<ID3D11Buffer> mSkeletonCB;
+    ComPtr<ID3D11ShaderResourceView> mFallbackWhiteSRV;
 
     std::vector<M3Submesh> submeshes;
     std::vector<M3Material> materials;
@@ -113,6 +126,15 @@ private:
     std::vector<uint8_t> submeshVisible;
     std::vector<int> submeshVariantOverride;
 
+    std::vector<glm::mat4> effectiveBindGlobal;
+    std::vector<glm::mat4> inverseEffectiveBindGlobal;
+    std::vector<glm::vec3> bindLocalScale;
+    std::vector<glm::quat> bindLocalRotation;
+    std::vector<glm::vec3> bindLocalTranslation;
+    std::vector<glm::mat4> worldTransforms;
+    std::vector<XMMATRIX> boneMatrices;
+    size_t mSkeletonVBSize = 0;
+
     std::string modelName;
     std::vector<M3SubmeshGroup> submeshGroups;
     int activeVariant = -1;
@@ -122,22 +144,13 @@ private:
     int playingAnimation = -1;
     float animationTime = 0.0f;
     bool animationPaused = false;
-    std::vector<XMMATRIX> boneMatrices;
 
-    ComPtr<ID3D11Buffer> mSkeletonVB;
-    ComPtr<ID3D11VertexShader> mSkeletonVS;
-    ComPtr<ID3D11PixelShader> mSkeletonPS;
-    ComPtr<ID3D11InputLayout> mSkeletonLayout;
-    ComPtr<ID3D11Buffer> mSkeletonCB;
-
-    ComPtr<ID3D11ShaderResourceView> mFallbackWhiteSRV;
     bool texturesLoaded = false;
     std::vector<std::string> pendingTexturePaths;
     size_t nextTextureToLoad = 0;
     ArchivePtr archiveRef;
 
-    void setupShader();
-    void setupSkeletonShader();
+    void precomputeBoneData();
     void loadTextures(const M3ModelData& data, const ArchivePtr& arc);
     ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path);
     ComPtr<ID3D11ShaderResourceView> createFallbackWhite();

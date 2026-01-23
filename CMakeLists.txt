@@ -89,6 +89,8 @@ add_library(imgui STATIC
         ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
 target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw glad)
@@ -98,7 +100,7 @@ target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
 add_definitions(-DLZMA_API_STATIC)
 
-add_executable(The_Ham_Sandwich
+add_executable(The_Ham_Sandwich WIN32
         src/main.cpp
         src/Archive.cpp
         src/Archive.h
@@ -295,7 +297,12 @@ target_include_directories(The_Ham_Sandwich PRIVATE
 target_link_libraries(The_Ham_Sandwich PRIVATE imgui glad glm zlibstatic liblzma stb_lib)
 
 if(WIN32)
-    target_link_libraries(The_Ham_Sandwich PRIVATE opengl32)
+    target_link_libraries(The_Ham_Sandwich PRIVATE
+            opengl32
+            d3d11
+            d3dcompiler
+            dxgi
+    )
 else()
     find_package(OpenGL REQUIRED)
     target_link_libraries(The_Ham_Sandwich PRIVATE OpenGL::GL)

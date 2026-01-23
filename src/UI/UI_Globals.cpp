@@ -1,14 +1,18 @@
+#define NOMINMAX
 #include "UI_Globals.h"
 #include "UI.h"
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
+#include <Windows.h>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <cfloat>
+#include <cstdio>
 
 glm::mat4 gViewMatrix = glm::mat4(1.0f);
 glm::mat4 gProjMatrix = glm::mat4(1.0f);
@@ -49,6 +53,7 @@ static std::vector<std::thread> gDumpThreads;
 static std::mutex gDumpMutex;
 
 extern void SnapCameraToLoaded(AppState& state);
+extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
 
 void StartLoadingModel(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& name)
 {
@@ -74,6 +79,8 @@ void ProcessModelLoading(AppState& state)
 
     if (!gModelLoadComplete) return;
 
+    printf("ProcessModelLoading: Model load complete!\n");
+
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
     gSelectedChunkIndex = -1;
@@ -82,15 +89,41 @@ void ProcessModelLoading(AppState& state)
 
     if (gLoadedModelData.success)
     {
+        printf("ProcessModelLoading: Creating M3Render...\n");
         gLoadedModel = std::make_shared<M3Render>(gLoadedModelData, gPendingModelArchive);
         gLoadedModel->setModelName(gLoadingModelName);
         state.m3Render = gLoadedModel;
         state.show_models_window = true;
 
-        SnapCameraToLoaded(state);
+        printf("ProcessModelLoading: Submesh count = %zu\n", gLoadedModel->getSubmeshCount());
+
+        const auto& verts = gLoadedModel->getVertices();
+        if (!verts.empty())
+        {
+            glm::vec3 minB(FLT_MAX);
+            glm::vec3 maxB(-FLT_MAX);
+            for (const auto& v : verts)
+            {
+                minB.x = std::min(minB.x, v.position.x);
+                minB.y = std::min(minB.y, v.position.y);
+                minB.z = std::min(minB.z, v.position.z);
+                maxB.x = std::max(maxB.x, v.position.x);
+                maxB.y = std::max(maxB.y, v.position.y);
+                maxB.z = std::max(maxB.z, v.position.z);
+            }
+            printf("ProcessModelLoading: Bounds min(%.1f, %.1f, %.1f) max(%.1f, %.1f, %.1f)\n",
+                      minB.x, minB.y, minB.z, maxB.x, maxB.y, maxB.z);
+            SnapCameraToModel(state, minB, maxB);
+        }
+        else
+        {
+            printf("ProcessModelLoading: No vertices!\n");
+            SnapCameraToModel(state, glm::vec3(-1.0f), glm::vec3(1.0f));
+        }
     }
     else
     {
+        printf("ProcessModelLoading: Load FAILED!\n");
         gLoadedModel = nullptr;
         state.m3Render = nullptr;
         state.show_models_window = false;

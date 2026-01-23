@@ -154,7 +154,7 @@ namespace UI_Details
         if (ImGui::CollapsingHeader("Textures"))
         {
             const auto& textures = render->getAllTextures();
-            const auto& srvTextures = render->getTextures();
+            const auto& srvTextures = render->getGLTextures();
             float thumbSize = 48.0f;
             float windowWidth = ImGui::GetContentRegionAvail().x;
             int columns = std::max(1, (int)(windowWidth / (thumbSize + 8.0f)));
@@ -163,7 +163,7 @@ namespace UI_Details
             {
                 const auto& tex = textures[i];
                 ImGui::PushID((int)i);
-                ID3D11ShaderResourceView* srv = (i < srvTextures.size()) ? srvTextures[i] : nullptr;
+                ID3D11ShaderResourceView* srv = (i < srvTextures.size()) ? srvTextures[i].Get() : nullptr;
 
                 if (srv != nullptr)
                 {
@@ -402,11 +402,11 @@ namespace UI_Details
 
         ImGui::Text("Tile: %d, %d", area->getTileX(), area->getTileY());
 
-        glm::vec3 offset = area->getWorldOffset();
+        auto offset = area->getWorldOffset();
         ImGui::Text("World Offset: %.1f, %.1f, %.1f", offset.x, offset.y, offset.z);
 
-        glm::vec3 minB = area->getMinBounds();
-        glm::vec3 maxB = area->getMaxBounds();
+        auto minB = area->getMinBounds();
+        auto maxB = area->getMaxBounds();
         ImGui::Text("Bounds Min: %.1f, %.1f, %.1f", minB.x, minB.y, minB.z);
         ImGui::Text("Bounds Max: %.1f, %.1f, %.1f", maxB.x, maxB.y, maxB.z);
 

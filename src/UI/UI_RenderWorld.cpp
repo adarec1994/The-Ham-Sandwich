@@ -12,6 +12,7 @@
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <cstdio>
 
 using Microsoft::WRL::ComPtr;
 
@@ -271,8 +272,24 @@ void HandleAreaPicking(AppState& state)
 
 void RenderAreas(const AppState& state, int display_w, int display_h)
 {
+    static int frameCount = 0;
+    frameCount++;
+
     if (display_w <= 0 || display_h <= 0) return;
-    if (!gContext) return;
+    if (!gContext) {
+        if (frameCount % 300 == 1) printf("RenderAreas: gContext is NULL!\n");
+        return;
+    }
+
+    // Set viewport
+    D3D11_VIEWPORT vp = {};
+    vp.Width = static_cast<float>(display_w);
+    vp.Height = static_cast<float>(display_h);
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    vp.TopLeftX = 0.0f;
+    vp.TopLeftY = 0.0f;
+    gContext->RSSetViewports(1, &vp);
 
     const glm::mat4 view = glm::lookAt(
         state.camera.Position,
@@ -295,12 +312,24 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
 
     if (gLoadedModel)
     {
+        if (frameCount % 300 == 1) {
+            printf("RenderAreas: Rendering model, submeshes=%zu\n", gLoadedModel->getSubmeshCount());
+            printf("  Camera pos: (%.2f, %.2f, %.2f)\n",
+                   state.camera.Position.x, state.camera.Position.y, state.camera.Position.z);
+            printf("  Camera front: (%.2f, %.2f, %.2f)\n",
+                   state.camera.Front.x, state.camera.Front.y, state.camera.Front.z);
+            printf("  Vertices: %zu, Indices: %zu\n",
+                   gLoadedModel->getVertices().size(), gLoadedModel->getIndices().size());
+        }
         gLoadedModel->updateAnimation(ImGui::GetIO().DeltaTime);
         gLoadedModel->render(dxView, dxProj);
         gLoadedModel->renderSkeleton(dxView, dxProj);
     }
     else if (!gLoadedAreas.empty())
     {
+        if (frameCount % 300 == 1) {
+            printf("RenderAreas: Rendering %zu areas\n", gLoadedAreas.size());
+        }
         for (const auto& area : gLoadedAreas)
         {
             if (area)
@@ -319,6 +348,12 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
         if (gSelectedAreaIndex >= 0 && gSelectedAreaIndex < static_cast<int>(gLoadedAreas.size()))
         {
             RenderAreaHighlight(gLoadedAreas[gSelectedAreaIndex], view, projection);
+        }
+    }
+    else
+    {
+        if (frameCount % 300 == 1) {
+            printf("RenderAreas: Nothing to render (no model, no areas)\n");
         }
     }
 }

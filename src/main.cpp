@@ -2,13 +2,17 @@
 #include "imgui_impl_win32.h"
 #include "imgui_impl_dx11.h"
 #include "UI/UI.h"
+#include "UI/UI_Globals.h"
 #include "resource.h"
 #include "Area/AreaFile.h"
+#include "Area/TerrainTexture.h"
+#include "models/M3Render.h"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <cstdio>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -118,6 +122,13 @@ static bool LoadCharacterIcon()
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    // Create console for debug output
+    AllocConsole();
+    FILE* fDummy;
+    freopen_s(&fDummy, "CONOUT$", "w", stdout);
+    freopen_s(&fDummy, "CONOUT$", "w", stderr);
+    printf("=== Ham Sandwich Debug Console ===\n");
+
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -156,10 +167,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui_ImplWin32_Init(gHwnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
+    printf("D3D11 Device: %p\n", (void*)gDevice);
+    printf("D3D11 Context: %p\n", (void*)gContext);
+
     AppState appState;
     gAppStatePtr = &appState;
+    appState.device = gDevice;
+    appState.context = gContext;
+
+    // Initialize all static device pointers for rendering subsystems
+    M3Render::SetDevice(gDevice, gContext);
+    AreaChunkRender::SetDevice(gDevice, gContext);
+    TerrainTexture::Manager::Instance().SetDevice(gDevice, gContext);
+    printf("All device pointers initialized\n");
+
     InitUI(appState);
     InitGrid(appState);
+    printf("UI and Grid initialized\n");
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
 
@@ -178,7 +202,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         if (!running)
             break;
 
-        UpdateCamera(gHwnd, appState);
+        ProcessModelLoading(appState);
+        ProcessAreaLoading(appState);
 
         RECT rect;
         GetClientRect(gHwnd, &rect);
@@ -204,13 +229,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         ID3D11RenderTargetView* rtvs[] = { gMainRenderTargetView.Get() };
         gContext->OMSetRenderTargets(1, rtvs, gDepthStencilView.Get());
 
-        // Render 3D content
-        RenderAreas(appState, display_w, display_h);
-
-        // Start ImGui frame
+        // Start ImGui frame first so input is available
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        // Update camera after ImGui processes input
+        UpdateCamera(gHwnd, appState);
+
+        // Render 3D content
+        RenderAreas(appState, display_w, display_h);
 
         RenderUI(appState);
 
