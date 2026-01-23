@@ -5,6 +5,7 @@
 #include "UI_Tables.h"
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
+#include "../Area/TerrainTexture.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../export/M3Export.h"
@@ -71,7 +72,7 @@ namespace UI_ContentBrowser {
 
     static std::vector<IFileSystemEntryPtr> sBreadcrumbPath;
 
-    // Export state
+
     static ArchivePtr sExportArchive = nullptr;
     static std::shared_ptr<FileEntry> sExportFileEntry = nullptr;
     static std::string sExportDefaultName;
@@ -483,6 +484,9 @@ namespace UI_ContentBrowser {
     {
         if (!arc || !fileEntry) return;
 
+        AreaChunkRender::SetDevice(gDevice, gContext);
+        TerrainTexture::Manager::Instance().SetDevice(gDevice, gContext);
+
         ResetAreaReferencePosition();
 
         gLoadedAreas.clear();
@@ -545,7 +549,7 @@ namespace UI_ContentBrowser {
         }
         else if (file.extension == ".tex")
         {
-            // Use already-loaded thumbnail if available (instant)
+
             if (file.textureID && file.texWidth > 0 && file.texHeight > 0)
             {
                 Tex::OpenTexPreviewFromSRV(state,
@@ -554,7 +558,7 @@ namespace UI_ContentBrowser {
             }
             else
             {
-                // Fallback to loading from disk
+
                 Tex::OpenTexPreviewFromEntry(state, file.archive, fileEntry);
             }
         }
@@ -761,7 +765,7 @@ namespace UI_ContentBrowser {
         if (!sAudioIcon)
             sAudioIcon = UI_Utils::LoadTexture("Assets/Icons/Audio.png");
 
-        if (ImGui::BeginChild("FileBrowser", ImVec2(0, 0), true))
+        if (ImGui::BeginChild("FileBrowser", ImVec2(0, 0), true, ImGuiWindowFlags_NoScrollbar))
         {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1,1,1,0.1f));
@@ -829,7 +833,9 @@ namespace UI_ContentBrowser {
 
             ImGui::Separator();
 
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            if (ImGui::BeginChild("FileBrowserGrid", ImVec2(0, 0), false))
+            {
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
 
             float windowVisibleX = ImGui::GetContentRegionAvail().x;
             float spacingX = 8.0f;
@@ -897,10 +903,10 @@ namespace UI_ContentBrowser {
                             HandleFileOpen(state, file);
                         }
 
-                        // Right-click context menu for .m3 files
+
                         if (file.extension == ".m3" && !file.isDirectory)
                         {
-                            // Style the popup - must be before BeginPopup
+
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
                             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
 
@@ -942,6 +948,88 @@ namespace UI_ContentBrowser {
                                     config.fileName = baseName + ".fbx";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
+                                }
+
+                                if (!canExport)
+                                {
+                                    ImGui::EndDisabled();
+                                    ImGui::Separator();
+                                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Export in progress...");
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
+                        if (file.extension == ".tex" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##texcontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                bool canExport = !sExportInProgress.load();
+
+                                if (!canExport)
+                                    ImGui::BeginDisabled();
+
+                                if (ImGui::MenuItem("Export as DDS"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".dds";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexDDSDlg", "Export DDS", ".dds", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as PNG"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".png";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexPNGDlg", "Export PNG", ".png", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as JPEG"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".jpg";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexJPEGDlg", "Export JPEG", ".jpg,.jpeg", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as TIFF"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".tiff";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexTIFFDlg", "Export TIFF", ".tiff,.tif", config);
                                 }
 
                                 if (!canExport)
@@ -1091,6 +1179,8 @@ namespace UI_ContentBrowser {
             {
                 ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No files found");
             }
+            }
+            ImGui::EndChild();
         }
         ImGui::EndChild();
     }
@@ -1130,7 +1220,7 @@ namespace UI_ContentBrowser {
         sCachedFiles.clear();
         sNeedsRefresh = true;
 
-        // Reset export state
+
         sExportArchive = nullptr;
         sExportFileEntry = nullptr;
         sExportDefaultName.clear();
@@ -1334,7 +1424,7 @@ namespace UI_ContentBrowser {
 
         ImGui::PopStyleVar();
 
-        // Export GLB dialog
+
         if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
@@ -1345,7 +1435,7 @@ namespace UI_ContentBrowser {
                 size_t extPos = fileName.rfind('.');
                 std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
-                // Load the model data
+
                 M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
                 if (!modelData.geometry.vertices.empty())
                 {
@@ -1396,7 +1486,7 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Export FBX dialog
+
         if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
@@ -1407,7 +1497,7 @@ namespace UI_ContentBrowser {
                 size_t extPos = fileName.rfind('.');
                 std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
-                // Load the model data
+
                 M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
                 if (!modelData.geometry.vertices.empty())
                 {
@@ -1458,7 +1548,59 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Show export result notification
+        if (ImGuiFileDialog::Instance()->Display("ExportTexDDSDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::DDS);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "DDS export successful!" : "DDS export failed";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexPNGDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::PNG);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "PNG export successful!" : "PNG export failed";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexJPEGDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::JPEG, 90);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "JPEG export successful!" : "JPEG export failed";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexTIFFDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::TIFF);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "TIFF export successful!" : "TIFF export failed";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+
         if (sShowExportResult)
         {
             M3Export::ExportResult result;
@@ -1472,7 +1614,7 @@ namespace UI_ContentBrowser {
             sShowExportResult = false;
         }
 
-        // Draw notification
+
         if (sNotificationTimer > 0.0f)
         {
             sNotificationTimer -= ImGui::GetIO().DeltaTime;
@@ -1501,7 +1643,7 @@ namespace UI_ContentBrowser {
             ImGui::PopStyleVar(2);
         }
 
-        // Show export progress
+
         if (sExportInProgress.load())
         {
             ImGuiViewport* vp = ImGui::GetMainViewport();

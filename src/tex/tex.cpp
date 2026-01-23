@@ -3,11 +3,12 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <fstream>
 #include "../UI/UI.h"
 #include "../Archive.h"
 #include "imgui.h"
+#include <stb_image_write.h>
 
-// Use global device from main application
 extern ID3D11Device* gDevice;
 extern ID3D11DeviceContext* gContext;
 
@@ -24,7 +25,7 @@ static bool read_bytes(const uint8_t* data, size_t size, size_t& off, void* dst,
 
 namespace Tex
 {
-    // Keep these for backward compatibility, but prefer using gDevice/gContext
+
     static ID3D11Device* sDevice = nullptr;
     static ID3D11DeviceContext* sContext = nullptr;
 
@@ -33,8 +34,6 @@ namespace Tex
         sDevice = device;
         sContext = context;
     }
-
-    // Helper to get the active device
     static ID3D11Device* GetDevice()
     {
         if (sDevice) return sDevice;
@@ -54,7 +53,6 @@ namespace Tex
         showG = true;
         showB = true;
         showA = true;
-        opaquePreview = false;
     }
 
     bool Header::read(const uint8_t* data, size_t size, size_t& offset)
@@ -842,7 +840,7 @@ namespace Tex
                         ps.showR ? 1.0f : 0.0f,
                         ps.showG ? 1.0f : 0.0f,
                         ps.showB ? 1.0f : 0.0f,
-                        ps.showA && !ps.opaquePreview ? 1.0f : 1.0f
+                        1.0f
                     );
 
                     ImGui::Image((ImTextureID)ps.textureSRV.Get(), drawSize, ImVec2(0,0), ImVec2(1,1), tint, ImVec4(0,0,0,0));
@@ -854,9 +852,6 @@ namespace Tex
                     ImGui::Checkbox("Green", &ps.showG);
                     ImGui::Checkbox("Blue", &ps.showB);
                     ImGui::Checkbox("Alpha", &ps.showA);
-
-                    ImGui::Dummy(ImVec2(0, 10));
-                    ImGui::Checkbox("Opaque Preview", &ps.opaquePreview);
 
                     ImGui::EndTable();
                 }
@@ -875,5 +870,138 @@ namespace Tex
         {
             ps.clear();
         }
+    }
+
+    static bool WriteDDS(const std::string& path, const uint8_t* rgba, int w, int h)
+    {
+        std::ofstream f(path, std::ios::binary);
+        if (!f) return false;
+        uint32_t magic = 0x20534444;
+        f.write((char*)&magic, 4);
+
+        uint32_t header[31] = {0};
+        header[0] = 124;
+        header[1] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x8;
+        header[2] = h;
+        header[3] = w;
+        header[4] = w * 4;
+        header[5] = 0;
+        header[6] = 1;
+        header[19] = 32;
+        header[20] = 0x41;
+        header[21] = 0;
+        header[22] = 32;
+        header[23] = 0x00FF0000;
+        header[24] = 0x0000FF00;
+        header[25] = 0x000000FF;
+        header[26] = 0xFF000000;
+
+        header[27] = 0x1000;
+
+        f.write((char*)header, 124);
+        std::vector<uint8_t> bgra(w * h * 4);
+        for (int i = 0; i < w * h; i++)
+        {
+            bgra[i * 4 + 0] = rgba[i * 4 + 2];
+            bgra[i * 4 + 1] = rgba[i * 4 + 1];
+            bgra[i * 4 + 2] = rgba[i * 4 + 0];
+            bgra[i * 4 + 3] = rgba[i * 4 + 3];
+        }
+        f.write((char*)bgra.data(), bgra.size());
+
+        return f.good();
+    }
+
+    static bool WriteTIFF(const std::string& path, const uint8_t* rgba, int w, int h)
+    {
+        std::ofstream f(path, std::ios::binary);
+        if (!f) return false;
+        uint32_t imageDataSize = w * h * 4;
+        uint32_t ifdOffset = 8;
+        uint32_t stripOffset = 8 + 2 + (12 * 14) + 4;
+        uint8_t header[8] = {
+            0x49, 0x49,
+            0x2A, 0x00,
+            0x08, 0x00, 0x00, 0x00
+        };
+        f.write((char*)header, 8);
+        uint16_t entryCount = 14;
+        f.write((char*)&entryCount, 2);
+
+        auto writeTag = [&](uint16_t tag, uint16_t type, uint32_t count, uint32_t value) {
+            f.write((char*)&tag, 2);
+            f.write((char*)&type, 2);
+            f.write((char*)&count, 4);
+            f.write((char*)&value, 4);
+        };
+
+        writeTag(256, 3, 1, w);
+        writeTag(257, 3, 1, h);
+        writeTag(258, 3, 4, stripOffset + imageDataSize);
+        writeTag(259, 3, 1, 1);
+        writeTag(262, 3, 1, 2);
+        writeTag(273, 4, 1, stripOffset);
+        writeTag(277, 3, 1, 4);
+        writeTag(278, 4, 1, h);
+        writeTag(279, 4, 1, imageDataSize);
+        writeTag(282, 5, 1, stripOffset + imageDataSize + 8);
+        writeTag(283, 5, 1, stripOffset + imageDataSize + 16);
+        writeTag(284, 3, 1, 1);
+        writeTag(296, 3, 1, 2);
+        writeTag(338, 3, 1, 1);
+        uint32_t nextIFD = 0;
+        f.write((char*)&nextIFD, 4);
+        f.write((char*)rgba, imageDataSize);
+        uint16_t bps[4] = {8, 8, 8, 8};
+        f.write((char*)bps, 8);
+        uint32_t xres[2] = {72, 1};
+        f.write((char*)xres, 8);
+        uint32_t yres[2] = {72, 1};
+        f.write((char*)yres, 8);
+
+        return f.good();
+    }
+
+    bool ExportTexture(const File& tf, const std::string& outputPath, ExportFormat format, int jpegQuality)
+    {
+        ImageRGBA img;
+        if (!tf.decodeLargestMipToRGBA(img))
+            return false;
+
+        if (img.rgba.empty() || img.width <= 0 || img.height <= 0)
+            return false;
+
+        switch (format)
+        {
+        case ExportFormat::DDS:
+            return WriteDDS(outputPath, img.rgba.data(), img.width, img.height);
+
+        case ExportFormat::PNG:
+            return stbi_write_png(outputPath.c_str(), img.width, img.height, 4, img.rgba.data(), img.width * 4) != 0;
+
+        case ExportFormat::JPEG:
+            return stbi_write_jpg(outputPath.c_str(), img.width, img.height, 4, img.rgba.data(), jpegQuality) != 0;
+
+        case ExportFormat::TIFF:
+            return WriteTIFF(outputPath, img.rgba.data(), img.width, img.height);
+
+        default:
+            return false;
+        }
+    }
+
+    bool ExportTextureFromArchive(const ArchivePtr& arc, const FileEntryPtr& entry, const std::string& outputPath, ExportFormat format, int jpegQuality)
+    {
+        if (!arc || !entry) return false;
+
+        std::vector<uint8_t> bytes;
+        arc->getFileData(entry, bytes);
+        if (bytes.empty()) return false;
+
+        File tf;
+        if (!tf.readFromMemory(bytes.data(), bytes.size()))
+            return false;
+
+        return ExportTexture(tf, outputPath, format, jpegQuality);
     }
 }

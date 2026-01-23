@@ -5,9 +5,9 @@ namespace TerrainShader
     const char* VertexSource = R"(
 cbuffer TerrainCB : register(b0)
 {
-    matrix view;
-    matrix projection;
-    matrix model;
+    row_major matrix view;
+    row_major matrix projection;
+    row_major matrix model;
     float4 texScale;
     float4 highlightColor;
     float4 baseColor;
@@ -54,7 +54,8 @@ PSInput main(VSInput input)
     output.texCoord = input.texCoord;
     output.blendCoord = input.texCoord;
 
-    output.position = mul(projection, mul(view, worldPos));
+    float4 viewPos = mul(view, worldPos);
+    output.position = mul(projection, viewPos);
 
     return output;
 }
@@ -63,9 +64,9 @@ PSInput main(VSInput input)
     const char* FragmentSource = R"(
 cbuffer TerrainCB : register(b0)
 {
-    matrix view;
-    matrix projection;
-    matrix model;
+    row_major matrix view;
+    row_major matrix projection;
+    row_major matrix model;
     float4 texScale;
     float4 highlightColor;
     float4 baseColor;

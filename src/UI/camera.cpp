@@ -3,7 +3,6 @@
 #include <vector>
 #include <cmath>
 #include <limits>
-#include <cstdio>
 #include <windows.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -26,13 +25,14 @@ void SnapCameraToLoaded(AppState& state)
     {
         if (!area) continue;
 
+        DirectX::XMFLOAT3 offset = area->getWorldOffset();
+
         for (const auto& chunk : area->getChunks())
         {
             if (chunk && chunk->isFullyInitialized())
             {
                 DirectX::XMFLOAT3 minB = chunk->getMinBounds();
                 DirectX::XMFLOAT3 maxB = chunk->getMaxBounds();
-                DirectX::XMFLOAT3 offset = area->getWorldOffset();
                 targetMin = glm::min(targetMin, glm::vec3(minB.x, minB.y, minB.z) + glm::vec3(offset.x, offset.y, offset.z));
                 targetMax = glm::max(targetMax, glm::vec3(maxB.x, maxB.y, maxB.z) + glm::vec3(offset.x, offset.y, offset.z));
                 found = true;
@@ -112,12 +112,6 @@ void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::v
     state.camera.Up    = glm::normalize(glm::cross(state.camera.Right, state.camera.Front));
 
     state.camera.MovementSpeed = std::max(5.0f, maxExtent * 0.5f);
-
-    printf("SnapCameraToModel: center=(%.2f, %.2f, %.2f), maxExtent=%.2f\n",
-           center.x, center.y, center.z, maxExtent);
-    printf("  Camera pos=(%.2f, %.2f, %.2f), front=(%.2f, %.2f, %.2f)\n",
-           state.camera.Position.x, state.camera.Position.y, state.camera.Position.z,
-           state.camera.Front.x, state.camera.Front.y, state.camera.Front.z);
 }
 
 void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale)

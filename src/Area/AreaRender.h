@@ -8,6 +8,9 @@ using Microsoft::WRL::ComPtr;
 class AreaRender
 {
 	TerrainShader::ShaderResources mResources;
+	ComPtr<ID3D11RasterizerState> mRasterState;
+	ComPtr<ID3D11DepthStencilState> mDepthState;
+	ComPtr<ID3D11BlendState> mBlendState;
 	bool mInitialized = false;
 
 public:

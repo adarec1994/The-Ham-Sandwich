@@ -435,28 +435,8 @@ PropLoadResult PropLoader::LoadPropData(Prop* prop)
         return result;
     }
 
-    std::vector<uint8_t> buffer;
-    if (!mArchive->getFileData(fileEntry, buffer) || buffer.empty())
-    {
-        result.success = false;
-        return result;
-    }
-
     M3ModelData* modelData = new M3ModelData();
-
-    if (buffer.size() >= 8)
-    {
-        uint32_t version = 0;
-        std::memcpy(&version, buffer.data() + 4, sizeof(version));
-        if (version >= 90 && version < 100)
-            *modelData = M3LoaderV95::Load(buffer);
-        else
-            *modelData = M3Loader::Load(buffer);
-    }
-    else
-    {
-        *modelData = M3Loader::Load(buffer);
-    }
+    *modelData = M3Loader::LoadFromFile(mArchive, fileEntry);
 
     if (!modelData->success)
     {
@@ -577,11 +557,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             continue;
         }
 
-
-        M3ModelData dataNoTex = *upload.modelData;
-        dataNoTex.textures.clear();
-
-        auto render = std::make_shared<M3Render>(dataNoTex, mArchive);
+        auto render = std::make_shared<M3Render>(*upload.modelData, mArchive);
         render->setModelName(upload.path);
 
         CacheModel(upload.path, render);

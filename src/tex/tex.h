@@ -109,8 +109,6 @@ namespace Tex
         bool showB = true;
         bool showA = true;
 
-        bool opaquePreview = false;
-
         void clear();
     };
 
@@ -119,4 +117,7 @@ namespace Tex
     void RenderTexPreviewWindow(PreviewState& ps);
 
     ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf);
+    enum class ExportFormat { DDS, PNG, JPEG, TIFF };
+    bool ExportTexture(const File& tf, const std::string& outputPath, ExportFormat format, int jpegQuality = 90);
+    bool ExportTextureFromArchive(const ArchivePtr& arc, const FileEntryPtr& entry, const std::string& outputPath, ExportFormat format, int jpegQuality = 90);
 }

@@ -455,15 +455,17 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        XMFLOAT3 pos;
-        pos.x = prop.position.x + mWorldOffset.x;
-        pos.y = prop.position.y + mWorldOffset.y;
-        pos.z = prop.position.z + mWorldOffset.z;
+        float x = prop.position.x + mWorldOffset.x;
+        float y = prop.position.y + mWorldOffset.y;
+        float z = prop.position.z + mWorldOffset.z;
 
-        XMMATRIX model = XMMatrixScaling(prop.scale, prop.scale, prop.scale);
+        XMMATRIX translation = XMMatrixTranslation(x, y, z);
+        XMMATRIX scale = XMMatrixScaling(prop.scale, prop.scale, prop.scale);
+
         XMVECTOR quat = XMVectorSet(prop.rotation.x, prop.rotation.y, prop.rotation.z, prop.rotation.w);
-        model = XMMatrixMultiply(model, XMMatrixRotationQuaternion(quat));
-        model = XMMatrixMultiply(model, XMMatrixTranslation(pos.x, pos.y, pos.z));
+        XMMATRIX rotation = XMMatrixRotationQuaternion(quat);
+
+        XMMATRIX model = scale * rotation * translation;
 
         prop.render->render(matView, matProj, model);
     }
