@@ -9,6 +9,10 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_WARN_DEPRECATED OFF)
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
 
+if(MINGW)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static")
+endif()
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -336,6 +340,7 @@ if(WIN32)
             d3d11
             d3dcompiler
             dxgi
+            dwmapi
     )
 else()
     find_package(OpenGL REQUIRED)
