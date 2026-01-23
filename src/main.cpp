@@ -11,28 +11,37 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
-#include <wrl/client.h>
 #include <cstdio>
+
+#ifdef _MSC_VER
+#include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#endif
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <Windows.h>
+#include <windows.h>
 #include <windowsx.h>
 
 #include "stb_image.h"
-
-using Microsoft::WRL::ComPtr;
 
 // Global D3D11 objects
 ID3D11Device* gDevice = nullptr;
 ID3D11DeviceContext* gContext = nullptr;
 HWND gHwnd = nullptr;
 
+#ifdef _MSC_VER
 static ComPtr<IDXGISwapChain> gSwapChain;
 static ComPtr<ID3D11RenderTargetView> gMainRenderTargetView;
 static ComPtr<ID3D11DepthStencilView> gDepthStencilView;
 static ComPtr<ID3D11Texture2D> gDepthStencilBuffer;
+#else
+static IDXGISwapChain* gSwapChain = nullptr;
+static ID3D11RenderTargetView* gMainRenderTargetView = nullptr;
+static ID3D11DepthStencilView* gDepthStencilView = nullptr;
+static ID3D11Texture2D* gDepthStencilBuffer = nullptr;
+#endif
 
 bool gCharacterIconLoaded = false;
 ID3D11ShaderResourceView* gCharacterIconTexture = nullptr;
@@ -125,8 +134,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     // Create console for debug output
     AllocConsole();
     FILE* fDummy;
+#ifdef _MSC_VER
     freopen_s(&fDummy, "CONOUT$", "w", stdout);
     freopen_s(&fDummy, "CONOUT$", "w", stderr);
+#else
+    fDummy = freopen("CONOUT$", "w", stdout);
+    fDummy = freopen("CONOUT$", "w", stderr);
+    (void)fDummy;
+#endif
     printf("=== Ham Sandwich Debug Console ===\n");
 
     WNDCLASSEXW wc = {};
@@ -222,12 +237,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         // Clear render target and depth buffer
         const float clearColor[4] = { clear_color.x, clear_color.y, clear_color.z, clear_color.w };
+#ifdef _MSC_VER
         gContext->ClearRenderTargetView(gMainRenderTargetView.Get(), clearColor);
         gContext->ClearDepthStencilView(gDepthStencilView.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-
-        // Set render targets
         ID3D11RenderTargetView* rtvs[] = { gMainRenderTargetView.Get() };
         gContext->OMSetRenderTargets(1, rtvs, gDepthStencilView.Get());
+#else
+        gContext->ClearRenderTargetView(gMainRenderTargetView, clearColor);
+        gContext->ClearDepthStencilView(gDepthStencilView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+        ID3D11RenderTargetView* rtvs[] = { gMainRenderTargetView };
+        gContext->OMSetRenderTargets(1, rtvs, gDepthStencilView);
+#endif
 
         // Start ImGui frame first so input is available
         ImGui_ImplDX11_NewFrame();
@@ -318,7 +338,11 @@ bool CreateDeviceD3D(HWND hWnd)
 
     gDevice = device;
     gContext = context;
+#ifdef _MSC_VER
     gSwapChain.Attach(swapChain);
+#else
+    gSwapChain = swapChain;
+#endif
 
     CreateRenderTarget();
     return true;
@@ -327,7 +351,11 @@ bool CreateDeviceD3D(HWND hWnd)
 void CleanupDeviceD3D()
 {
     CleanupRenderTarget();
+#ifdef _MSC_VER
     gSwapChain.Reset();
+#else
+    if (gSwapChain) { gSwapChain->Release(); gSwapChain = nullptr; }
+#endif
     if (gContext) { gContext->Release(); gContext = nullptr; }
     if (gDevice) { gDevice->Release(); gDevice = nullptr; }
 }
@@ -363,15 +391,25 @@ void CreateRenderTarget()
         dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         dsvDesc.Texture2D.MipSlice = 0;
 
+#ifdef _MSC_VER
         gDevice->CreateDepthStencilView(gDepthStencilBuffer.Get(), &dsvDesc, &gDepthStencilView);
+#else
+        gDevice->CreateDepthStencilView(gDepthStencilBuffer, &dsvDesc, &gDepthStencilView);
+#endif
     }
 }
 
 void CleanupRenderTarget()
 {
+#ifdef _MSC_VER
     gMainRenderTargetView.Reset();
     gDepthStencilView.Reset();
     gDepthStencilBuffer.Reset();
+#else
+    if (gMainRenderTargetView) { gMainRenderTargetView->Release(); gMainRenderTargetView = nullptr; }
+    if (gDepthStencilView) { gDepthStencilView->Release(); gDepthStencilView = nullptr; }
+    if (gDepthStencilBuffer) { gDepthStencilBuffer->Release(); gDepthStencilBuffer = nullptr; }
+#endif
 }
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)

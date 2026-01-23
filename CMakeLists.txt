@@ -80,8 +80,22 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+FetchContent_Declare(
+        directx_headers
+        GIT_REPOSITORY https://github.com/microsoft/DirectX-Headers.git
+        GIT_TAG        v1.614.1
+)
+FetchContent_MakeAvailable(directx_headers)
+
+FetchContent_Declare(
+        directx_math
+        GIT_REPOSITORY https://github.com/microsoft/DirectXMath.git
+        GIT_TAG        jan2022
+)
+FetchContent_MakeAvailable(directx_math)
+
 set(IMGUI_DIR ${imgui_SOURCE_DIR})
-add_library(imgui STATIC
+set(IMGUI_SOURCES
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_demo.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
@@ -89,9 +103,14 @@ add_library(imgui STATIC
         ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
 )
+if(WIN32)
+    list(APPEND IMGUI_SOURCES
+            ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+            ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
+    )
+endif()
+add_library(imgui STATIC ${IMGUI_SOURCES})
 target_include_directories(imgui PUBLIC ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw glad)
 
@@ -100,7 +119,7 @@ target_include_directories(stb_lib INTERFACE ${stb_SOURCE_DIR})
 
 add_definitions(-DLZMA_API_STATIC)
 
-add_executable(The_Ham_Sandwich WIN32
+set(HAM_SANDWICH_SOURCES
         src/main.cpp
         src/Archive.cpp
         src/Archive.h
@@ -268,8 +287,6 @@ add_executable(The_Ham_Sandwich WIN32
         src/export/TerrainExport.h
         src/export/M3Export.cpp
         src/export/M3Export.h
-        src/resource.h
-        src/resources.rc
         src/Area/Props.cpp
         src/Area/Props.h
         src/models/M3LoaderV95.cpp
@@ -282,6 +299,16 @@ add_executable(The_Ham_Sandwich WIN32
         src/UI/UI_ContentBrowser.h
 )
 
+if(WIN32)
+    list(APPEND HAM_SANDWICH_SOURCES
+            src/resource.h
+            src/resources.rc
+    )
+    add_executable(The_Ham_Sandwich WIN32 ${HAM_SANDWICH_SOURCES})
+else()
+    add_executable(The_Ham_Sandwich ${HAM_SANDWICH_SOURCES})
+endif()
+
 target_include_directories(The_Ham_Sandwich PRIVATE
         src/UI
         src/Settings
@@ -293,6 +320,13 @@ target_include_directories(The_Ham_Sandwich PRIVATE
         ${liblzma_SOURCE_DIR}/src/liblzma/api
         ${ImGuiFileDialog_SOURCE_DIR}
 )
+
+if(WIN32)
+    target_include_directories(The_Ham_Sandwich PRIVATE
+            ${directx_headers_SOURCE_DIR}/include/directx
+            ${directx_math_SOURCE_DIR}/Inc
+    )
+endif()
 
 target_link_libraries(The_Ham_Sandwich PRIVATE imgui glad glm zlibstatic liblzma stb_lib)
 

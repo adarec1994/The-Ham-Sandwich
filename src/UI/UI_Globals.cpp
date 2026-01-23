@@ -4,7 +4,7 @@
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
-#include <Windows.h>
+#include <windows.h>
 #include <iostream>
 #include <fstream>
 #include <filesystem>

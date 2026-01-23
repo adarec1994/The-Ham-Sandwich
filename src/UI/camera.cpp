@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <cstdio>
-#include <Windows.h>
+#include <windows.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
