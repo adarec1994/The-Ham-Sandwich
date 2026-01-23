@@ -7,9 +7,11 @@
 #include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
+#include "../export/M3Export.h"
 #include "../tex/tex.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <ImGuiFileDialog.h>
 #include <filesystem>
 #include <vector>
 #include <string>
@@ -55,6 +57,8 @@ namespace UI_ContentBrowser {
         ArchivePtr archive;
         bool isDirectory;
         ImTextureID textureID = 0;
+        int texWidth = 0;
+        int texHeight = 0;
         bool attemptedLoad = false;
     };
 
@@ -66,6 +70,21 @@ namespace UI_ContentBrowser {
     static std::unordered_set<const void*> sNodesToExpand;
 
     static std::vector<IFileSystemEntryPtr> sBreadcrumbPath;
+
+    // Export state
+    static ArchivePtr sExportArchive = nullptr;
+    static std::shared_ptr<FileEntry> sExportFileEntry = nullptr;
+    static std::string sExportDefaultName;
+    static std::atomic<bool> sExportInProgress{false};
+    static std::atomic<int> sExportProgress{0};
+    static std::atomic<int> sExportTotal{100};
+    static std::string sExportStatus;
+    static std::mutex sExportMutex;
+    static M3Export::ExportResult sExportResult;
+    static bool sShowExportResult = false;
+    static float sNotificationTimer = 0.0f;
+    static std::string sNotificationMessage;
+    static bool sNotificationSuccess = true;
 
     struct ThumbnailRequest {
         ArchivePtr archive;
@@ -291,6 +310,8 @@ namespace UI_ContentBrowser {
             {
                 ID3D11ShaderResourceView* srv = CreateTextureFromRGBA(res.data.data(), res.width, res.height);
                 file.textureID = reinterpret_cast<ImTextureID>(srv);
+                file.texWidth = res.width;
+                file.texHeight = res.height;
             }
         }
     }
@@ -524,7 +545,18 @@ namespace UI_ContentBrowser {
         }
         else if (file.extension == ".tex")
         {
-            Tex::OpenTexPreviewFromEntry(state, file.archive, fileEntry);
+            // Use already-loaded thumbnail if available (instant)
+            if (file.textureID && file.texWidth > 0 && file.texHeight > 0)
+            {
+                Tex::OpenTexPreviewFromSRV(state,
+                    reinterpret_cast<ID3D11ShaderResourceView*>(file.textureID),
+                    file.texWidth, file.texHeight, "Texture Preview");
+            }
+            else
+            {
+                // Fallback to loading from disk
+                Tex::OpenTexPreviewFromEntry(state, file.archive, fileEntry);
+            }
         }
         else if (file.extension == ".tbl")
         {
@@ -865,6 +897,66 @@ namespace UI_ContentBrowser {
                             HandleFileOpen(state, file);
                         }
 
+                        // Right-click context menu for .m3 files
+                        if (file.extension == ".m3" && !file.isDirectory)
+                        {
+                            // Style the popup - must be before BeginPopup
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##m3context"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                bool canExport = !sExportInProgress.load();
+
+                                if (!canExport)
+                                    ImGui::BeginDisabled();
+
+                                if (ImGui::MenuItem("Export as GLB"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".glb";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Export as FBX"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".fbx";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
+                                }
+
+                                if (!canExport)
+                                {
+                                    ImGui::EndDisabled();
+                                    ImGui::Separator();
+                                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Export in progress...");
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
                         bool isSelected = (sSelectedFileIndex == static_cast<int>(i));
                         bool isHovered = ImGui::IsItemHovered();
 
@@ -1037,6 +1129,13 @@ namespace UI_ContentBrowser {
 
         sCachedFiles.clear();
         sNeedsRefresh = true;
+
+        // Reset export state
+        sExportArchive = nullptr;
+        sExportFileEntry = nullptr;
+        sExportDefaultName.clear();
+        sExportInProgress = false;
+        sNotificationTimer = 0.0f;
     }
 
     void Draw(AppState& state)
@@ -1234,5 +1333,198 @@ namespace UI_ContentBrowser {
         ImGui::End();
 
         ImGui::PopStyleVar();
+
+        // Export GLB dialog
+        if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+                size_t extPos = fileName.rfind('.');
+                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
+
+                // Load the model data
+                M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
+                if (!modelData.geometry.vertices.empty())
+                {
+                    auto tempRender = std::make_unique<M3Render>(modelData, sExportArchive, false);
+
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting export...";
+
+                    M3Render* renderPtr = tempRender.release();
+                    ArchivePtr archiveCopy = sExportArchive;
+
+                    std::thread([renderPtr, archiveCopy, dirPath, exportName]() {
+                        M3Export::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.customName = exportName;
+                        settings.activeVariant = -1;
+                        settings.exportTextures = true;
+                        settings.exportAnimations = true;
+                        settings.exportSkeleton = true;
+
+                        auto result = M3Export::ExportToGLB(renderPtr, archiveCopy, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        delete renderPtr;
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult = result;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to load model for export";
+                    sNotificationTimer = 3.0f;
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Export FBX dialog
+        if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string fileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+                size_t extPos = fileName.rfind('.');
+                std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
+
+                // Load the model data
+                M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
+                if (!modelData.geometry.vertices.empty())
+                {
+                    auto tempRender = std::make_unique<M3Render>(modelData, sExportArchive, false);
+
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting export...";
+
+                    M3Render* renderPtr = tempRender.release();
+                    ArchivePtr archiveCopy = sExportArchive;
+
+                    std::thread([renderPtr, archiveCopy, dirPath, exportName]() {
+                        M3Export::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.customName = exportName;
+                        settings.activeVariant = -1;
+                        settings.exportTextures = true;
+                        settings.exportAnimations = true;
+                        settings.exportSkeleton = true;
+
+                        auto result = M3Export::ExportToFBX(renderPtr, archiveCopy, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        delete renderPtr;
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult = result;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to load model for export";
+                    sNotificationTimer = 3.0f;
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Show export result notification
+        if (sShowExportResult)
+        {
+            M3Export::ExportResult result;
+            {
+                std::lock_guard<std::mutex> lock(sExportMutex);
+                result = sExportResult;
+            }
+            sNotificationSuccess = result.success;
+            sNotificationMessage = result.success ? "Export successful!" : ("Export failed: " + result.errorMessage);
+            sNotificationTimer = 3.0f;
+            sShowExportResult = false;
+        }
+
+        // Draw notification
+        if (sNotificationTimer > 0.0f)
+        {
+            sNotificationTimer -= ImGui::GetIO().DeltaTime;
+            float alpha = std::min(1.0f, sNotificationTimer);
+
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 60.0f);
+
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+            ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+
+            ImGuiWindowFlags notifyFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                           ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+
+            if (ImGui::Begin("##ExportNotification", nullptr, notifyFlags))
+            {
+                if (sNotificationSuccess)
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+                else
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sNotificationMessage.c_str());
+            }
+            ImGui::End();
+
+            ImGui::PopStyleVar(2);
+        }
+
+        // Show export progress
+        if (sExportInProgress.load())
+        {
+            ImGuiViewport* vp = ImGui::GetMainViewport();
+            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
+
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowBgAlpha(0.95f);
+
+            ImGuiWindowFlags progressFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize;
+
+            if (ImGui::Begin("##ExportProgress", nullptr, progressFlags))
+            {
+                std::string status;
+                {
+                    std::lock_guard<std::mutex> lock(sExportMutex);
+                    status = sExportStatus;
+                }
+                ImGui::Text("Exporting...");
+                ImGui::Text("%s", status.c_str());
+                float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
+                ImGui::ProgressBar(progress, ImVec2(300, 20));
+            }
+            ImGui::End();
+        }
     }
 }

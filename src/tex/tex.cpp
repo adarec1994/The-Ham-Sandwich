@@ -3,10 +3,13 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
-#include <iostream>
 #include "../UI/UI.h"
 #include "../Archive.h"
 #include "imgui.h"
+
+// Use global device from main application
+extern ID3D11Device* gDevice;
+extern ID3D11DeviceContext* gContext;
 
 static inline uint32_t rd_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 static inline uint16_t rd_u16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
@@ -21,6 +24,7 @@ static bool read_bytes(const uint8_t* data, size_t size, size_t& off, void* dst,
 
 namespace Tex
 {
+    // Keep these for backward compatibility, but prefer using gDevice/gContext
     static ID3D11Device* sDevice = nullptr;
     static ID3D11DeviceContext* sContext = nullptr;
 
@@ -28,6 +32,13 @@ namespace Tex
     {
         sDevice = device;
         sContext = context;
+    }
+
+    // Helper to get the active device
+    static ID3D11Device* GetDevice()
+    {
+        if (sDevice) return sDevice;
+        return gDevice;
     }
 
     void PreviewState::clear()
@@ -642,7 +653,8 @@ namespace Tex
 
     ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf)
     {
-        if (!sDevice || tf.mipData.empty()) return nullptr;
+        ID3D11Device* device = GetDevice();
+        if (!device || tf.mipData.empty()) return nullptr;
 
         int w = tf.header.width;
         int h = tf.header.height;
@@ -679,7 +691,7 @@ namespace Tex
             initData.pSysMem = data.data();
             initData.SysMemPitch = rowPitch;
 
-            if (FAILED(sDevice->CreateTexture2D(&td, &initData, &tex))) return nullptr;
+            if (FAILED(device->CreateTexture2D(&td, &initData, &tex))) return nullptr;
         }
         else
         {
@@ -703,10 +715,10 @@ namespace Tex
             initData.pSysMem = img.rgba.data();
             initData.SysMemPitch = w * 4;
 
-            if (FAILED(sDevice->CreateTexture2D(&td, &initData, &tex))) return nullptr;
+            if (FAILED(device->CreateTexture2D(&td, &initData, &tex))) return nullptr;
         }
 
-        if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), nullptr, &srv))) return nullptr;
+        if (FAILED(device->CreateShaderResourceView(tex.Get(), nullptr, &srv))) return nullptr;
 
         return srv;
     }
@@ -723,16 +735,27 @@ namespace Tex
         state.texPreview->title = "Processing...";
         state.texPreview->ownsTexture = true;
 
-        if (!arc || !fileEntry) return false;
+        if (!arc || !fileEntry) {
+            state.texPreview->title = "Error: Invalid archive or file";
+            return false;
+        }
 
         std::vector<uint8_t> bytes;
         arc->getFileData(fileEntry, bytes);
 
-        if (bytes.empty()) return false;
+        if (bytes.empty()) {
+            state.texPreview->title = "Error: Could not read file data";
+            return false;
+        }
 
         File tf;
         if (!tf.readFromMemory(bytes.data(), bytes.size())) {
-            state.texPreview->title = "Error reading texture";
+            state.texPreview->title = "Error: Unsupported texture format";
+            return false;
+        }
+
+        if (!GetDevice()) {
+            state.texPreview->title = "Error: Graphics device not initialized";
             return false;
         }
 
@@ -744,7 +767,7 @@ namespace Tex
         if (state.texPreview->hasTexture) {
             state.texPreview->title = "Texture Preview";
         } else {
-            state.texPreview->title = "Error uploading texture";
+            state.texPreview->title = "Error: Failed to create texture";
         }
 
         return state.texPreview->hasTexture;
