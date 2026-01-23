@@ -196,6 +196,8 @@ private:
     std::unordered_map<std::string, FileEntryPtr> mFileCache;
     std::mutex mFileCacheMutex;
 
+    std::mutex mArchiveAccessMutex;  // Protects archive file reads
+
     std::atomic<size_t> mPendingCount{0};
 
     // Pre-decoded texture cache (in RAM, ready for instant GPU upload)

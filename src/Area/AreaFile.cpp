@@ -12,8 +12,19 @@
 #include <limits>
 #include <thread>
 #include <chrono>
+#include <cstdio>
 
 using namespace DirectX;
+
+static XMMATRIX GlmToXM(const glm::mat4& m)
+{
+    return XMMATRIX(
+        m[0][0], m[1][0], m[2][0], m[3][0],
+        m[0][1], m[1][1], m[2][1], m[3][1],
+        m[0][2], m[1][2], m[2][2], m[3][2],
+        m[0][3], m[1][3], m[2][3], m[3][3]
+    );
+}
 
 static std::string NormalizePropPath(const std::string& path)
 {
@@ -340,6 +351,11 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
     }
 }
 
+void AreaFile::renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk)
+{
+    render(context, GlmToXM(matView), GlmToXM(matProj), constantBuffer, selectedChunk);
+}
+
 bool AreaFile::loadProp(uint32_t uniqueID)
 {
     auto it = mPropLookup.find(uniqueID);
@@ -446,7 +462,7 @@ void AreaFile::loadPropsInView(const XMFLOAT3& cameraPos, float radius)
 
 void AreaFile::updatePropLoading()
 {
-    PropLoader::Instance().ProcessGPUUploads(10);
+    PropLoader::Instance().ProcessGPUUploads(100);
 }
 
 void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
@@ -455,20 +471,26 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        float x = prop.position.x + mWorldOffset.x;
-        float y = prop.position.y + mWorldOffset.y;
-        float z = prop.position.z + mWorldOffset.z;
+        glm::vec3 pos(
+            prop.position.x + mWorldOffset.x,
+            prop.position.y + mWorldOffset.y,
+            prop.position.z + mWorldOffset.z
+        );
 
-        XMMATRIX translation = XMMatrixTranslation(x, y, z);
-        XMMATRIX scale = XMMatrixScaling(prop.scale, prop.scale, prop.scale);
+        glm::mat4 glmModel = glm::mat4(1.0f);
+        glmModel = glm::translate(glmModel, pos);
+        glmModel = glmModel * glm::mat4_cast(prop.rotation);
+        glmModel = glm::scale(glmModel, glm::vec3(prop.scale));
 
-        XMVECTOR quat = XMVectorSet(prop.rotation.x, prop.rotation.y, prop.rotation.z, prop.rotation.w);
-        XMMATRIX rotation = XMMatrixRotationQuaternion(quat);
-
-        XMMATRIX model = scale * rotation * translation;
+        XMMATRIX model = GlmToXM(glmModel);
 
         prop.render->render(matView, matProj, model);
     }
+}
+
+void AreaFile::renderPropsGlm(const glm::mat4& matView, const glm::mat4& matProj)
+{
+    renderProps(GlmToXM(matView), GlmToXM(matProj));
 }
 
 const Prop* AreaFile::getPropByID(uint32_t uniqueID) const

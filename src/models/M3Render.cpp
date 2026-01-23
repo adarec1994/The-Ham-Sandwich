@@ -26,6 +26,8 @@ ComPtr<ID3D11RasterizerState> M3Render::sRasterState;
 ComPtr<ID3D11DepthStencilState> M3Render::sDepthState;
 ComPtr<ID3D11BlendState> M3Render::sBlendState;
 bool M3Render::sShadersInitialized = false;
+std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> M3Render::sTextureSRVCache;
+std::mutex M3Render::sTextureCacheMutex;
 
 const char* m3VertexHLSL = R"(
 cbuffer M3CB : register(b0) {
@@ -138,6 +140,15 @@ struct RenderVertex {
     glm::uvec4 boneIndices;
 };
 
+static XMMATRIX GlmToXM(const glm::mat4& m) {
+    return XMMATRIX(
+        m[0][0], m[1][0], m[2][0], m[3][0],
+        m[0][1], m[1][1], m[2][1], m[3][1],
+        m[0][2], m[1][2], m[2][2], m[3][2],
+        m[0][3], m[1][3], m[2][3], m[3][3]
+    );
+}
+
 void M3Render::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context) {
     sDevice = device;
     sContext = context;
@@ -209,9 +220,7 @@ void M3Render::InitSharedResources() {
     sShadersInitialized = true;
 }
 
-M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly) {
-    auto startTime = std::chrono::high_resolution_clock::now();
-
+M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly, bool skipTextures) {
     if (!data.success || !sDevice) return;
 
     InitSharedResources();
@@ -236,8 +245,20 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
     }
 
     precomputeBoneData();
-    loadTextures(data, arc);
+
     mFallbackWhiteSRV = createFallbackWhite();
+
+    if (skipTextures) {
+        mTextureSRVs.resize(data.textures.size(), nullptr);
+        for (const auto& tex : data.textures) {
+            pendingTexturePaths.push_back(tex.path);
+        }
+        archiveRef = arc;
+        texturesLoaded = false;
+    } else {
+        loadTextures(data, arc);
+        texturesLoaded = true;
+    }
 
     std::vector<RenderVertex> renderVerts;
     renderVerts.reserve(data.geometry.vertices.size());
@@ -279,10 +300,6 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
 
     cbd.ByteWidth = sizeof(SkeletonCB);
     sDevice->CreateBuffer(&cbd, nullptr, &mSkeletonCB);
-
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
-    printf("M3 model loaded in %lld ms\n", duration);
 }
 
 M3Render::~M3Render() = default;
@@ -343,7 +360,6 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     for (const auto& tex : data.textures) {
         mTextureSRVs.push_back(loadTextureFromArchive(arc, tex.path));
     }
-    texturesLoaded = true;
 }
 
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
@@ -375,6 +391,14 @@ ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
 ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty() || !sDevice) return nullptr;
 
+    {
+        std::lock_guard<std::mutex> lock(sTextureCacheMutex);
+        auto it = sTextureSRVCache.find(path);
+        if (it != sTextureSRVCache.end()) {
+            return it->second;
+        }
+    }
+
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring wp = conv.from_bytes(path);
     if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
@@ -392,34 +416,41 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     Tex::File tf;
     if (!tf.readFromMemory(buffer.data(), buffer.size())) return nullptr;
 
-    return Tex::CreateSRVFromFile(tf);
-}
+    Tex::ImageRGBA img;
+    if (!tf.decodeLargestMipToRGBA(img)) return nullptr;
 
-void M3Render::queueTexturesForLoading() {
-    if (texturesLoaded) return;
-    nextTextureToLoad = 0;
-}
+    D3D11_TEXTURE2D_DESC td = {};
+    td.Width = img.width;
+    td.Height = img.height;
+    td.MipLevels = 0;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
-bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
-    const ArchivePtr& useArc = arc ? arc : archiveRef;
+    ComPtr<ID3D11Texture2D> tex;
+    if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) return nullptr;
 
-    if (nextTextureToLoad >= pendingTexturePaths.size()) {
-        if (!texturesLoaded && !pendingTexturePaths.empty()) {
-            texturesLoaded = true;
-            printf("All %zu textures loaded\n", pendingTexturePaths.size());
-        }
-        return false;
+    sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
+
+    ComPtr<ID3D11ShaderResourceView> srv;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srvd = {};
+    srvd.Format = td.Format;
+    srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srvd.Texture2D.MostDetailedMip = 0;
+    srvd.Texture2D.MipLevels = (UINT)-1;
+    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvd, &srv))) return nullptr;
+
+    sContext->GenerateMips(srv.Get());
+
+    {
+        std::lock_guard<std::mutex> lock(sTextureCacheMutex);
+        sTextureSRVCache[path] = srv;
     }
 
-    const std::string& path = pendingTexturePaths[nextTextureToLoad];
-    auto srv = loadTextureFromArchive(useArc, path);
-
-    if (nextTextureToLoad < mTextureSRVs.size()) {
-        mTextureSRVs[nextTextureToLoad] = srv;
-    }
-
-    nextTextureToLoad++;
-    return nextTextureToLoad < pendingTexturePaths.size();
+    return srv;
 }
 
 ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
@@ -520,6 +551,10 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     }
 }
 
+void M3Render::renderGlm(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model) {
+    render(GlmToXM(view), GlmToXM(proj), GlmToXM(model));
+}
+
 size_t M3Render::getSubmeshCount() const { return submeshes.size(); }
 const M3Submesh& M3Render::getSubmesh(size_t i) const { return submeshes[i]; }
 size_t M3Render::getMaterialCount() const { return materials.size(); }
@@ -618,7 +653,8 @@ static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs) {
     const auto& next = track.keyframes[idx + 1];
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.scale;
-    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
     return glm::mix(prev.scale, next.scale, t);
 }
 
@@ -640,11 +676,14 @@ static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs
     const auto& next = track.keyframes[idx + 1];
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.rotation;
-    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
 
     glm::quat q0 = glm::normalize(prev.rotation);
     glm::quat q1 = glm::normalize(next.rotation);
-    if (glm::dot(q0, q1) < 0.0f) q1 = -q1;
+    if (glm::dot(q0, q1) < 0.0f) {
+        q1 = -q1;
+    }
     return glm::slerp(q0, q1, t);
 }
 
@@ -666,17 +705,9 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
     const auto& next = track.keyframes[idx + 1];
     float denom = (float)(next.timestamp - prev.timestamp);
     if (denom <= 0.0f) return prev.translation;
-    float t = glm::clamp((timeMs - prev.timestamp) / denom, 0.0f, 1.0f);
+    float t = (timeMs - prev.timestamp) / denom;
+    t = glm::clamp(t, 0.0f, 1.0f);
     return glm::mix(prev.translation, next.translation, t);
-}
-
-static XMMATRIX GlmToXM(const glm::mat4& m) {
-    return XMMATRIX(
-        m[0][0], m[1][0], m[2][0], m[3][0],
-        m[0][1], m[1][1], m[2][1], m[3][1],
-        m[0][2], m[1][2], m[2][2], m[3][2],
-        m[0][3], m[1][3], m[2][3], m[3][3]
-    );
 }
 
 void M3Render::updateAnimation(float deltaTime) {
@@ -890,4 +921,39 @@ int M3Render::rayPickBone(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) con
     }
 
     return closestBone;
+}
+
+void M3Render::queueTexturesForLoading() {
+    nextTextureToLoad = 0;
+}
+
+void M3Render::setTextureSRV(size_t index, ComPtr<ID3D11ShaderResourceView> srv) {
+    if (index < mTextureSRVs.size()) {
+        mTextureSRVs[index] = srv;
+    }
+}
+
+bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
+    if (nextTextureToLoad >= pendingTexturePaths.size()) {
+        texturesLoaded = true;
+        return false;
+    }
+
+    const ArchivePtr& archive = arc ? arc : archiveRef;
+    if (!archive) return false;
+
+    const std::string& path = pendingTexturePaths[nextTextureToLoad];
+    auto srv = loadTextureFromArchive(archive, path);
+
+    if (nextTextureToLoad < mTextureSRVs.size()) {
+        mTextureSRVs[nextTextureToLoad] = srv;
+    }
+
+    nextTextureToLoad++;
+
+    if (nextTextureToLoad >= pendingTexturePaths.size()) {
+        texturesLoaded = true;
+    }
+
+    return true;
 }

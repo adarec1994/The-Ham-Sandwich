@@ -285,26 +285,10 @@ FileEntryPtr PropLoader::FindPropFile(const std::string& path)
     if (!fileEntry)
     {
         std::string withExt = normalized;
-        if (withExt.find(".m3") == std::string::npos)
+        if (withExt.size() < 3 || withExt.substr(withExt.size() - 3) != ".m3")
         {
             withExt += ".m3";
             fileEntry = mArchive->findFileCached(withExt);
-        }
-    }
-
-    if (!fileEntry)
-    {
-        fileEntry = mArchive->findFileByNameCached(normalized);
-        if (!fileEntry)
-        {
-            size_t lastSlash = normalized.rfind('/');
-            if (lastSlash != std::string::npos)
-            {
-                std::string filename = normalized.substr(lastSlash + 1);
-                fileEntry = mArchive->findFileByNameCached(filename);
-                if (!fileEntry && filename.find(".m3") == std::string::npos)
-                    fileEntry = mArchive->findFileByNameCached(filename + ".m3");
-            }
         }
     }
 
@@ -435,8 +419,28 @@ PropLoadResult PropLoader::LoadPropData(Prop* prop)
         return result;
     }
 
+    std::vector<uint8_t> buffer;
+    if (!mArchive->getFileData(fileEntry, buffer) || buffer.empty())
+    {
+        result.success = false;
+        return result;
+    }
+
     M3ModelData* modelData = new M3ModelData();
-    *modelData = M3Loader::LoadFromFile(mArchive, fileEntry);
+
+    if (buffer.size() >= 8)
+    {
+        uint32_t version = 0;
+        std::memcpy(&version, buffer.data() + 4, sizeof(version));
+        if (version >= 90 && version < 100)
+            *modelData = M3LoaderV95::Load(buffer);
+        else
+            *modelData = M3Loader::Load(buffer);
+    }
+    else
+    {
+        *modelData = M3Loader::Load(buffer);
+    }
 
     if (!modelData->success)
     {
@@ -557,8 +561,9 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             continue;
         }
 
-        auto render = std::make_shared<M3Render>(*upload.modelData, mArchive);
+        auto render = std::make_shared<M3Render>(*upload.modelData, mArchive, true, true);
         render->setModelName(upload.path);
+        render->queueTexturesForLoading();
 
         CacheModel(upload.path, render);
 
@@ -569,11 +574,40 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         mPendingCount--;
         processed++;
     }
+
+    int texturesUploaded = 0;
+    int maxTexturesPerFrame = 50;
+
+    {
+        std::lock_guard<std::mutex> lock(mCacheMutex);
+        for (auto& [path, cached] : mModelCache)
+        {
+            if (cached.valid && cached.render)
+            {
+                while (cached.render->hasPendingTextures() && texturesUploaded < maxTexturesPerFrame)
+                {
+                    cached.render->uploadNextTexture(mArchive);
+                    texturesUploaded++;
+                }
+                if (texturesUploaded >= maxTexturesPerFrame)
+                    break;
+            }
+        }
+    }
 }
 
 bool PropLoader::HasPendingWork() const
 {
-    return mPendingCount > 0;
+    if (mPendingCount > 0)
+        return true;
+
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(mCacheMutex));
+    for (const auto& [path, cached] : mModelCache)
+    {
+        if (cached.valid && cached.render && cached.render->hasPendingTextures())
+            return true;
+    }
+    return false;
 }
 
 size_t PropLoader::GetPendingCount() const

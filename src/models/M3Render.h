@@ -10,6 +10,9 @@
 #include <glm/gtc/quaternion.hpp>
 #include <vector>
 #include <memory>
+#include <unordered_map>
+#include <mutex>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -19,11 +22,14 @@ public:
     static void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
     static void InitSharedResources();
 
-    M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly = false);
+    M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestLodOnly = false, bool skipTextures = false);
+
+    void setTextureSRV(size_t index, ComPtr<ID3D11ShaderResourceView> srv);
     ~M3Render();
 
     void render(const XMMATRIX& view, const XMMATRIX& proj);
     void render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model);
+    void renderGlm(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model);
 
     size_t getSubmeshCount() const;
     const M3Submesh& getSubmesh(size_t i) const;
@@ -60,7 +66,7 @@ public:
     const std::vector<M3SubmeshGroup>& getSubmeshGroups() const { return submeshGroups; }
 
     bool hasTexturesLoaded() const { return texturesLoaded; }
-    bool hasPendingTextures() const { return !pendingTexturePaths.empty(); }
+    bool hasPendingTextures() const { return nextTextureToLoad < pendingTexturePaths.size(); }
     size_t getPendingTextureCount() const { return pendingTexturePaths.size(); }
     void queueTexturesForLoading();
     bool uploadNextTexture(const ArchivePtr& arc);
@@ -105,6 +111,9 @@ private:
     static ComPtr<ID3D11DepthStencilState> sDepthState;
     static ComPtr<ID3D11BlendState> sBlendState;
     static bool sShadersInitialized;
+
+    static std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> sTextureSRVCache;
+    static std::mutex sTextureCacheMutex;
 
     ComPtr<ID3D11Buffer> mVertexBuffer;
     ComPtr<ID3D11Buffer> mIndexBuffer;

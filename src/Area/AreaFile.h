@@ -7,6 +7,7 @@
 #include <d3d11.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <glm/glm.hpp>
 #include "../Archive.h"
 #include "../Utils/BinStream.h"
 #include "Props.h"
@@ -302,7 +303,9 @@ public:
     [[nodiscard]] int getTileY() const { return mTileY; }
 
     void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk);
+    void renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk);
     void renderProps(const Matrix& matView, const Matrix& matProj);
+    void renderPropsGlm(const glm::mat4& matView, const glm::mat4& matProj);
     bool loadProp(uint32_t uniqueID);
     void loadAllProps();
     void loadAllPropsWithProgress(std::function<void(size_t, size_t)> progressCallback);
