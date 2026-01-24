@@ -12,6 +12,10 @@
 #include <cfloat>
 #include <set>
 #include <chrono>
+#include <iostream>
+
+// External function from Props.cpp to track texture failures
+extern void RecordTextureFailure(const std::string& modelPath, const std::string& texturePath);
 
 ID3D11Device* M3Render::sDevice = nullptr;
 ID3D11DeviceContext* M3Render::sContext = nullptr;
@@ -236,6 +240,17 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
     submeshVisible.assign(submeshes.size(), 1);
     submeshVariantOverride.assign(submeshes.size(), -1);
 
+    mBoundsMin = glm::vec3(FLT_MAX);
+    mBoundsMax = glm::vec3(-FLT_MAX);
+    for (const auto& v : data.geometry.vertices) {
+        mBoundsMin = glm::min(mBoundsMin, v.position);
+        mBoundsMax = glm::max(mBoundsMax, v.position);
+    }
+    if (mBoundsMin.x > mBoundsMax.x) {
+        mBoundsMin = glm::vec3(-1.0f);
+        mBoundsMax = glm::vec3(1.0f);
+    }
+
     std::set<uint8_t> uniqueGroups;
     for (const auto& sm : submeshes) {
         if (sm.groupId != 255) uniqueGroups.insert(sm.groupId);
@@ -304,6 +319,68 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
 
 M3Render::~M3Render() = default;
 
+void M3Render::getBounds(glm::vec3& outMin, glm::vec3& outMax) const {
+    outMin = mBoundsMin;
+    outMax = mBoundsMax;
+}
+
+static bool rayTriangleIntersectLocal(const glm::vec3& orig, const glm::vec3& dir,
+                                      const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
+                                      float& t) {
+    const float EPSILON = 1e-8f;
+    glm::vec3 e1 = v1 - v0;
+    glm::vec3 e2 = v2 - v0;
+    glm::vec3 h = glm::cross(dir, e2);
+    float a = glm::dot(e1, h);
+    if (a > -EPSILON && a < EPSILON) return false;
+    float f = 1.0f / a;
+    glm::vec3 s = orig - v0;
+    float u = f * glm::dot(s, h);
+    if (u < 0.0f || u > 1.0f) return false;
+    glm::vec3 q = glm::cross(s, e1);
+    float v = f * glm::dot(dir, q);
+    if (v < 0.0f || u + v > 1.0f) return false;
+    t = f * glm::dot(e2, q);
+    return t > EPSILON;
+}
+
+int M3Render::rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const {
+    glm::mat4 invModel = glm::inverse(modelMatrix);
+    glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(rayOrigin, 1.0f));
+    glm::vec3 localDir = glm::normalize(glm::vec3(invModel * glm::vec4(rayDir, 0.0f)));
+
+    float closestT = FLT_MAX;
+    int closestSubmesh = -1;
+    const auto& verts = geometry.vertices;
+    const auto& inds = geometry.indices;
+
+    for (size_t si = 0; si < submeshes.size(); ++si) {
+        if (si < submeshVisible.size() && submeshVisible[si] == 0) continue;
+        const auto& sm = submeshes[si];
+        for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3) {
+            uint32_t i0 = inds[sm.startIndex + i] + sm.startVertex;
+            uint32_t i1 = inds[sm.startIndex + i + 1] + sm.startVertex;
+            uint32_t i2 = inds[sm.startIndex + i + 2] + sm.startVertex;
+            if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
+            float t;
+            if (rayTriangleIntersectLocal(localOrigin, localDir, verts[i0].position, verts[i1].position, verts[i2].position, t)) {
+                if (t < closestT) {
+                    closestT = t;
+                    closestSubmesh = static_cast<int>(si);
+                }
+            }
+        }
+    }
+
+    if (closestSubmesh >= 0) {
+        glm::vec3 hitLocal = localOrigin + localDir * closestT;
+        glm::vec3 hitWorld = glm::vec3(modelMatrix * glm::vec4(hitLocal, 1.0f));
+        outDist = glm::length(hitWorld - rayOrigin);
+    }
+
+    return closestSubmesh;
+}
+
 void M3Render::precomputeBoneData() {
     size_t numBones = bones.size();
     if (numBones == 0) return;
@@ -358,14 +435,27 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     mTextureSRVs.clear();
     mTextureSRVs.reserve(data.textures.size());
     for (const auto& tex : data.textures) {
-        mTextureSRVs.push_back(loadTextureFromArchive(arc, tex.path));
+        auto srv = loadTextureFromArchive(arc, tex.path);
+        if (srv) {
+            mTextureSRVs.push_back(srv);
+        } else {
+            // Use fallback for failed textures
+            mTextureSRVs.push_back(mFallbackWhiteSRV);
+            try {
+                RecordTextureFailure(modelName, tex.path);
+            } catch (...) {
+                // RecordTextureFailure might not be linked
+            }
+        }
     }
 }
 
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     if (!sDevice) return nullptr;
 
-    uint32_t px = 0xFFFFFFFFu;
+    // Use a neutral gray (128, 128, 128) instead of pure white
+    // This makes missing textures less jarring
+    uint32_t px = 0xFF808080u;  // RGBA: gray with full alpha
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = 1;
     td.Height = 1;
@@ -388,9 +478,24 @@ ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     return srv;
 }
 
+// Helper function to normalize texture paths
+static std::wstring NormalizeTexturePath(const std::wstring& path) {
+    std::wstring result = path;
+    // Convert backslashes to forward slashes
+    std::replace(result.begin(), result.end(), L'\\', L'/');
+    // Remove leading slashes
+    while (!result.empty() && result[0] == L'/') {
+        result.erase(0, 1);
+    }
+    // Convert to lowercase
+    std::transform(result.begin(), result.end(), result.begin(), ::towlower);
+    return result;
+}
+
 ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty() || !sDevice) return nullptr;
 
+    // Check cache first
     {
         std::lock_guard<std::mutex> lock(sTextureCacheMutex);
         auto it = sTextureSRVCache.find(path);
@@ -400,24 +505,64 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     }
 
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
-    std::wstring wp = conv.from_bytes(path);
-    if (wp.find(L".tex") == std::wstring::npos) wp += L".tex";
-    auto entry = arc->getByPath(wp);
-    if (!entry) {
-        std::replace(wp.begin(), wp.end(), L'/', L'\\');
-        entry = arc->getByPath(wp);
+    std::wstring basePath = conv.from_bytes(path);
+
+    // Build list of path variations to try
+    std::vector<std::wstring> pathsToTry;
+
+    // Original path with .tex extension
+    std::wstring withTex = basePath;
+    if (withTex.find(L".tex") == std::wstring::npos) {
+        withTex += L".tex";
     }
-    if (!entry) return nullptr;
+    pathsToTry.push_back(withTex);
+
+    // Normalized (lowercase, forward slashes, no leading slash)
+    pathsToTry.push_back(NormalizeTexturePath(withTex));
+
+    // With backslashes
+    std::wstring withBackslash = withTex;
+    std::replace(withBackslash.begin(), withBackslash.end(), L'/', L'\\');
+    pathsToTry.push_back(withBackslash);
+
+    // Try without any path prefix (just filename)
+    size_t lastSlash = withTex.find_last_of(L"/\\");
+    if (lastSlash != std::wstring::npos) {
+        pathsToTry.push_back(withTex.substr(lastSlash + 1));
+    }
+
+    // Try with "art/" prefix if not present
+    std::wstring normalized = NormalizeTexturePath(withTex);
+    if (normalized.find(L"art/") != 0) {
+        pathsToTry.push_back(L"art/" + normalized);
+    }
+
+    // Try each path variation
+    auto entry = arc->getByPath(pathsToTry[0]);
+
+    for (size_t i = 1; i < pathsToTry.size() && !entry; ++i) {
+        entry = arc->getByPath(pathsToTry[i]);
+    }
+
+    if (!entry) {
+        return nullptr;
+    }
 
     std::vector<uint8_t> buffer;
     arc->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), buffer);
-    if (buffer.empty()) return nullptr;
+    if (buffer.empty()) {
+        return nullptr;
+    }
 
     Tex::File tf;
-    if (!tf.readFromMemory(buffer.data(), buffer.size())) return nullptr;
+    if (!tf.readFromMemory(buffer.data(), buffer.size())) {
+        return nullptr;
+    }
 
     Tex::ImageRGBA img;
-    if (!tf.decodeLargestMipToRGBA(img)) return nullptr;
+    if (!tf.decodeLargestMipToRGBA(img)) {
+        return nullptr;
+    }
 
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = img.width;
@@ -431,7 +576,9 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     td.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
     ComPtr<ID3D11Texture2D> tex;
-    if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) return nullptr;
+    if (FAILED(sDevice->CreateTexture2D(&td, nullptr, &tex))) {
+        return nullptr;
+    }
 
     sContext->UpdateSubresource(tex.Get(), 0, nullptr, img.rgba.data(), img.width * 4, 0);
 
@@ -441,7 +588,9 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srvd.Texture2D.MostDetailedMip = 0;
     srvd.Texture2D.MipLevels = (UINT)-1;
-    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvd, &srv))) return nullptr;
+    if (FAILED(sDevice->CreateShaderResourceView(tex.Get(), &srvd, &srv))) {
+        return nullptr;
+    }
 
     sContext->GenerateMips(srv.Get());
 
@@ -454,22 +603,64 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
 }
 
 ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, int variant) const {
-    if (materialId >= materials.size()) return mFallbackWhiteSRV.Get();
+    static std::set<std::string> printedWarnings;
+
+    auto warnOnce = [&](const std::string& msg) {
+        std::string key = modelName + "|" + msg;
+        if (printedWarnings.find(key) == printedWarnings.end()) {
+            printedWarnings.insert(key);
+            std::cerr << "[M3Render] " << modelName << " - " << msg << std::endl;
+        }
+    };
+
+    if (materialId >= materials.size()) {
+        warnOnce("material ID " + std::to_string(materialId) + " out of range (max " + std::to_string(materials.size()) + ")");
+        return mFallbackWhiteSRV.Get();
+    }
     const auto& m = materials[materialId];
+    if (m.variants.empty()) {
+        warnOnce("material " + std::to_string(materialId) + " has no variants");
+        return mFallbackWhiteSRV.Get();
+    }
+
+    // Try requested variant first
     int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
-    if (v < 0 || v >= (int)m.variants.size()) return mFallbackWhiteSRV.Get();
     int idx = m.variants[v].textureIndexA;
-    if (idx >= 0 && idx < (int)mTextureSRVs.size() && mTextureSRVs[idx]) {
-        return mTextureSRVs[idx].Get();
+
+    // If requested variant has no texture, try other variants
+    if (idx < 0) {
+        for (size_t i = 0; i < m.variants.size(); ++i) {
+            if (m.variants[i].textureIndexA >= 0) {
+                idx = m.variants[i].textureIndexA;
+                break;
+            }
+        }
+    }
+
+    if (idx >= 0 && idx < (int)mTextureSRVs.size()) {
+        if (mTextureSRVs[idx]) {
+            return mTextureSRVs[idx].Get();
+        }
+        warnOnce("texture slot " + std::to_string(idx) + " is null (not loaded yet?)");
+        return mFallbackWhiteSRV.Get();
+    }
+
+    // idx < 0 means no variant has a texture - this is normal for some materials
+    if (idx >= (int)mTextureSRVs.size()) {
+        warnOnce("texture index " + std::to_string(idx) + " out of range (max " + std::to_string(mTextureSRVs.size()) + ")");
     }
     return mFallbackWhiteSRV.Get();
 }
 
 void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj) {
-    render(view, proj, XMMatrixIdentity());
+    render(view, proj, XMMatrixIdentity(), -1);
 }
 
 void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model) {
+    render(view, proj, model, -1);
+}
+
+void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model, int overrideVariant) {
     if (!sSharedVS || !mVertexBuffer || !sContext) return;
 
     sContext->RSSetState(sRasterState.Get());
@@ -483,8 +674,8 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     cb.model = model;
     cb.view = view;
     cb.projection = proj;
-    cb.highlightColor = XMFLOAT3(0, 0, 0);
-    cb.highlightMix = 0.0f;
+    cb.highlightColor = XMFLOAT3(mHighlightR, mHighlightG, mHighlightB);
+    cb.highlightMix = mHighlightMix;
     cb.useSkinning = useSkinning ? 1 : 0;
 
     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -523,15 +714,25 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     for (size_t i = 0; i < submeshes.size(); ++i) {
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
         const auto& sm = submeshes[i];
+
+        // Determine variant: overrideVariant > submeshVariantOverride > materialSelectedVariant
         int variant = 0;
-        if (i < submeshVariantOverride.size() && submeshVariantOverride[i] >= 0) {
+        if (overrideVariant >= 0) {
+            variant = overrideVariant;
+        } else if (i < submeshVariantOverride.size() && submeshVariantOverride[i] >= 0) {
             variant = submeshVariantOverride[i];
         } else if (sm.materialID < materialSelectedVariant.size()) {
             variant = materialSelectedVariant[sm.materialID];
         }
 
         ID3D11ShaderResourceView* srv = resolveDiffuseTexture(sm.materialID, variant);
-        sContext->PSSetShaderResources(0, 1, &srv);
+        if (srv) {
+            sContext->PSSetShaderResources(0, 1, &srv);
+        } else {
+            // No texture available - unbind to avoid using stale texture
+            ID3D11ShaderResourceView* nullSRV = nullptr;
+            sContext->PSSetShaderResources(0, 1, &nullSRV);
+        }
 
         if ((int)i == selectedSubmesh) {
             cb.highlightColor = XMFLOAT3(0.3f, 1.0f, 0.3f);
@@ -774,6 +975,10 @@ void M3Render::updateAnimation(float deltaTime) {
 }
 
 void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj) {
+    renderSkeleton(view, proj, XMMatrixIdentity());
+}
+
+void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model) {
     if (!showSkeleton || bones.empty() || !sSkeletonVS || !sContext || !sDevice) return;
 
     struct SkeletonVertex {
@@ -786,7 +991,12 @@ void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj) {
 
     std::vector<glm::vec3> boneWorldPos(bones.size());
     for (size_t i = 0; i < bones.size(); ++i) {
-        boneWorldPos[i] = glm::vec3(effectiveBindGlobal[i][3]);
+        glm::vec3 localPos = glm::vec3(effectiveBindGlobal[i][3]);
+        XMVECTOR pos = XMVectorSet(localPos.x, localPos.y, localPos.z, 1.0f);
+        XMVECTOR transformed = XMVector4Transform(pos, model);
+        XMFLOAT4 result;
+        XMStoreFloat4(&result, transformed);
+        boneWorldPos[i] = glm::vec3(result.x, result.y, result.z);
     }
 
     for (size_t i = 0; i < bones.size(); ++i) {
@@ -946,7 +1156,19 @@ bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
     auto srv = loadTextureFromArchive(archive, path);
 
     if (nextTextureToLoad < mTextureSRVs.size()) {
-        mTextureSRVs[nextTextureToLoad] = srv;
+        if (srv) {
+            mTextureSRVs[nextTextureToLoad] = srv;
+        } else {
+            // Texture failed to load - use fallback and record the failure
+            mTextureSRVs[nextTextureToLoad] = mFallbackWhiteSRV;
+
+            // Record the failure for debugging (if the function exists)
+            try {
+                RecordTextureFailure(modelName, path);
+            } catch (...) {
+                // RecordTextureFailure might not be linked
+            }
+        }
     }
 
     nextTextureToLoad++;

@@ -337,7 +337,7 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
         cb.baseColor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
 
         if (c == selectedChunk)
-            cb.highlightColor = XMFLOAT4(1.0f, 1.0f, 0.0f, 0.5f);
+            cb.highlightColor = XMFLOAT4(0.2f, 1.0f, 0.2f, 0.8f);
         else
             cb.highlightColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -484,7 +484,9 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
 
         XMMATRIX model = GlmToXM(glmModel);
 
-        prop.render->render(matView, matProj, model);
+        // Pass unk7 as variant override (lower bits may be variant index)
+        int variant = prop.unk7 & 0xFF;
+        prop.render->render(matView, matProj, model, variant);
     }
 }
 

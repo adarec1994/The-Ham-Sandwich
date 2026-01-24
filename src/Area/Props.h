@@ -68,9 +68,129 @@ struct Prop
     int32_t unk12 = 0;
     std::string path;
 
-    bool loadRequested = false;
-    bool loaded = false;
+    std::atomic<bool> loadRequested{false};
+    std::atomic<bool> loaded{false};
     std::shared_ptr<M3Render> render;
+
+    Prop() = default;
+
+    Prop(const Prop& other)
+        : uniqueID(other.uniqueID)
+        , someID(other.someID)
+        , unk0(other.unk0)
+        , unk1(other.unk1)
+        , modelType(other.modelType)
+        , nameOffset(other.nameOffset)
+        , unkOffset(other.unkOffset)
+        , scale(other.scale)
+        , rotation(other.rotation)
+        , position(other.position)
+        , placement(other.placement)
+        , unk7(other.unk7)
+        , unk8(other.unk8)
+        , unk9(other.unk9)
+        , color0(other.color0)
+        , color1(other.color1)
+        , unk10(other.unk10)
+        , unk11(other.unk11)
+        , color2(other.color2)
+        , unk12(other.unk12)
+        , path(other.path)
+        , loadRequested(other.loadRequested.load(std::memory_order_relaxed))
+        , loaded(other.loaded.load(std::memory_order_relaxed))
+        , render(other.render)
+    {}
+
+    Prop(Prop&& other) noexcept
+        : uniqueID(other.uniqueID)
+        , someID(other.someID)
+        , unk0(other.unk0)
+        , unk1(other.unk1)
+        , modelType(other.modelType)
+        , nameOffset(other.nameOffset)
+        , unkOffset(other.unkOffset)
+        , scale(other.scale)
+        , rotation(other.rotation)
+        , position(other.position)
+        , placement(other.placement)
+        , unk7(other.unk7)
+        , unk8(other.unk8)
+        , unk9(other.unk9)
+        , color0(other.color0)
+        , color1(other.color1)
+        , unk10(other.unk10)
+        , unk11(other.unk11)
+        , color2(other.color2)
+        , unk12(other.unk12)
+        , path(std::move(other.path))
+        , loadRequested(other.loadRequested.load(std::memory_order_relaxed))
+        , loaded(other.loaded.load(std::memory_order_relaxed))
+        , render(std::move(other.render))
+    {}
+
+    Prop& operator=(const Prop& other)
+    {
+        if (this != &other)
+        {
+            uniqueID = other.uniqueID;
+            someID = other.someID;
+            unk0 = other.unk0;
+            unk1 = other.unk1;
+            modelType = other.modelType;
+            nameOffset = other.nameOffset;
+            unkOffset = other.unkOffset;
+            scale = other.scale;
+            rotation = other.rotation;
+            position = other.position;
+            placement = other.placement;
+            unk7 = other.unk7;
+            unk8 = other.unk8;
+            unk9 = other.unk9;
+            color0 = other.color0;
+            color1 = other.color1;
+            unk10 = other.unk10;
+            unk11 = other.unk11;
+            color2 = other.color2;
+            unk12 = other.unk12;
+            path = other.path;
+            loadRequested.store(other.loadRequested.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            loaded.store(other.loaded.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            render = other.render;
+        }
+        return *this;
+    }
+
+    Prop& operator=(Prop&& other) noexcept
+    {
+        if (this != &other)
+        {
+            uniqueID = other.uniqueID;
+            someID = other.someID;
+            unk0 = other.unk0;
+            unk1 = other.unk1;
+            modelType = other.modelType;
+            nameOffset = other.nameOffset;
+            unkOffset = other.unkOffset;
+            scale = other.scale;
+            rotation = other.rotation;
+            position = other.position;
+            placement = other.placement;
+            unk7 = other.unk7;
+            unk8 = other.unk8;
+            unk9 = other.unk9;
+            color0 = other.color0;
+            color1 = other.color1;
+            unk10 = other.unk10;
+            unk11 = other.unk11;
+            color2 = other.color2;
+            unk12 = other.unk12;
+            path = std::move(other.path);
+            loadRequested.store(other.loadRequested.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            loaded.store(other.loaded.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            render = std::move(other.render);
+        }
+        return *this;
+    }
 };
 
 struct CurtData
@@ -104,7 +224,6 @@ struct CachedModel
     bool valid = false;
 };
 
-// Pre-decoded texture ready for instant GPU upload
 struct DecodedTexture
 {
     std::vector<uint8_t> rgba;
@@ -114,7 +233,6 @@ struct DecodedTexture
     bool uploaded = false;
 };
 
-// Pre-parsed M3 model ready for instant GPU upload
 struct PreloadedModel
 {
     std::unique_ptr<M3ModelData> data;
@@ -145,21 +263,16 @@ public:
 
     void ClearCache();
 
-    // Texture preloading - call this to decode textures in background
     void PreloadTexture(const std::string& path);
     void PreloadTextures(const std::vector<std::string>& paths);
 
-    // Get pre-decoded texture (returns nullptr if not ready)
     DecodedTexture* GetDecodedTexture(const std::string& path);
 
-    // Upload a pre-decoded texture to GPU (fast, main thread only)
     unsigned int UploadDecodedTexture(const DecodedTexture& tex);
 
-    // M3 model preloading - loads and parses M3 files in background
     void PreloadModel(const std::string& path);
     void PreloadModels(const std::vector<std::string>& paths);
 
-    // Get pre-parsed model (returns nullptr if not ready)
     PreloadedModel* GetPreloadedModel(const std::string& path);
 
 private:
@@ -174,10 +287,11 @@ private:
     FileEntryPtr FindPropFile(const std::string& path);
 
     ArchivePtr mArchive;
+    mutable std::mutex mArchiveMutex;
 
     std::vector<std::thread> mWorkers;
     std::queue<Prop*> mWorkQueue;
-    std::mutex mWorkMutex;
+    mutable std::mutex mWorkMutex;
     std::condition_variable mWorkCondition;
     std::atomic<bool> mRunning{false};
 
@@ -188,34 +302,44 @@ private:
         std::string path;
     };
     std::queue<PendingUpload> mPendingUploads;
-    std::mutex mUploadMutex;
+    mutable std::mutex mUploadMutex;
 
     std::unordered_map<std::string, CachedModel> mModelCache;
-    std::mutex mCacheMutex;
+    mutable std::mutex mCacheMutex;
 
     std::unordered_map<std::string, FileEntryPtr> mFileCache;
-    std::mutex mFileCacheMutex;
+    mutable std::mutex mFileCacheMutex;
 
-    std::mutex mArchiveAccessMutex;  // Protects archive file reads
+    std::mutex mArchiveAccessMutex;
 
     std::atomic<size_t> mPendingCount{0};
 
-    // Pre-decoded texture cache (in RAM, ready for instant GPU upload)
     std::unordered_map<std::string, DecodedTexture> mDecodedTextures;
-    std::mutex mDecodedTextureMutex;
+    mutable std::mutex mDecodedTextureMutex;
 
-    // Pre-parsed M3 model cache (in RAM, ready for instant GPU upload)
     std::unordered_map<std::string, PreloadedModel> mPreloadedModels;
-    std::mutex mPreloadedModelMutex;
+    mutable std::mutex mPreloadedModelMutex;
 
-    // Texture decode queue (background workers decode these)
     std::queue<std::string> mTextureDecodeQueue;
-    std::mutex mTextureQueueMutex;
+    mutable std::mutex mTextureQueueMutex;
 
-    // Model preload queue (background workers parse these)
     std::queue<std::string> mModelPreloadQueue;
-    std::mutex mModelQueueMutex;
+    mutable std::mutex mModelQueueMutex;
 
     void DecodeTextureInWorker(const std::string& path);
     void PreloadModelInWorker(const std::string& path);
+
+    ArchivePtr getArchive() const
+    {
+        std::lock_guard<std::mutex> lock(mArchiveMutex);
+        return mArchive;
+    }
 };
+
+// Debug utility functions for prop texture loading
+// Call these from your main application to diagnose texture loading issues
+void PrintPropTextureDebugSummary();
+void ResetPropTextureDebugCounters();
+void SetPropTextureDebugEnabled(bool enabled);
+void PrintFailedTextures();
+void RecordTextureFailure(const std::string& modelPath, const std::string& texturePath);

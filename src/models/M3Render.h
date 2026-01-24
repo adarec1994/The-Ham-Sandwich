@@ -29,6 +29,7 @@ public:
 
     void render(const XMMATRIX& view, const XMMATRIX& proj);
     void render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model);
+    void render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model, int overrideVariant);
     void renderGlm(const glm::mat4& view, const glm::mat4& proj, const glm::mat4& model);
 
     size_t getSubmeshCount() const;
@@ -77,10 +78,16 @@ public:
     void setShowSkeleton(bool show) { showSkeleton = show; }
     bool getShowSkeleton() const { return showSkeleton; }
     void renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj);
+    void renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model);
 
     void setSelectedSubmesh(int idx) { selectedSubmesh = idx; }
     int getSelectedSubmesh() const { return selectedSubmesh; }
     int rayPickSubmesh(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const;
+
+    void setHighlightColor(float r, float g, float b, float mix) { mHighlightR = r; mHighlightG = g; mHighlightB = b; mHighlightMix = mix; }
+
+    void getBounds(glm::vec3& outMin, glm::vec3& outMax) const;
+    int rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const;
 
     void setSelectedBone(int idx) { selectedBone = idx; }
     int getSelectedBone() const { return selectedBone; }
@@ -154,6 +161,14 @@ private:
     int playingAnimation = -1;
     float animationTime = 0.0f;
     bool animationPaused = false;
+
+    float mHighlightR = 0.0f;
+    float mHighlightG = 0.0f;
+    float mHighlightB = 0.0f;
+    float mHighlightMix = 0.0f;
+
+    glm::vec3 mBoundsMin{0.0f};
+    glm::vec3 mBoundsMax{0.0f};
 
     bool texturesLoaded = false;
     std::vector<std::string> pendingTexturePaths;

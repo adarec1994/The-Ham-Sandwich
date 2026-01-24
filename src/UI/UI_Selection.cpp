@@ -1,6 +1,8 @@
 #include "UI_Selection.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
+#include "../Area/Props.h"
+#include "../models/M3Render.h"
 
 #include <limits>
 #include <string>
@@ -9,6 +11,7 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <DirectXMath.h>
 
 #include <imgui.h>
@@ -16,8 +19,11 @@
 
 extern HWND gHwnd;
 
-static bool RayIntersectsBox(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
-                             const glm::vec3& boxMin, const glm::vec3& boxMax, float& tOut)
+uint32_t gSelectedPropID = 0;
+int gSelectedPropAreaIndex = -1;
+
+static bool RayIntersectsAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
+                              const glm::vec3& boxMin, const glm::vec3& boxMax, float& tOut)
 {
     float tMin = -std::numeric_limits<float>::max();
     float tMax = std::numeric_limits<float>::max();
@@ -107,8 +113,61 @@ void CheckAreaSelection(AppState& state)
     const glm::vec3 rayDir = glm::normalize(rayEnd - rayStart);
 
     float closestDist = std::numeric_limits<float>::max();
+    uint32_t hitPropID = 0;
+    int hitPropAreaIdx = -1;
+
+    if (gShowProps)
+    {
+        for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
+        {
+            const auto& area = gLoadedAreas[areaIdx];
+            if (!area) continue;
+
+            const auto dxWorldOffset = area->getWorldOffset();
+            const glm::vec3 worldOffset(dxWorldOffset.x, dxWorldOffset.y, dxWorldOffset.z);
+
+            const auto& props = area->getProps();
+            for (size_t i = 0; i < props.size(); ++i)
+            {
+                const Prop& prop = props[i];
+                if (!prop.loaded || !prop.render) continue;
+
+                glm::vec3 propPos = prop.position + worldOffset;
+
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, propPos);
+                modelMatrix = modelMatrix * glm::mat4_cast(prop.rotation);
+                modelMatrix = glm::scale(modelMatrix, glm::vec3(prop.scale));
+
+                float dist = 0.0f;
+                int hitSubmesh = prop.render->rayPick(rayStart, rayDir, modelMatrix, dist);
+
+                if (hitSubmesh >= 0 && dist < closestDist)
+                {
+                    closestDist = dist;
+                    hitPropID = prop.uniqueID;
+                    hitPropAreaIdx = static_cast<int>(areaIdx);
+                }
+            }
+        }
+    }
+
+    if (hitPropID != 0)
+    {
+        gSelectedPropID = hitPropID;
+        gSelectedPropAreaIndex = hitPropAreaIdx;
+        gSelectedAreaIndex = hitPropAreaIdx;
+        gSelectedChunk = nullptr;
+        gSelectedChunkIndex = -1;
+        return;
+    }
+
+    gSelectedPropID = 0;
+    gSelectedPropAreaIndex = -1;
+
     int hitAreaIdx = -1;
     std::string hitAreaName;
+    closestDist = std::numeric_limits<float>::max();
 
     for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
     {
@@ -130,7 +189,7 @@ void CheckAreaSelection(AppState& state)
         const glm::vec3 areaWorldMax = localMax + worldOffset;
 
         float dist = 0.0f;
-        if (RayIntersectsBox(rayStart, rayDir, areaWorldMin, areaWorldMax, dist))
+        if (RayIntersectsAABB(rayStart, rayDir, areaWorldMin, areaWorldMax, dist))
         {
             if (dist < closestDist)
             {
@@ -162,5 +221,50 @@ void CheckAreaSelection(AppState& state)
                 }
             }
         }
+    }
+}
+
+void ClearPropSelection()
+{
+    gSelectedPropID = 0;
+    gSelectedPropAreaIndex = -1;
+}
+
+bool IsPropSelected(uint32_t uniqueID)
+{
+    return gSelectedPropID != 0 && gSelectedPropID == uniqueID;
+}
+
+const Prop* GetSelectedProp()
+{
+    if (gSelectedPropID == 0) return nullptr;
+    if (gSelectedPropAreaIndex < 0 || gSelectedPropAreaIndex >= static_cast<int>(gLoadedAreas.size()))
+        return nullptr;
+
+    const auto& area = gLoadedAreas[gSelectedPropAreaIndex];
+    if (!area) return nullptr;
+
+    return area->getPropByID(gSelectedPropID);
+}
+
+void HandleGlobalEscape(AppState& state)
+{
+    if (!ImGui::IsKeyPressed(ImGuiKey_Escape))
+        return;
+
+    if (gSelectedPropID != 0)
+    {
+        ClearPropSelection();
+    }
+    else if (gSelectedAreaIndex >= 0)
+    {
+        gSelectedAreaIndex = -1;
+        gSelectedChunk = nullptr;
+        gSelectedChunkIndex = -1;
+    }
+    else if (state.m3Render)
+    {
+        state.m3Render->setSelectedBone(-1);
+        state.m3Render->setSelectedSubmesh(-1);
     }
 }

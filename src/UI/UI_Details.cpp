@@ -2,8 +2,10 @@
 #include "UI_Globals.h"
 #include "UI_Outliner.h"
 #include "UI_ContentBrowser.h"
+#include "UI_Selection.h"
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
+#include "../Area/Props.h"
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
 #include "../tex/tex.h"
@@ -17,12 +19,10 @@ namespace UI_Details
 {
     void Reset()
     {
-        // Nothing to reset currently
     }
 
-    static void DrawM3Details(AppState& state)
+    static void DrawM3DetailsForRender(AppState& state, M3Render* render)
     {
-        M3Render* render = state.m3Render.get();
         if (!render) return;
 
         size_t submeshCount = render->getSubmeshCount();
@@ -215,8 +215,7 @@ namespace UI_Details
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
 
                 char label[128];
-                snprintf(label, sizeof(label), "[%d] %s", bone.id, bone.name.c_str());
-
+                snprintf(label, sizeof(label), "[%zu] %s", i, bone.name.c_str());
                 if (ImGui::Selectable(label, isSelected))
                     render->setSelectedBone(isSelected ? -1 : (int)i);
 
@@ -269,10 +268,26 @@ namespace UI_Details
         }
     }
 
+    static void DrawM3Details(AppState& state)
+    {
+        DrawM3DetailsForRender(state, state.m3Render.get());
+    }
 
     static void DrawAnimationPlayback(AppState& state)
     {
-        M3Render* render = state.m3Render.get();
+        M3Render* render = nullptr;
+
+        if (gLoadedModel)
+        {
+            render = state.m3Render.get();
+        }
+        else if (gSelectedPropID != 0)
+        {
+            const Prop* prop = GetSelectedProp();
+            if (prop && prop->render)
+                render = prop->render.get();
+        }
+
         if (!render || !render->isAnimationPlaying())
             return;
 
@@ -320,11 +335,75 @@ namespace UI_Details
             render->stopAnimation();
     }
 
+    static void DrawPropDetails(AppState& state)
+    {
+        const Prop* prop = GetSelectedProp();
+        if (!prop) return;
+
+        size_t lastSlash = prop->path.find_last_of("/\\");
+        std::string filename = (lastSlash != std::string::npos) ? prop->path.substr(lastSlash + 1) : prop->path;
+
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", filename.c_str());
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("%s", prop->path.c_str());
+            ImGui::EndTooltip();
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::Text("Position: %.2f, %.2f, %.2f", prop->position.x, prop->position.y, prop->position.z);
+            ImGui::Text("Scale: %.3f", prop->scale);
+            ImGui::Text("Rotation: %.2f, %.2f, %.2f, %.2f", prop->rotation.x, prop->rotation.y, prop->rotation.z, prop->rotation.w);
+        }
+
+        if (ImGui::CollapsingHeader("Prop Data"))
+        {
+            ImGui::Text("Unique ID: %u", prop->uniqueID);
+            ImGui::Text("unk7 (variant): %d (0x%X)", prop->unk7, prop->unk7);
+
+            ImVec4 c0(prop->color0.r / 255.0f, prop->color0.g / 255.0f, prop->color0.b / 255.0f, prop->color0.a / 255.0f);
+            ImVec4 c1(prop->color1.r / 255.0f, prop->color1.g / 255.0f, prop->color1.b / 255.0f, prop->color1.a / 255.0f);
+            ImVec4 c2(prop->color2.r / 255.0f, prop->color2.g / 255.0f, prop->color2.b / 255.0f, prop->color2.a / 255.0f);
+
+            ImGui::ColorButton("##c0", c0, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
+            ImGui::SameLine();
+            ImGui::Text("Color0");
+
+            ImGui::ColorButton("##c1", c1, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
+            ImGui::SameLine();
+            ImGui::Text("Color1");
+
+            ImGui::ColorButton("##c2", c2, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
+            ImGui::SameLine();
+            ImGui::Text("Color2");
+        }
+
+        if (prop->render)
+        {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Model settings (affects all instances)");
+            ImGui::Separator();
+            DrawM3DetailsForRender(state, prop->render.get());
+        }
+    }
+
     static void DrawAreaSelectionDetails(AppState& state)
     {
+        if (gSelectedPropID != 0)
+        {
+            DrawPropDetails(state);
+            return;
+        }
+
         if (gSelectedAreaIndex < 0 || gSelectedAreaIndex >= static_cast<int>(gLoadedAreas.size()))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Select an item in the Outliner");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Click terrain or prop to select");
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Press ESC to deselect");
             return;
         }
 
@@ -334,6 +413,9 @@ namespace UI_Details
             ImGui::Text("Invalid area");
             return;
         }
+
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Terrain");
+        ImGui::Separator();
 
         ImGui::Text("Tile: %d, %d", area->getTileX(), area->getTileY());
 
@@ -363,15 +445,7 @@ namespace UI_Details
 
     void Draw(AppState& state)
     {
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::GetIO().WantCaptureKeyboard)
-        {
-            if (state.m3Render)
-            {
-                state.m3Render->setSelectedBone(-1);
-                state.m3Render->setSelectedSubmesh(-1);
-            }
-            gSelectedAreaIndex = -1;
-        }
+        HandleGlobalEscape(state);
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
