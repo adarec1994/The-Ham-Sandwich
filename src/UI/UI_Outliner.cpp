@@ -1,8 +1,11 @@
 #include "UI_Outliner.h"
 #include "UI_Globals.h"
+#include "UI_Selection.h"
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
+#include "../Skybox/Sky_Manager.h"
+
 #include <imgui.h>
 #include <vector>
 #include <string>
@@ -10,23 +13,8 @@
 
 namespace UI_Outliner
 {
-    static int sSelectedIndex = -1;
     static float sWindowHeight = 300.0f;
     static float sSidebarWidth = 300.0f;
-    static std::vector<std::string> sCachedNames;
-    static bool sNeedsRefresh = true;
-
-    struct OutlinerEntry
-    {
-        std::string name;
-        int areaIndex;
-        int propIndex;
-        bool isArea;
-        bool isProp;
-        bool isM3;
-    };
-
-    static std::vector<OutlinerEntry> sEntries;
 
     static std::string ExtractFilename(const std::string& path)
     {
@@ -36,67 +24,17 @@ namespace UI_Outliner
         return path;
     }
 
-    static void RefreshEntries()
+    static std::string WideToNarrow(const std::wstring& ws)
     {
-        sEntries.clear();
-
-        if (gLoadedModel)
-        {
-            OutlinerEntry entry;
-            entry.name = ExtractFilename(gLoadedModel->getModelName());
-            entry.areaIndex = -1;
-            entry.propIndex = -1;
-            entry.isArea = false;
-            entry.isProp = false;
-            entry.isM3 = true;
-            sEntries.push_back(entry);
-        }
-        else if (!gLoadedAreas.empty())
-        {
-            for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
-            {
-                const auto& area = gLoadedAreas[areaIdx];
-                if (!area) continue;
-
-                OutlinerEntry areaEntry;
-                areaEntry.name = "Area_" + std::to_string(area->getTileX()) + "_" + std::to_string(area->getTileY());
-                areaEntry.areaIndex = static_cast<int>(areaIdx);
-                areaEntry.propIndex = -1;
-                areaEntry.isArea = true;
-                areaEntry.isProp = false;
-                areaEntry.isM3 = false;
-                sEntries.push_back(areaEntry);
-
-                const auto& props = area->getProps();
-                for (size_t propIdx = 0; propIdx < props.size(); ++propIdx)
-                {
-                    const auto& prop = props[propIdx];
-                    OutlinerEntry propEntry;
-                    propEntry.name = ExtractFilename(prop.path);
-                    if (propEntry.name.empty())
-                        propEntry.name = "Prop_" + std::to_string(prop.uniqueID);
-                    propEntry.areaIndex = static_cast<int>(areaIdx);
-                    propEntry.propIndex = static_cast<int>(propIdx);
-                    propEntry.isArea = false;
-                    propEntry.isProp = true;
-                    propEntry.isM3 = false;
-                    sEntries.push_back(propEntry);
-                }
-            }
-        }
-
-        sNeedsRefresh = false;
+        std::string s;
+        s.reserve(ws.size());
+        for (wchar_t wc : ws) s += static_cast<char>(wc);
+        return s;
     }
 
     void Reset()
     {
-        sSelectedIndex = -1;
-        sEntries.clear();
-        sNeedsRefresh = true;
     }
-
-    int GetSelectedIndex() { return sSelectedIndex; }
-    void SetSelectedIndex(int index) { sSelectedIndex = index; }
 
     float GetWindowHeight() { return sWindowHeight; }
     void SetWindowHeight(float height) { sWindowHeight = height; }
@@ -104,155 +42,210 @@ namespace UI_Outliner
     void SetSidebarWidth(float width) { sSidebarWidth = width; }
 
     void Draw(AppState& state)
-{
-    static size_t sLastAreaCount = 0;
-    static size_t sLastPropCount = 0;
-    static bool sLastHadModel = false;
-
-    size_t currentPropCount = 0;
-    for (const auto& area : gLoadedAreas)
     {
-        if (area) currentPropCount += area->getProps().size();
-    }
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    bool hasModel = (gLoadedModel != nullptr);
+        if (sSidebarWidth < 200.0f) sSidebarWidth = 200.0f;
+        if (sSidebarWidth > viewport->Size.x - 50.0f) sSidebarWidth = viewport->Size.x - 50.0f;
 
-    if (gLoadedAreas.size() != sLastAreaCount ||
-        currentPropCount != sLastPropCount ||
-        hasModel != sLastHadModel)
-    {
-        sNeedsRefresh = true;
-        sLastAreaCount = gLoadedAreas.size();
-        sLastPropCount = currentPropCount;
-        sLastHadModel = hasModel;
-    }
+        float startX = viewport->Pos.x + viewport->Size.x - sSidebarWidth;
+        float startY = viewport->Pos.y;
 
-    if (sNeedsRefresh)
-        RefreshEntries();
+        ImGui::SetNextWindowPos(ImVec2(startX, startY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(sSidebarWidth, sWindowHeight), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.95f);
 
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-    if (sSidebarWidth < 200.0f) sSidebarWidth = 200.0f;
-    if (sSidebarWidth > viewport->Size.x - 50.0f) sSidebarWidth = viewport->Size.x - 50.0f;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
-    float startX = viewport->Pos.x + viewport->Size.x - sSidebarWidth;
-    float startY = viewport->Pos.y;
-
-    ImGui::SetNextWindowPos(ImVec2(startX, startY), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(sSidebarWidth, sWindowHeight), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.95f);
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-
-    if (ImGui::Begin("Outliner", nullptr, flags))
-    {
-        ImVec2 cursorPos = ImGui::GetCursorScreenPos();
-        ImGui::SetCursorScreenPos(ImVec2(startX, startY));
-
-        ImGui::InvisibleButton("##OutlinerResizeW", ImVec2(5.0f, sWindowHeight));
-        if (ImGui::IsItemActive())
+        if (ImGui::Begin("Outliner", nullptr, flags))
         {
-            sSidebarWidth -= ImGui::GetIO().MouseDelta.x;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        }
-        ImGui::SetCursorScreenPos(cursorPos);
+            ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(ImVec2(startX, startY));
 
-        ImGui::BeginChild("##OutlinerScroll", ImVec2(0, 0), false);
-
-        if (sEntries.empty())
-        {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No content loaded");
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "Open Content Browser");
-            ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "to load files");
-        }
-        else
-        {
-            ImVec2 availSize = ImGui::GetContentRegionAvail();
-            availSize.y -= 5.0f;
-
-            if (ImGui::BeginChild("OutlinerList", ImVec2(0, availSize.y), false))
+            ImGui::InvisibleButton("##OutlinerResizeW", ImVec2(5.0f, sWindowHeight));
+            if (ImGui::IsItemActive())
             {
-                ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(sEntries.size()));
+                sSidebarWidth -= ImGui::GetIO().MouseDelta.x;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            }
+            ImGui::SetCursorScreenPos(cursorPos);
 
-                while (clipper.Step())
+            ImGui::BeginChild("##OutlinerScroll", ImVec2(0, -5.0f), false);
+
+            if (gLoadedModel)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                ImGui::Text("%s", ExtractFilename(gLoadedModel->getModelName()).c_str());
+                ImGui::PopStyleColor();
+            }
+            else if (!gLoadedAreas.empty())
+            {
+                auto& skyMgr = Sky::Manager::Instance();
+
+                if (!skyMgr.isLoading())
                 {
-                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
+                    size_t skyCount = skyMgr.getSkyboxM3Count();
+                    auto skyPaths = skyMgr.getSkyModelPaths();
+
+                    if (skyCount > 0)
                     {
-                        const auto& entry = sEntries[i];
-
-                        ImGui::PushID(i);
-
-                        ImVec4 color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-                        if (entry.isArea)
-                            color = ImVec4(0.4f, 0.8f, 1.0f, 1.0f);
-                        else if (entry.isProp)
-                            color = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
-                        else if (entry.isM3)
-                            color = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
-
-                        bool isSelected = (sSelectedIndex == i);
-
-                        if (entry.isProp)
-                        {
-                            ImGui::Indent(20.0f);
-                        }
-
-                        ImGui::PushStyleColor(ImGuiCol_Text, color);
-
-                        if (ImGui::Selectable(entry.name.c_str(), isSelected))
-                        {
-                            sSelectedIndex = i;
-                            if (entry.isArea)
-                            {
-                                gSelectedAreaIndex = entry.areaIndex;
-                            }
-                        }
-
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+                        bool skyOpen = ImGui::TreeNodeEx("Sky Models", ImGuiTreeNodeFlags_DefaultOpen);
                         ImGui::PopStyleColor();
 
-                        if (entry.isProp)
+                        if (skyOpen)
                         {
-                            ImGui::Unindent(20.0f);
-                        }
+                            for (size_t i = 0; i < skyCount; i++)
+                            {
+                                ImGui::PushID(static_cast<int>(i) + 10000);
 
-                        ImGui::PopID();
+                                std::string path = (i < skyPaths.size()) ? WideToNarrow(skyPaths[i]) : "";
+                                std::string name = ExtractFilename(path);
+                                if (name.empty())
+                                    name = "SkyModel_" + std::to_string(i);
+
+                                bool isSelected = IsSkyModelSelected(static_cast<int>(i));
+
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+                                if (ImGui::Selectable(name.c_str(), isSelected))
+                                {
+                                    SelectSkyModel(static_cast<int>(i));
+                                }
+                                ImGui::PopStyleColor();
+
+                                if (ImGui::IsItemHovered() && !path.empty())
+                                {
+                                    ImGui::BeginTooltip();
+                                    ImGui::Text("%s", path.c_str());
+                                    ImGui::EndTooltip();
+                                }
+
+                                ImGui::PopID();
+                            }
+                            ImGui::TreePop();
+                        }
                     }
                 }
-                clipper.End();
+
+                for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
+                {
+                    const auto& area = gLoadedAreas[areaIdx];
+                    if (!area) continue;
+
+                    ImGui::PushID(static_cast<int>(areaIdx));
+
+                    std::string areaName = "Area_" + std::to_string(area->getTileX()) + "_" + std::to_string(area->getTileY());
+                    bool areaSelected = (gSelectedAreaIndex == static_cast<int>(areaIdx) && gSelectedPropID == 0 && gSelectedSkyModelIndex < 0);
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.8f, 1.0f, 1.0f));
+
+                    ImGuiTreeNodeFlags areaFlags = ImGuiTreeNodeFlags_DefaultOpen;
+                    if (areaSelected)
+                        areaFlags |= ImGuiTreeNodeFlags_Selected;
+
+                    bool areaOpen = ImGui::TreeNodeEx(areaName.c_str(), areaFlags);
+                    ImGui::PopStyleColor();
+
+                    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+                    {
+                        ClearPropSelection();
+                        ClearSkyModelSelection();
+                        gSelectedAreaIndex = static_cast<int>(areaIdx);
+                    }
+
+                    if (areaOpen)
+                    {
+                        const auto& props = area->getProps();
+                        for (size_t propIdx = 0; propIdx < props.size(); ++propIdx)
+                        {
+                            const auto& prop = props[propIdx];
+
+                            ImGui::PushID(static_cast<int>(propIdx));
+
+                            bool isHidden = IsPropHidden(prop.uniqueID);
+                            bool isDeleted = IsPropDeleted(prop.uniqueID);
+
+                            std::string propName = ExtractFilename(prop.path);
+                            if (propName.empty())
+                                propName = "Prop_" + std::to_string(prop.uniqueID);
+
+                            if (isHidden)
+                                propName = "[H] " + propName;
+                            if (isDeleted)
+                                propName = "[X] " + propName;
+
+                            ImVec4 color = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+                            if (isDeleted)
+                                color = ImVec4(0.5f, 0.2f, 0.2f, 0.6f);
+                            else if (isHidden)
+                                color = ImVec4(0.5f, 0.5f, 0.5f, 0.6f);
+
+                            bool isSelected = IsPropSelected(prop.uniqueID);
+
+                            ImGui::PushStyleColor(ImGuiCol_Text, color);
+                            if (ImGui::Selectable(propName.c_str(), isSelected))
+                            {
+                                if (!isDeleted)
+                                {
+                                    SelectProp(prop.uniqueID, static_cast<int>(areaIdx));
+                                }
+                            }
+                            ImGui::PopStyleColor();
+
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::BeginTooltip();
+                                ImGui::Text("%s", prop.path.c_str());
+                                ImGui::Text("ID: %u", prop.uniqueID);
+                                if (isHidden) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "Hidden (Ctrl+H to show all)");
+                                if (isDeleted) ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Deleted");
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::PopID();
+                        }
+                        ImGui::TreePop();
+                    }
+
+                    ImGui::PopID();
+                }
             }
+            else
+            {
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No content loaded");
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "Open Content Browser");
+                ImGui::TextColored(ImVec4(0.4f, 0.4f, 0.4f, 1.0f), "to load files");
+            }
+
             ImGui::EndChild();
-        }
 
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 5.0f);
-        ImGui::InvisibleButton("##OutlinerSplitter", ImVec2(-1, 5.0f));
-        if (ImGui::IsItemActive())
-        {
-            sWindowHeight += ImGui::GetIO().MouseDelta.y;
-            if (sWindowHeight < 50.0f) sWindowHeight = 50.0f;
-        }
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
+            ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 5.0f);
+            ImGui::InvisibleButton("##OutlinerSplitter", ImVec2(-1, 5.0f));
+            if (ImGui::IsItemActive())
+            {
+                sWindowHeight += ImGui::GetIO().MouseDelta.y;
+                if (sWindowHeight < 50.0f) sWindowHeight = 50.0f;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            }
 
-        ImU32 splitterColor = ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(100, 149, 237, 255) : IM_COL32(40, 40, 50, 255);
-        ImGui::GetWindowDrawList()->AddLine(
-            ImVec2(startX, startY + sWindowHeight - 1.0f),
-            ImVec2(startX + sSidebarWidth, startY + sWindowHeight - 1.0f),
-            splitterColor, 1.0f);
-
-        ImGui::EndChild();
+            ImU32 splitterColor = ImGui::IsItemHovered() || ImGui::IsItemActive() ? IM_COL32(100, 149, 237, 255) : IM_COL32(40, 40, 50, 255);
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(startX, startY + sWindowHeight - 1.0f),
+                ImVec2(startX + sSidebarWidth, startY + sWindowHeight - 1.0f),
+                splitterColor, 1.0f);
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
     }
-    ImGui::End();
-    ImGui::PopStyleVar();
-}
 }

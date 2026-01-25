@@ -3,6 +3,7 @@
 #include "UI_Utils.h"
 #include "../Area/Props.h"
 #include "../models/M3Render.h"
+#include "../Skybox/Sky_Manager.h"
 
 #include <limits>
 #include <string>
@@ -21,6 +22,9 @@ extern HWND gHwnd;
 
 uint32_t gSelectedPropID = 0;
 int gSelectedPropAreaIndex = -1;
+std::set<uint32_t> gHiddenProps;
+std::set<uint32_t> gDeletedProps;
+int gSelectedSkyModelIndex = -1;
 
 static bool RayIntersectsAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                               const glm::vec3& boxMin, const glm::vec3& boxMax, float& tOut)
@@ -115,6 +119,35 @@ void CheckAreaSelection(AppState& state)
     float closestDist = std::numeric_limits<float>::max();
     uint32_t hitPropID = 0;
     int hitPropAreaIdx = -1;
+    int hitSkyModelIdx = -1;
+
+    auto& skyMgr = Sky::Manager::Instance();
+
+    if (!skyMgr.isLoading())
+    {
+        size_t skyCount = skyMgr.getSkyboxM3Count();
+
+        if (skyCount > 0)
+        {
+            glm::mat4 skyModel = glm::translate(glm::mat4(1.0f), state.camera.Position);
+
+            for (size_t i = 0; i < skyCount; i++)
+            {
+                M3Render* m3 = skyMgr.getSkyboxM3(i);
+                if (!m3 || m3->getSubmeshCount() == 0) continue;
+
+                float dist = 0.0f;
+                int hitSubmesh = m3->rayPick(rayStart, rayDir, skyModel, dist);
+
+                if (hitSubmesh >= 0 && dist < closestDist)
+                {
+                    closestDist = dist;
+                    hitSkyModelIdx = static_cast<int>(i);
+                    hitPropID = 0;
+                }
+            }
+        }
+    }
 
     if (gShowProps)
     {
@@ -131,6 +164,7 @@ void CheckAreaSelection(AppState& state)
             {
                 const Prop& prop = props[i];
                 if (!prop.loaded || !prop.render) continue;
+                if (IsPropHidden(prop.uniqueID) || IsPropDeleted(prop.uniqueID)) continue;
 
                 glm::vec3 propPos = prop.position + worldOffset;
 
@@ -147,9 +181,16 @@ void CheckAreaSelection(AppState& state)
                     closestDist = dist;
                     hitPropID = prop.uniqueID;
                     hitPropAreaIdx = static_cast<int>(areaIdx);
+                    hitSkyModelIdx = -1;
                 }
             }
         }
+    }
+
+    if (hitSkyModelIdx >= 0)
+    {
+        SelectSkyModel(hitSkyModelIdx);
+        return;
     }
 
     if (hitPropID != 0)
@@ -157,13 +198,13 @@ void CheckAreaSelection(AppState& state)
         gSelectedPropID = hitPropID;
         gSelectedPropAreaIndex = hitPropAreaIdx;
         gSelectedAreaIndex = hitPropAreaIdx;
-        gSelectedChunk = nullptr;
-        gSelectedChunkIndex = -1;
+        gSelectedSkyModelIndex = -1;
         return;
     }
 
     gSelectedPropID = 0;
     gSelectedPropAreaIndex = -1;
+    gSelectedSkyModelIndex = -1;
 
     int hitAreaIdx = -1;
     std::string hitAreaName;
@@ -204,23 +245,6 @@ void CheckAreaSelection(AppState& state)
     {
         gSelectedAreaIndex = hitAreaIdx;
         gSelectedAreaName = hitAreaName;
-
-        const auto& area = gLoadedAreas[hitAreaIdx];
-        if (area)
-        {
-            const auto& chunks = area->getChunks();
-            gSelectedChunk = nullptr;
-            gSelectedChunkIndex = -1;
-            for (size_t i = 0; i < chunks.size(); ++i)
-            {
-                if (chunks[i])
-                {
-                    gSelectedChunk = chunks[i];
-                    gSelectedChunkIndex = static_cast<int>(i);
-                    break;
-                }
-            }
-        }
     }
 }
 
@@ -228,11 +252,25 @@ void ClearPropSelection()
 {
     gSelectedPropID = 0;
     gSelectedPropAreaIndex = -1;
+    gSelectedAreaIndex = -1;
 }
 
 bool IsPropSelected(uint32_t uniqueID)
 {
     return gSelectedPropID != 0 && gSelectedPropID == uniqueID;
+}
+
+void SelectProp(uint32_t uniqueID, int areaIndex)
+{
+    gSelectedPropID = uniqueID;
+    gSelectedPropAreaIndex = areaIndex;
+    gSelectedAreaIndex = areaIndex;
+    gSelectedSkyModelIndex = -1;
+}
+
+bool IsPropVisible(uint32_t uniqueID)
+{
+    return !IsPropHidden(uniqueID) && !IsPropDeleted(uniqueID);
 }
 
 const Prop* GetSelectedProp()
@@ -247,24 +285,96 @@ const Prop* GetSelectedProp()
     return area->getPropByID(gSelectedPropID);
 }
 
-void HandleGlobalEscape(AppState& state)
+bool IsPropHidden(uint32_t uniqueID)
 {
-    if (!ImGui::IsKeyPressed(ImGuiKey_Escape))
-        return;
+    return gHiddenProps.count(uniqueID) > 0;
+}
 
+bool IsPropDeleted(uint32_t uniqueID)
+{
+    return gDeletedProps.count(uniqueID) > 0;
+}
+
+void HideSelectedProp()
+{
     if (gSelectedPropID != 0)
     {
+        gHiddenProps.insert(gSelectedPropID);
         ClearPropSelection();
     }
-    else if (gSelectedAreaIndex >= 0)
+}
+
+void ShowAllHiddenProps()
+{
+    gHiddenProps.clear();
+}
+
+void DeleteSelectedProp()
+{
+    if (gSelectedPropID != 0)
     {
-        gSelectedAreaIndex = -1;
-        gSelectedChunk = nullptr;
-        gSelectedChunkIndex = -1;
+        gDeletedProps.insert(gSelectedPropID);
+        ClearPropSelection();
     }
-    else if (state.m3Render)
+}
+
+void SelectSkyModel(int index)
+{
+    gSelectedSkyModelIndex = index;
+    gSelectedPropID = 0;
+    gSelectedPropAreaIndex = -1;
+    Sky::Manager::Instance().setSelectedSkyModelIndex(index);
+}
+
+void ClearSkyModelSelection()
+{
+    gSelectedSkyModelIndex = -1;
+    Sky::Manager::Instance().setSelectedSkyModelIndex(-1);
+}
+
+bool IsSkyModelSelected(int index)
+{
+    return gSelectedSkyModelIndex >= 0 && gSelectedSkyModelIndex == index;
+}
+
+void HandleGlobalKeys(AppState& state)
+{
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape))
     {
-        state.m3Render->setSelectedBone(-1);
-        state.m3Render->setSelectedSubmesh(-1);
+        if (gSelectedSkyModelIndex >= 0)
+        {
+            ClearSkyModelSelection();
+        }
+        else if (gSelectedPropID != 0)
+        {
+            ClearPropSelection();
+        }
+        else if (gSelectedAreaIndex >= 0)
+        {
+            gSelectedAreaIndex = -1;
+        }
+        else if (state.m3Render)
+        {
+            state.m3Render->setSelectedBone(-1);
+            state.m3Render->setSelectedSubmesh(-1);
+        }
+    }
+
+    if (ImGui::GetIO().WantCaptureKeyboard)
+        return;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_H) && !ImGui::GetIO().KeyCtrl)
+    {
+        HideSelectedProp();
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_H) && ImGui::GetIO().KeyCtrl)
+    {
+        ShowAllHiddenProps();
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete))
+    {
+        DeleteSelectedProp();
     }
 }

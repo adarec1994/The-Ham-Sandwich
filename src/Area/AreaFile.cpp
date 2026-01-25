@@ -4,6 +4,7 @@
 #include "Props.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
+#include "../Skybox/Sky_Manager.h"
 #include <cmath>
 #include <algorithm>
 #include <string>
@@ -253,6 +254,20 @@ bool AreaFile::load()
 
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
+
+    try
+    {
+        Sky::Manager::Instance().loadSkyForArea(this);
+    }
+    catch (const std::exception& e)
+    {
+        printf("[AreaFile] Sky loading failed: %s\n", e.what());
+    }
+    catch (...)
+    {
+        printf("[AreaFile] Sky loading failed with unknown exception\n");
+    }
+
     return true;
 }
 
@@ -290,10 +305,24 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
     }
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
+
+    try
+    {
+        Sky::Manager::Instance().loadSkyForArea(this);
+    }
+    catch (const std::exception& e)
+    {
+        printf("[AreaFile] Sky loading failed: %s\n", e.what());
+    }
+    catch (...)
+    {
+        printf("[AreaFile] Sky loading failed with unknown exception\n");
+    }
+
     return true;
 }
 
-void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk)
+void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, bool highlightAll)
 {
     if (!context || !constantBuffer) return;
 
@@ -336,7 +365,7 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
 
         cb.baseColor = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
 
-        if (c == selectedChunk)
+        if (highlightAll)
             cb.highlightColor = XMFLOAT4(0.2f, 1.0f, 0.2f, 0.8f);
         else
             cb.highlightColor = XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -351,9 +380,9 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
     }
 }
 
-void AreaFile::renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk)
+void AreaFile::renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, bool highlightAll)
 {
-    render(context, GlmToXM(matView), GlmToXM(matProj), constantBuffer, selectedChunk);
+    render(context, GlmToXM(matView), GlmToXM(matProj), constantBuffer, highlightAll);
 }
 
 bool AreaFile::loadProp(uint32_t uniqueID)
@@ -484,9 +513,7 @@ void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
 
         XMMATRIX model = GlmToXM(glmModel);
 
-        // Pass unk7 as variant override (lower bits may be variant index)
-        int variant = prop.unk7 & 0xFF;
-        prop.render->render(matView, matProj, model, variant);
+        prop.render->render(matView, matProj, model);
     }
 }
 

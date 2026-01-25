@@ -86,12 +86,12 @@ public:
 
     void setHighlightColor(float r, float g, float b, float mix) { mHighlightR = r; mHighlightG = g; mHighlightB = b; mHighlightMix = mix; }
 
-    void getBounds(glm::vec3& outMin, glm::vec3& outMax) const;
-    int rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const;
-
     void setSelectedBone(int idx) { selectedBone = idx; }
     int getSelectedBone() const { return selectedBone; }
     int rayPickBone(const XMFLOAT3& rayOrigin, const XMFLOAT3& rayDir) const;
+
+    void getBounds(glm::vec3& outMin, glm::vec3& outMax) const { outMin = mBoundsMin; outMax = mBoundsMax; }
+    int rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const;
 
     void playAnimation(int index);
     void stopAnimation();
@@ -167,8 +167,8 @@ private:
     float mHighlightB = 0.0f;
     float mHighlightMix = 0.0f;
 
-    glm::vec3 mBoundsMin{0.0f};
-    glm::vec3 mBoundsMax{0.0f};
+    glm::vec3 mBoundsMin = glm::vec3(0.0f);
+    glm::vec3 mBoundsMax = glm::vec3(0.0f);
 
     bool texturesLoaded = false;
     std::vector<std::string> pendingTexturePaths;

@@ -7,6 +7,7 @@
 #include "Area/AreaFile.h"
 #include "Area/TerrainTexture.h"
 #include "models/M3Render.h"
+#include "Skybox/Sky_Manager.h"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -26,7 +27,6 @@ using Microsoft::WRL::ComPtr;
 
 #include "stb_image.h"
 
-// Global D3D11 objects
 ID3D11Device* gDevice = nullptr;
 ID3D11DeviceContext* gContext = nullptr;
 HWND gHwnd = nullptr;
@@ -46,7 +46,6 @@ static ID3D11Texture2D* gDepthStencilBuffer = nullptr;
 bool gCharacterIconLoaded = false;
 ID3D11ShaderResourceView* gCharacterIconTexture = nullptr;
 
-// Forward declarations
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -88,7 +87,6 @@ static bool LoadCharacterIcon()
     if (!imageData)
         return false;
 
-    // Invert colors
     for (int i = 0; i < w * h * 4; i += 4)
     {
         imageData[i + 0] = 255 - imageData[i + 0];
@@ -131,7 +129,6 @@ static bool LoadCharacterIcon()
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    // Create console for debug output
     AllocConsole();
     FILE* fDummy;
 #ifdef _MSC_VER
@@ -190,7 +187,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     appState.device = gDevice;
     appState.context = gContext;
 
-    // Initialize all static device pointers for rendering subsystems
     M3Render::SetDevice(gDevice, gContext);
     AreaChunkRender::SetDevice(gDevice, gContext);
     TerrainTexture::Manager::Instance().SetDevice(gDevice, gContext);
@@ -225,7 +221,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         int display_w = rect.right - rect.left;
         int display_h = rect.bottom - rect.top;
 
-        // Set viewport
         D3D11_VIEWPORT vp = {};
         vp.Width = static_cast<float>(display_w);
         vp.Height = static_cast<float>(display_h);
@@ -235,7 +230,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         vp.TopLeftY = 0;
         gContext->RSSetViewports(1, &vp);
 
-        // Clear render target and depth buffer
         const float clearColor[4] = { clear_color.x, clear_color.y, clear_color.z, clear_color.w };
 #ifdef _MSC_VER
         gContext->ClearRenderTargetView(gMainRenderTargetView.Get(), clearColor);
@@ -249,15 +243,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         gContext->OMSetRenderTargets(1, rtvs, gDepthStencilView);
 #endif
 
-        // Start ImGui frame first so input is available
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        // Update camera after ImGui processes input
         UpdateCamera(gHwnd, appState);
 
-        // Render 3D content
         RenderAreas(appState, display_w, display_h);
 
         RenderUI(appState);
@@ -372,7 +363,6 @@ void CreateRenderTarget()
         pBackBuffer->GetDesc(&backBufferDesc);
         pBackBuffer->Release();
 
-        // Create depth stencil buffer
         D3D11_TEXTURE2D_DESC depthDesc = {};
         depthDesc.Width = backBufferDesc.Width;
         depthDesc.Height = backBufferDesc.Height;

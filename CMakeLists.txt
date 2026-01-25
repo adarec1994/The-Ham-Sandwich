@@ -301,6 +301,12 @@ set(HAM_SANDWICH_SOURCES
         src/UI/UI_Details.h
         src/UI/UI_ContentBrowser.cpp
         src/UI/UI_ContentBrowser.h
+        src/UI/UI_Sky.cpp
+        src/UI/UI_Sky.h
+        src/Skybox/Sky.cpp
+        src/Skybox/Sky.h
+        src/Skybox/Sky_Manager.cpp
+        src/Skybox/Sky_Manager.h
 )
 
 if(WIN32)
@@ -314,6 +320,7 @@ else()
 endif()
 
 target_include_directories(The_Ham_Sandwich PRIVATE
+        src
         src/UI
         src/Settings
         src/About

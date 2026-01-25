@@ -5,11 +5,12 @@
 #include "UI_Selection.h"
 #include "UI_Utils.h"
 #include "../Area/AreaFile.h"
-#include "../Area/Props.h"
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
 #include "../tex/tex.h"
 #include "../Archive.h"
+
+#include "../Skybox/Sky_Manager.h"
 #include <imgui.h>
 #include <d3d11.h>
 #include <set>
@@ -273,23 +274,123 @@ namespace UI_Details
         DrawM3DetailsForRender(state, state.m3Render.get());
     }
 
+    static void DrawPropDetails(AppState& state)
+    {
+        const Prop* prop = GetSelectedProp();
+        if (!prop)
+        {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "No prop selected");
+            return;
+        }
+
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Selected Prop");
+        ImGui::Separator();
+
+        size_t lastSlash = prop->path.find_last_of("/\\");
+        std::string filename = (lastSlash != std::string::npos) ? prop->path.substr(lastSlash + 1) : prop->path;
+        ImGui::Text("File: %s", filename.c_str());
+
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("%s", prop->path.c_str());
+            ImGui::EndTooltip();
+        }
+
+        ImGui::Text("ID: %u", prop->uniqueID);
+
+        ImGui::Separator();
+        ImGui::Text("Position: %.2f, %.2f, %.2f", prop->position.x, prop->position.y, prop->position.z);
+        ImGui::Text("Scale: %.3f", prop->scale);
+
+        glm::vec3 euler = glm::degrees(glm::eulerAngles(prop->rotation));
+        ImGui::Text("Rotation: %.1f, %.1f, %.1f", euler.x, euler.y, euler.z);
+
+        ImGui::Separator();
+        ImGui::Text("unk7 (variant): %d (0x%X)", prop->unk7, prop->unk7);
+
+        ImGui::Text("Color0:");
+        ImGui::SameLine();
+        ImVec4 c0(prop->color0.r / 255.0f, prop->color0.g / 255.0f, prop->color0.b / 255.0f, prop->color0.a / 255.0f);
+        ImGui::ColorButton("##c0", c0, ImGuiColorEditFlags_NoTooltip, ImVec2(20, 20));
+
+        ImGui::Text("Color1:");
+        ImGui::SameLine();
+        ImVec4 c1(prop->color1.r / 255.0f, prop->color1.g / 255.0f, prop->color1.b / 255.0f, prop->color1.a / 255.0f);
+        ImGui::ColorButton("##c1", c1, ImGuiColorEditFlags_NoTooltip, ImVec2(20, 20));
+
+        ImGui::Text("Color2:");
+        ImGui::SameLine();
+        ImVec4 c2(prop->color2.r / 255.0f, prop->color2.g / 255.0f, prop->color2.b / 255.0f, prop->color2.a / 255.0f);
+        ImGui::ColorButton("##c2", c2, ImGuiColorEditFlags_NoTooltip, ImVec2(20, 20));
+
+        if (prop->render)
+        {
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Model settings (affects all instances)");
+            ImGui::Separator();
+            DrawM3DetailsForRender(state, prop->render.get());
+        }
+    }
+
+    static std::string WideToNarrow(const std::wstring& ws)
+    {
+        std::string s;
+        s.reserve(ws.size());
+        for (wchar_t wc : ws) s += static_cast<char>(wc);
+        return s;
+    }
+
+    static std::string ExtractFilename(const std::string& path)
+    {
+        size_t lastSlash = path.find_last_of("/\\");
+        if (lastSlash != std::string::npos)
+            return path.substr(lastSlash + 1);
+        return path;
+    }
+
+    static void DrawSkyModelDetails(AppState& state)
+    {
+        auto& skyMgr = Sky::Manager::Instance();
+
+        if (skyMgr.isLoading()) return;
+
+        M3Render* render = skyMgr.getSelectedSkyModel();
+        if (!render) return;
+
+        auto paths = skyMgr.getSkyModelPaths();
+        int idx = skyMgr.getSelectedSkyModelIndex();
+
+        std::string name = "Sky Model";
+        if (idx >= 0 && idx < static_cast<int>(paths.size()))
+        {
+            name = ExtractFilename(WideToNarrow(paths[idx]));
+        }
+
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s", name.c_str());
+        ImGui::Separator();
+
+        DrawM3DetailsForRender(state, render);
+    }
+
     static void DrawAnimationPlayback(AppState& state)
     {
         M3Render* render = nullptr;
 
-        if (gLoadedModel)
+        if (state.m3Render && state.m3Render->isAnimationPlaying())
         {
             render = state.m3Render.get();
         }
-        else if (gSelectedPropID != 0)
+        else
         {
             const Prop* prop = GetSelectedProp();
-            if (prop && prop->render)
+            if (prop && prop->render && prop->render->isAnimationPlaying())
+            {
                 render = prop->render.get();
+            }
         }
 
-        if (!render || !render->isAnimationPlaying())
-            return;
+        if (!render) return;
 
         ImGuiViewport* vp = ImGui::GetMainViewport();
         float sidebarWidth = UI_Outliner::GetSidebarWidth();
@@ -335,63 +436,6 @@ namespace UI_Details
             render->stopAnimation();
     }
 
-    static void DrawPropDetails(AppState& state)
-    {
-        const Prop* prop = GetSelectedProp();
-        if (!prop) return;
-
-        size_t lastSlash = prop->path.find_last_of("/\\");
-        std::string filename = (lastSlash != std::string::npos) ? prop->path.substr(lastSlash + 1) : prop->path;
-
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", filename.c_str());
-
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::BeginTooltip();
-            ImGui::Text("%s", prop->path.c_str());
-            ImGui::EndTooltip();
-        }
-
-        ImGui::Separator();
-
-        if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
-        {
-            ImGui::Text("Position: %.2f, %.2f, %.2f", prop->position.x, prop->position.y, prop->position.z);
-            ImGui::Text("Scale: %.3f", prop->scale);
-            ImGui::Text("Rotation: %.2f, %.2f, %.2f, %.2f", prop->rotation.x, prop->rotation.y, prop->rotation.z, prop->rotation.w);
-        }
-
-        if (ImGui::CollapsingHeader("Prop Data"))
-        {
-            ImGui::Text("Unique ID: %u", prop->uniqueID);
-            ImGui::Text("unk7 (variant): %d (0x%X)", prop->unk7, prop->unk7);
-
-            ImVec4 c0(prop->color0.r / 255.0f, prop->color0.g / 255.0f, prop->color0.b / 255.0f, prop->color0.a / 255.0f);
-            ImVec4 c1(prop->color1.r / 255.0f, prop->color1.g / 255.0f, prop->color1.b / 255.0f, prop->color1.a / 255.0f);
-            ImVec4 c2(prop->color2.r / 255.0f, prop->color2.g / 255.0f, prop->color2.b / 255.0f, prop->color2.a / 255.0f);
-
-            ImGui::ColorButton("##c0", c0, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
-            ImGui::SameLine();
-            ImGui::Text("Color0");
-
-            ImGui::ColorButton("##c1", c1, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
-            ImGui::SameLine();
-            ImGui::Text("Color1");
-
-            ImGui::ColorButton("##c2", c2, ImGuiColorEditFlags_NoTooltip, ImVec2(16, 16));
-            ImGui::SameLine();
-            ImGui::Text("Color2");
-        }
-
-        if (prop->render)
-        {
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Model settings (affects all instances)");
-            ImGui::Separator();
-            DrawM3DetailsForRender(state, prop->render.get());
-        }
-    }
-
     static void DrawAreaSelectionDetails(AppState& state)
     {
         if (gSelectedPropID != 0)
@@ -402,8 +446,7 @@ namespace UI_Details
 
         if (gSelectedAreaIndex < 0 || gSelectedAreaIndex >= static_cast<int>(gLoadedAreas.size()))
         {
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Click terrain or prop to select");
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Press ESC to deselect");
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Select an item in the Outliner");
             return;
         }
 
@@ -414,7 +457,7 @@ namespace UI_Details
             return;
         }
 
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Terrain");
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Selected Terrain");
         ImGui::Separator();
 
         ImGui::Text("Tile: %d, %d", area->getTileX(), area->getTileY());
@@ -445,7 +488,7 @@ namespace UI_Details
 
     void Draw(AppState& state)
     {
-        HandleGlobalEscape(state);
+        HandleGlobalKeys(state);
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
@@ -489,6 +532,10 @@ namespace UI_Details
             if (gLoadedModel)
             {
                 DrawM3Details(state);
+            }
+            else if (gSelectedSkyModelIndex >= 0)
+            {
+                DrawSkyModelDetails(state);
             }
             else if (!gLoadedAreas.empty())
             {

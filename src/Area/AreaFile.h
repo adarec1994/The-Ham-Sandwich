@@ -302,8 +302,8 @@ public:
     [[nodiscard]] int getTileX() const { return mTileX; }
     [[nodiscard]] int getTileY() const { return mTileY; }
 
-    void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk);
-    void renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, const AreaChunkRenderPtr& selectedChunk);
+    void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, bool highlightAll = false);
+    void renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, bool highlightAll = false);
     void renderProps(const Matrix& matView, const Matrix& matProj);
     void renderPropsGlm(const glm::mat4& matView, const glm::mat4& matProj);
     bool loadProp(uint32_t uniqueID);

@@ -13,8 +13,9 @@
 #include <set>
 #include <chrono>
 #include <iostream>
+#include <limits>
 
-// External function from Props.cpp to track texture failures
+
 extern void RecordTextureFailure(const std::string& modelPath, const std::string& texturePath);
 
 ID3D11Device* M3Render::sDevice = nullptr;
@@ -98,8 +99,9 @@ struct PSInput {
 float4 main(PSInput input) : SV_TARGET {
     float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(input.normal), lightDir), 0.3);
-    float3 texColor = diffTexture.Sample(samplerState, input.texCoord).rgb;
-    float3 baseColor = texColor * diff;
+    float4 texColor = diffTexture.Sample(samplerState, input.texCoord);
+    if (texColor.a < 0.5) discard;
+    float3 baseColor = texColor.rgb * diff;
     float3 finalColor = lerp(baseColor, highlightColor, highlightMix);
     return float4(finalColor, 1.0);
 }
@@ -230,12 +232,28 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
     InitSharedResources();
 
     geometry = data.geometry;
-    submeshes = data.geometry.submeshes;
     materials = data.materials;
     bones = data.bones;
     textures = data.textures;
     animations = data.animations;
     submeshGroups = data.submeshGroups;
+
+    if (highestLodOnly) {
+        uint8_t minGroupId = 255;
+        for (const auto& sm : data.geometry.submeshes) {
+            if (sm.groupId != 255 && sm.groupId < minGroupId) {
+                minGroupId = sm.groupId;
+            }
+        }
+        for (const auto& sm : data.geometry.submeshes) {
+            if (sm.groupId == minGroupId || sm.groupId == 255) {
+                submeshes.push_back(sm);
+            }
+        }
+    } else {
+        submeshes = data.geometry.submeshes;
+    }
+
     materialSelectedVariant.assign(materials.size(), 0);
     submeshVisible.assign(submeshes.size(), 1);
     submeshVariantOverride.assign(submeshes.size(), -1);
@@ -319,68 +337,6 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
 
 M3Render::~M3Render() = default;
 
-void M3Render::getBounds(glm::vec3& outMin, glm::vec3& outMax) const {
-    outMin = mBoundsMin;
-    outMax = mBoundsMax;
-}
-
-static bool rayTriangleIntersectLocal(const glm::vec3& orig, const glm::vec3& dir,
-                                      const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2,
-                                      float& t) {
-    const float EPSILON = 1e-8f;
-    glm::vec3 e1 = v1 - v0;
-    glm::vec3 e2 = v2 - v0;
-    glm::vec3 h = glm::cross(dir, e2);
-    float a = glm::dot(e1, h);
-    if (a > -EPSILON && a < EPSILON) return false;
-    float f = 1.0f / a;
-    glm::vec3 s = orig - v0;
-    float u = f * glm::dot(s, h);
-    if (u < 0.0f || u > 1.0f) return false;
-    glm::vec3 q = glm::cross(s, e1);
-    float v = f * glm::dot(dir, q);
-    if (v < 0.0f || u + v > 1.0f) return false;
-    t = f * glm::dot(e2, q);
-    return t > EPSILON;
-}
-
-int M3Render::rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const {
-    glm::mat4 invModel = glm::inverse(modelMatrix);
-    glm::vec3 localOrigin = glm::vec3(invModel * glm::vec4(rayOrigin, 1.0f));
-    glm::vec3 localDir = glm::normalize(glm::vec3(invModel * glm::vec4(rayDir, 0.0f)));
-
-    float closestT = FLT_MAX;
-    int closestSubmesh = -1;
-    const auto& verts = geometry.vertices;
-    const auto& inds = geometry.indices;
-
-    for (size_t si = 0; si < submeshes.size(); ++si) {
-        if (si < submeshVisible.size() && submeshVisible[si] == 0) continue;
-        const auto& sm = submeshes[si];
-        for (uint32_t i = 0; i + 2 < sm.indexCount; i += 3) {
-            uint32_t i0 = inds[sm.startIndex + i] + sm.startVertex;
-            uint32_t i1 = inds[sm.startIndex + i + 1] + sm.startVertex;
-            uint32_t i2 = inds[sm.startIndex + i + 2] + sm.startVertex;
-            if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
-            float t;
-            if (rayTriangleIntersectLocal(localOrigin, localDir, verts[i0].position, verts[i1].position, verts[i2].position, t)) {
-                if (t < closestT) {
-                    closestT = t;
-                    closestSubmesh = static_cast<int>(si);
-                }
-            }
-        }
-    }
-
-    if (closestSubmesh >= 0) {
-        glm::vec3 hitLocal = localOrigin + localDir * closestT;
-        glm::vec3 hitWorld = glm::vec3(modelMatrix * glm::vec4(hitLocal, 1.0f));
-        outDist = glm::length(hitWorld - rayOrigin);
-    }
-
-    return closestSubmesh;
-}
-
 void M3Render::precomputeBoneData() {
     size_t numBones = bones.size();
     if (numBones == 0) return;
@@ -439,12 +395,12 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
         if (srv) {
             mTextureSRVs.push_back(srv);
         } else {
-            // Use fallback for failed textures
+
             mTextureSRVs.push_back(mFallbackWhiteSRV);
             try {
                 RecordTextureFailure(modelName, tex.path);
             } catch (...) {
-                // RecordTextureFailure might not be linked
+
             }
         }
     }
@@ -453,9 +409,9 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     if (!sDevice) return nullptr;
 
-    // Use a neutral gray (128, 128, 128) instead of pure white
-    // This makes missing textures less jarring
-    uint32_t px = 0xFF808080u;  // RGBA: gray with full alpha
+
+
+    uint32_t px = 0xFF808080u;
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = 1;
     td.Height = 1;
@@ -478,16 +434,16 @@ ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     return srv;
 }
 
-// Helper function to normalize texture paths
+
 static std::wstring NormalizeTexturePath(const std::wstring& path) {
     std::wstring result = path;
-    // Convert backslashes to forward slashes
+
     std::replace(result.begin(), result.end(), L'\\', L'/');
-    // Remove leading slashes
+
     while (!result.empty() && result[0] == L'/') {
         result.erase(0, 1);
     }
-    // Convert to lowercase
+
     std::transform(result.begin(), result.end(), result.begin(), ::towlower);
     return result;
 }
@@ -495,7 +451,7 @@ static std::wstring NormalizeTexturePath(const std::wstring& path) {
 ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchivePtr& arc, const std::string& path) {
     if (!arc || path.empty() || !sDevice) return nullptr;
 
-    // Check cache first
+
     {
         std::lock_guard<std::mutex> lock(sTextureCacheMutex);
         auto it = sTextureSRVCache.find(path);
@@ -507,25 +463,25 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> conv;
     std::wstring basePath = conv.from_bytes(path);
 
-    // Build list of path variations to try
+
     std::vector<std::wstring> pathsToTry;
 
-    // Original path with .tex extension
+
     std::wstring withTex = basePath;
     if (withTex.find(L".tex") == std::wstring::npos) {
         withTex += L".tex";
     }
     pathsToTry.push_back(withTex);
 
-    // Normalized (lowercase, forward slashes, no leading slash)
+
     pathsToTry.push_back(NormalizeTexturePath(withTex));
 
-    // With backslashes
+
     std::wstring withBackslash = withTex;
     std::replace(withBackslash.begin(), withBackslash.end(), L'/', L'\\');
     pathsToTry.push_back(withBackslash);
 
-    // Try without any path prefix (just filename)
+
     size_t lastSlash = withTex.find_last_of(L"/\\");
     if (lastSlash != std::wstring::npos) {
         pathsToTry.push_back(withTex.substr(lastSlash + 1));
@@ -537,7 +493,7 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
         pathsToTry.push_back(L"art/" + normalized);
     }
 
-    // Try each path variation
+
     auto entry = arc->getByPath(pathsToTry[0]);
 
     for (size_t i = 1; i < pathsToTry.size() && !entry; ++i) {
@@ -564,7 +520,7 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
         return nullptr;
     }
 
-    D3D11_TEXTURE2D_DESC td = {};
+    D3D11_TEXTURE2D_DESC td = {};;
     td.Width = img.width;
     td.Height = img.height;
     td.MipLevels = 0;
@@ -623,11 +579,11 @@ ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, i
         return mFallbackWhiteSRV.Get();
     }
 
-    // Try requested variant first
+
     int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
     int idx = m.variants[v].textureIndexA;
 
-    // If requested variant has no texture, try other variants
+
     if (idx < 0) {
         for (size_t i = 0; i < m.variants.size(); ++i) {
             if (m.variants[i].textureIndexA >= 0) {
@@ -645,7 +601,7 @@ ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, i
         return mFallbackWhiteSRV.Get();
     }
 
-    // idx < 0 means no variant has a texture - this is normal for some materials
+
     if (idx >= (int)mTextureSRVs.size()) {
         warnOnce("texture index " + std::to_string(idx) + " out of range (max " + std::to_string(mTextureSRVs.size()) + ")");
     }
@@ -715,7 +671,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
         const auto& sm = submeshes[i];
 
-        // Determine variant: overrideVariant > submeshVariantOverride > materialSelectedVariant
+
         int variant = 0;
         if (overrideVariant >= 0) {
             variant = overrideVariant;
@@ -729,7 +685,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
         if (srv) {
             sContext->PSSetShaderResources(0, 1, &srv);
         } else {
-            // No texture available - unbind to avoid using stale texture
+
             ID3D11ShaderResourceView* nullSRV = nullptr;
             sContext->PSSetShaderResources(0, 1, &nullSRV);
         }
@@ -975,10 +931,6 @@ void M3Render::updateAnimation(float deltaTime) {
 }
 
 void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj) {
-    renderSkeleton(view, proj, XMMatrixIdentity());
-}
-
-void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model) {
     if (!showSkeleton || bones.empty() || !sSkeletonVS || !sContext || !sDevice) return;
 
     struct SkeletonVertex {
@@ -991,12 +943,7 @@ void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj, const 
 
     std::vector<glm::vec3> boneWorldPos(bones.size());
     for (size_t i = 0; i < bones.size(); ++i) {
-        glm::vec3 localPos = glm::vec3(effectiveBindGlobal[i][3]);
-        XMVECTOR pos = XMVectorSet(localPos.x, localPos.y, localPos.z, 1.0f);
-        XMVECTOR transformed = XMVector4Transform(pos, model);
-        XMFLOAT4 result;
-        XMStoreFloat4(&result, transformed);
-        boneWorldPos[i] = glm::vec3(result.x, result.y, result.z);
+        boneWorldPos[i] = glm::vec3(effectiveBindGlobal[i][3]);
     }
 
     for (size_t i = 0; i < bones.size(); ++i) {
@@ -1159,14 +1106,14 @@ bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
         if (srv) {
             mTextureSRVs[nextTextureToLoad] = srv;
         } else {
-            // Texture failed to load - use fallback and record the failure
+
             mTextureSRVs[nextTextureToLoad] = mFallbackWhiteSRV;
 
-            // Record the failure for debugging (if the function exists)
+
             try {
                 RecordTextureFailure(modelName, path);
             } catch (...) {
-                // RecordTextureFailure might not be linked
+
             }
         }
     }
@@ -1178,4 +1125,151 @@ bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
     }
 
     return true;
+}
+
+void M3Render::renderSkeleton(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX& model) {
+    if (!showSkeleton || bones.empty() || !sSkeletonVS || !sContext || !sDevice) return;
+
+    struct SkeletonVertex {
+        glm::vec3 pos;
+        glm::vec3 color;
+    };
+
+    std::vector<SkeletonVertex> verts;
+    verts.reserve(bones.size() * 8);
+
+    std::vector<glm::vec3> boneWorldPos(bones.size());
+    for (size_t i = 0; i < bones.size(); ++i) {
+        glm::vec4 localPos = glm::vec4(glm::vec3(effectiveBindGlobal[i][3]), 1.0f);
+        XMVECTOR pos = XMVectorSet(localPos.x, localPos.y, localPos.z, 1.0f);
+        pos = XMVector4Transform(pos, model);
+        XMFLOAT4 transformed;
+        XMStoreFloat4(&transformed, pos);
+        boneWorldPos[i] = glm::vec3(transformed.x, transformed.y, transformed.z);
+    }
+
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+        glm::vec3 bonePos = boneWorldPos[i];
+        bool isSelected = (selectedBone == static_cast<int>(i));
+        float ptSize = isSelected ? 0.06f : 0.02f;
+        glm::vec3 jointColor = isSelected ? glm::vec3(1.0f, 0.3f, 0.0f) : glm::vec3(1.0f, 1.0f, 0.0f);
+
+        verts.push_back({bonePos + glm::vec3(-ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(ptSize, 0, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, -ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, ptSize, 0), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, -ptSize), jointColor});
+        verts.push_back({bonePos + glm::vec3(0, 0, ptSize), jointColor});
+
+        if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+            glm::vec3 parentPos = boneWorldPos[bone.parentId];
+            bool parentSelected = (selectedBone == bone.parentId);
+            glm::vec3 boneColor = (isSelected || parentSelected) ? glm::vec3(1.0f, 0.5f, 0.0f) : glm::vec3(0.0f, 1.0f, 1.0f);
+            verts.push_back({bonePos, boneColor});
+            verts.push_back({parentPos, boneColor});
+        }
+    }
+
+    if (verts.empty()) return;
+
+    if (!mSkeletonVB || verts.size() * sizeof(SkeletonVertex) > mSkeletonVBSize) {
+        mSkeletonVBSize = verts.size() * sizeof(SkeletonVertex) * 2;
+        D3D11_BUFFER_DESC bd = {};
+        bd.ByteWidth = static_cast<UINT>(mSkeletonVBSize);
+        bd.Usage = D3D11_USAGE_DYNAMIC;
+        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        sDevice->CreateBuffer(&bd, nullptr, &mSkeletonVB);
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    if (SUCCEEDED(sContext->Map(mSkeletonVB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, verts.data(), verts.size() * sizeof(SkeletonVertex));
+        sContext->Unmap(mSkeletonVB.Get(), 0);
+    }
+
+    SkeletonCB scb;
+    scb.view = view;
+    scb.projection = proj;
+    if (SUCCEEDED(sContext->Map(mSkeletonCB.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        memcpy(mapped.pData, &scb, sizeof(scb));
+        sContext->Unmap(mSkeletonCB.Get(), 0);
+    }
+
+    sContext->IASetInputLayout(sSkeletonLayout.Get());
+    UINT stride = sizeof(SkeletonVertex);
+    UINT offset = 0;
+    sContext->IASetVertexBuffers(0, 1, mSkeletonVB.GetAddressOf(), &stride, &offset);
+    sContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
+    sContext->VSSetShader(sSkeletonVS.Get(), nullptr, 0);
+    sContext->PSSetShader(sSkeletonPS.Get(), nullptr, 0);
+    sContext->VSSetConstantBuffers(0, 1, mSkeletonCB.GetAddressOf());
+    sContext->Draw(static_cast<UINT>(verts.size()), 0);
+}
+
+int M3Render::rayPick(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const glm::mat4& modelMatrix, float& outDist) const {
+    glm::mat4 invModel = glm::inverse(modelMatrix);
+    glm::vec4 localOrigin4 = invModel * glm::vec4(rayOrigin, 1.0f);
+    glm::vec4 localDir4 = invModel * glm::vec4(rayDir, 0.0f);
+    glm::vec3 localOrigin(localOrigin4);
+    glm::vec3 localDir = glm::normalize(glm::vec3(localDir4));
+
+    float closestT = std::numeric_limits<float>::max();
+    int hitSubmesh = -1;
+
+    const auto& verts = geometry.vertices;
+    const auto& indices = geometry.indices;
+
+    for (size_t smIdx = 0; smIdx < submeshes.size(); ++smIdx) {
+        if (!submeshVisible[smIdx]) continue;
+
+        const auto& sm = submeshes[smIdx];
+        uint32_t startIdx = sm.startIndex;
+        uint32_t endIdx = startIdx + sm.indexCount;
+
+        for (uint32_t i = startIdx; i + 2 < endIdx; i += 3) {
+            uint32_t i0 = indices[i];
+            uint32_t i1 = indices[i + 1];
+            uint32_t i2 = indices[i + 2];
+
+            if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
+
+            const glm::vec3& v0 = verts[i0].position;
+            const glm::vec3& v1 = verts[i1].position;
+            const glm::vec3& v2 = verts[i2].position;
+
+            float t = 0.0f;
+            const float EPSILON = 1e-8f;
+            glm::vec3 edge1 = v1 - v0;
+            glm::vec3 edge2 = v2 - v0;
+            glm::vec3 h = glm::cross(localDir, edge2);
+            float a = glm::dot(edge1, h);
+
+            if (a > -EPSILON && a < EPSILON) continue;
+
+            float f = 1.0f / a;
+            glm::vec3 s = localOrigin - v0;
+            float u = f * glm::dot(s, h);
+            if (u < 0.0f || u > 1.0f) continue;
+
+            glm::vec3 q = glm::cross(s, edge1);
+            float v = f * glm::dot(localDir, q);
+            if (v < 0.0f || u + v > 1.0f) continue;
+
+            t = f * glm::dot(edge2, q);
+            if (t > EPSILON && t < closestT) {
+                closestT = t;
+                hitSubmesh = static_cast<int>(smIdx);
+            }
+        }
+    }
+
+    if (hitSubmesh >= 0) {
+        glm::vec3 localHit = localOrigin + localDir * closestT;
+        glm::vec4 worldHit = modelMatrix * glm::vec4(localHit, 1.0f);
+        outDist = glm::length(glm::vec3(worldHit) - rayOrigin);
+    }
+
+    return hitSubmesh;
 }

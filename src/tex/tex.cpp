@@ -202,6 +202,7 @@ namespace Tex
                     pal[2][1] = (uint8_t)((g0 + g1) / 2);
                     pal[2][2] = (uint8_t)((b0 + b1) / 2);
                     pal[2][3] = 255;
+                    pal[3][3] = 255;
                 }
 
                 for (int py = 0; py < 4; ++py)
@@ -595,29 +596,34 @@ namespace Tex
         int w = header.width;
         int h = header.height;
 
+        bool success = false;
+        bool preserveAlpha = false;
+
         if (header.textureType == TextureType::DXT1)
         {
             out.width = w; out.height = h;
-            return decodeDXT1(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeDXT1(mipData[largestMipIndex].data(), w, h, out.rgba);
         }
-        if (header.textureType == TextureType::DXT3)
+        else if (header.textureType == TextureType::DXT3)
         {
             out.width = w; out.height = h;
-            return decodeDXT3(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeDXT3(mipData[largestMipIndex].data(), w, h, out.rgba);
+            preserveAlpha = true;
         }
-        if (header.textureType == TextureType::DXT5)
+        else if (header.textureType == TextureType::DXT5)
         {
             out.width = w; out.height = h;
-            return decodeDXT5(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeDXT5(mipData[largestMipIndex].data(), w, h, out.rgba);
+            preserveAlpha = true;
         }
-        if (header.textureType == TextureType::Jpeg1 ||
+        else if (header.textureType == TextureType::Jpeg1 ||
             header.textureType == TextureType::Jpeg2 ||
             header.textureType == TextureType::Jpeg3)
         {
             int mipLevel = (int)(header.imageSizesCount - 1) - largestMipIndex;
-            return Jpeg::Decode(header, mipLevel, mipData[largestMipIndex], out.rgba, out.width, out.height);
+            success = Jpeg::Decode(header, mipLevel, mipData[largestMipIndex], out.rgba, out.width, out.height);
         }
-        if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
+        else if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
         {
             const auto& buf = mipData[largestMipIndex];
             if (buf.empty()) return false;
@@ -628,25 +634,33 @@ namespace Tex
             for(size_t i=0; i<out.rgba.size(); i+=4) {
                 std::swap(out.rgba[i], out.rgba[i+2]);
             }
-            return true;
+            success = true;
         }
-        if (header.textureType == TextureType::Argb16)
+        else if (header.textureType == TextureType::Argb16)
         {
             out.width = w; out.height = h;
-            return decodeArgb16(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeArgb16(mipData[largestMipIndex].data(), w, h, out.rgba);
         }
-        if (header.textureType == TextureType::Grayscale)
+        else if (header.textureType == TextureType::Grayscale)
         {
             out.width = w; out.height = h;
-            return decodeGrayscale(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeGrayscale(mipData[largestMipIndex].data(), w, h, out.rgba);
         }
-        if (header.textureType == TextureType::Garbage)
+        else if (header.textureType == TextureType::Garbage)
         {
             out.width = w; out.height = h;
-            return decodeGarbage(mipData[largestMipIndex].data(), w, h, out.rgba);
+            success = decodeGarbage(mipData[largestMipIndex].data(), w, h, out.rgba);
         }
 
-        return false;
+        if (success && !preserveAlpha)
+        {
+            for (size_t i = 3; i < out.rgba.size(); i += 4)
+            {
+                out.rgba[i] = 255;
+            }
+        }
+
+        return success;
     }
 
     ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf)
