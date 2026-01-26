@@ -22,6 +22,14 @@ namespace UI_Details
     {
     }
 
+    static std::string ExtractFolderPath(const std::string& path)
+    {
+        size_t lastSlash = path.find_last_of("/\\");
+        if (lastSlash != std::string::npos)
+            return path.substr(0, lastSlash);
+        return "";
+    }
+
     static void DrawM3DetailsForRender(AppState& state, M3Render* render)
     {
         if (!render) return;
@@ -213,6 +221,29 @@ namespace UI_Details
                                                 (texIndex < (int)allTextures.size() ? allTextures[texIndex].path : "Texture Preview") : path;
                                             Tex::OpenTexPreviewFromSRV(state, srv, texWidth, texHeight, title);
                                         }
+
+                                        std::string texPath = path.empty() ?
+                                            (texIndex < (int)allTextures.size() ? allTextures[texIndex].path : "") : path;
+                                        if (ImGui::BeginPopupContextItem())
+                                        {
+                                            if (!texPath.empty())
+                                            {
+                                                if (ImGui::MenuItem("Browse to Folder"))
+                                                {
+                                                    std::string folderPath = ExtractFolderPath(texPath);
+                                                    if (!folderPath.empty())
+                                                    {
+                                                        UI_ContentBrowser::NavigateToPath(state, folderPath);
+                                                    }
+                                                }
+                                            }
+                                            else
+                                            {
+                                                ImGui::TextDisabled("No path available");
+                                            }
+                                            ImGui::EndPopup();
+                                        }
+
                                         ImGui::PopID();
 
                                         if (ImGui::IsItemHovered())
@@ -278,6 +309,26 @@ namespace UI_Details
 
                         std::string title = tex.path.empty() ? "Texture Preview" : tex.path;
                         Tex::OpenTexPreviewFromSRV(state, srv, texWidth, texHeight, title);
+                    }
+
+                    if (ImGui::BeginPopupContextItem())
+                    {
+                        if (!tex.path.empty())
+                        {
+                            if (ImGui::MenuItem("Browse to Folder"))
+                            {
+                                std::string folderPath = ExtractFolderPath(tex.path);
+                                if (!folderPath.empty())
+                                {
+                                    UI_ContentBrowser::NavigateToPath(state, folderPath);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            ImGui::TextDisabled("No path available");
+                        }
+                        ImGui::EndPopup();
                     }
 
                     if (ImGui::IsItemHovered())

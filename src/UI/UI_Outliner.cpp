@@ -2,6 +2,7 @@
 #include "UI_Globals.h"
 #include "UI_Selection.h"
 #include "UI_Utils.h"
+#include "UI_ContentBrowser.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
 #include "../Skybox/Sky_Manager.h"
@@ -22,6 +23,14 @@ namespace UI_Outliner
         if (lastSlash != std::string::npos)
             return path.substr(lastSlash + 1);
         return path;
+    }
+
+    static std::string ExtractFolderPath(const std::string& path)
+    {
+        size_t lastSlash = path.find_last_of("/\\");
+        if (lastSlash != std::string::npos)
+            return path.substr(0, lastSlash);
+        return "";
     }
 
     static std::string WideToNarrow(const std::wstring& ws)
@@ -81,9 +90,39 @@ namespace UI_Outliner
 
             if (gLoadedModel)
             {
+                std::string modelName = ExtractFilename(gLoadedModel->getModelName());
+                std::string fullPath = gLoadedModel->getModelName();
+
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                ImGui::Text("%s", ExtractFilename(gLoadedModel->getModelName()).c_str());
+                ImGui::Selectable(modelName.c_str(), false);
                 ImGui::PopStyleColor();
+
+                if (ImGui::BeginPopupContextItem())
+                {
+                    if (!fullPath.empty())
+                    {
+                        if (ImGui::MenuItem("Browse to Folder"))
+                        {
+                            std::string folderPath = ExtractFolderPath(fullPath);
+                            if (!folderPath.empty())
+                            {
+                                UI_ContentBrowser::NavigateToPath(state, folderPath);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("No path available");
+                    }
+                    ImGui::EndPopup();
+                }
+
+                if (ImGui::IsItemHovered() && !fullPath.empty())
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::Text("%s", fullPath.c_str());
+                    ImGui::EndTooltip();
+                }
             }
             else if (!gLoadedAreas.empty())
             {
@@ -119,6 +158,26 @@ namespace UI_Outliner
                                     SelectSkyModel(static_cast<int>(i));
                                 }
                                 ImGui::PopStyleColor();
+
+                                if (ImGui::BeginPopupContextItem())
+                                {
+                                    if (!path.empty())
+                                    {
+                                        if (ImGui::MenuItem("Browse to Folder"))
+                                        {
+                                            std::string folderPath = ExtractFolderPath(path);
+                                            if (!folderPath.empty())
+                                            {
+                                                UI_ContentBrowser::NavigateToPath(state, folderPath);
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        ImGui::TextDisabled("No path available");
+                                    }
+                                    ImGui::EndPopup();
+                                }
 
                                 if (ImGui::IsItemHovered() && !path.empty())
                                 {
@@ -198,6 +257,51 @@ namespace UI_Outliner
                                 }
                             }
                             ImGui::PopStyleColor();
+
+                            if (ImGui::BeginPopupContextItem())
+                            {
+                                if (!prop.path.empty())
+                                {
+                                    if (ImGui::MenuItem("Browse to Folder"))
+                                    {
+                                        std::string folderPath = ExtractFolderPath(prop.path);
+                                        if (!folderPath.empty())
+                                        {
+                                            UI_ContentBrowser::NavigateToPath(state, folderPath);
+                                        }
+                                    }
+                                    ImGui::Separator();
+                                }
+
+                                if (!isDeleted)
+                                {
+                                    if (ImGui::MenuItem(isHidden ? "Show" : "Hide", "H"))
+                                    {
+                                        if (isHidden)
+                                        {
+                                            gHiddenProps.erase(prop.uniqueID);
+                                        }
+                                        else
+                                        {
+                                            gHiddenProps.insert(prop.uniqueID);
+                                        }
+                                    }
+                                    if (ImGui::MenuItem("Delete", "Del"))
+                                    {
+                                        gDeletedProps.insert(prop.uniqueID);
+                                        if (IsPropSelected(prop.uniqueID))
+                                            ClearPropSelection();
+                                    }
+                                }
+                                else
+                                {
+                                    if (ImGui::MenuItem("Restore"))
+                                    {
+                                        gDeletedProps.erase(prop.uniqueID);
+                                    }
+                                }
+                                ImGui::EndPopup();
+                            }
 
                             if (ImGui::IsItemHovered())
                             {

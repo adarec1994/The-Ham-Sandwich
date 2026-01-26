@@ -13,7 +13,86 @@
 #include <set>
 #include <chrono>
 #include <iostream>
+#include <iomanip>
 #include <limits>
+
+static bool g_M3DebugAnimationStart = true;
+static bool g_M3DebugAnimationUpdate = true;
+static int g_M3DebugAnimationFrameInterval = 60;
+static int g_M3DebugAnimationFrameCount = 0;
+
+static void DebugPrintAnimationBones(const std::string& context,
+                                      const std::vector<M3Bone>& bones,
+                                      const std::vector<glm::mat4>& worldTransforms,
+                                      const std::vector<glm::mat4>& effectiveBindGlobal,
+                                      float animTime) {
+    std::cout << "\n===============================================================================\n";
+    std::cout << "M3 ANIMATION DEBUG - " << context << "\n";
+    std::cout << "Animation time: " << std::fixed << std::setprecision(3) << animTime << "s\n";
+    std::cout << "===============================================================================\n";
+
+    std::cout << std::fixed << std::setprecision(4);
+    for (size_t i = 0; i < bones.size(); ++i) {
+        const auto& bone = bones[i];
+
+        glm::vec3 bindPos(0.0f);
+        if (i < effectiveBindGlobal.size()) {
+            bindPos = glm::vec3(effectiveBindGlobal[i][3]);
+        }
+
+        glm::vec3 animPos(0.0f);
+        glm::vec3 animScale(1.0f);
+        if (i < worldTransforms.size()) {
+            animPos = glm::vec3(worldTransforms[i][3]);
+            animScale.x = glm::length(glm::vec3(worldTransforms[i][0]));
+            animScale.y = glm::length(glm::vec3(worldTransforms[i][1]));
+            animScale.z = glm::length(glm::vec3(worldTransforms[i][2]));
+        }
+
+        glm::vec3 delta = animPos - bindPos;
+        float deltaMag = glm::length(delta);
+
+        bool hasIssue = (animScale.x < 0.01f || animScale.y < 0.01f || animScale.z < 0.01f ||
+                         animScale.x > 100.0f || animScale.y > 100.0f || animScale.z > 100.0f ||
+                         deltaMag > 1000.0f);
+
+        if (hasIssue || context == "ANIMATION START") {
+            std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
+            if (hasIssue) std::cout << " [!!!]";
+            std::cout << "\n";
+            std::cout << "      BindPos:  (" << std::setw(10) << bindPos.x << ", " << std::setw(10) << bindPos.y << ", " << std::setw(10) << bindPos.z << ")\n";
+            std::cout << "      AnimPos:  (" << std::setw(10) << animPos.x << ", " << std::setw(10) << animPos.y << ", " << std::setw(10) << animPos.z << ")\n";
+            std::cout << "      Delta:    (" << std::setw(10) << delta.x << ", " << std::setw(10) << delta.y << ", " << std::setw(10) << delta.z << ") mag=" << deltaMag << "\n";
+            std::cout << "      Scale:    (" << std::setw(10) << animScale.x << ", " << std::setw(10) << animScale.y << ", " << std::setw(10) << animScale.z << ")\n";
+
+            bool hasScaleTrack = false;
+            bool hasRotTrack = false;
+            bool hasTransTrack = false;
+            for (int t = 0; t <= 2; ++t) if (!bone.tracks[t].keyframes.empty()) hasScaleTrack = true;
+            for (int t = 4; t <= 5; ++t) if (!bone.tracks[t].keyframes.empty()) hasRotTrack = true;
+            if (!bone.tracks[6].keyframes.empty()) hasTransTrack = true;
+
+            std::cout << "      Tracks: Scale=" << (hasScaleTrack ? "Y" : "N")
+                      << " Rot=" << (hasRotTrack ? "Y" : "N")
+                      << " Trans=" << (hasTransTrack ? "Y" : "N") << "\n";
+
+            if (i < worldTransforms.size()) {
+                std::cout << "      WorldTransform:\n";
+                for (int r = 0; r < 4; ++r) {
+                    std::cout << "        [";
+                    for (int c = 0; c < 4; ++c) {
+                        std::cout << std::setw(10) << worldTransforms[i][c][r];
+                        if (c < 3) std::cout << ", ";
+                    }
+                    std::cout << "]\n";
+                }
+            }
+            std::cout << "\n";
+        }
+    }
+
+    std::cout << "===============================================================================\n\n";
+}
 
 
 extern void RecordTextureFailure(const std::string& modelPath, const std::string& texturePath);
@@ -396,6 +475,35 @@ void M3Render::precomputeBoneData() {
         glm::vec4 perspective;
         glm::decompose(bindLocal, bindLocalScale[i], bindLocalRotation[i], bindLocalTranslation[i], skew, perspective);
         bindLocalRotation[i] = glm::normalize(bindLocalRotation[i]);
+    }
+
+    if (g_M3DebugAnimationStart) {
+        std::cout << "\n===============================================================================\n";
+        std::cout << "M3 PRECOMPUTED BONE DATA - " << modelName << "\n";
+        std::cout << "===============================================================================\n";
+        std::cout << std::fixed << std::setprecision(4);
+
+        for (size_t i = 0; i < numBones; ++i) {
+            const auto& bone = bones[i];
+            glm::vec3 effPos = glm::vec3(effectiveBindGlobal[i][3]);
+            glm::vec3 origPos = glm::vec3(bone.globalMatrix[3]);
+
+            bool hasIssue = (bindLocalScale[i].x < 0.01f || bindLocalScale[i].y < 0.01f || bindLocalScale[i].z < 0.01f ||
+                            bindLocalScale[i].x > 100.0f || bindLocalScale[i].y > 100.0f || bindLocalScale[i].z > 100.0f);
+
+            std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
+            if (boneAtOrigin[i]) std::cout << " [AT_ORIGIN]";
+            if (hasIssue) std::cout << " [SCALE_ISSUE]";
+            std::cout << "\n";
+            std::cout << "      OrigGlobalPos:    (" << std::setw(10) << origPos.x << ", " << std::setw(10) << origPos.y << ", " << std::setw(10) << origPos.z << ")\n";
+            std::cout << "      EffectiveBindPos: (" << std::setw(10) << effPos.x << ", " << std::setw(10) << effPos.y << ", " << std::setw(10) << effPos.z << ")\n";
+            std::cout << "      BindLocalScale:   (" << std::setw(10) << bindLocalScale[i].x << ", " << std::setw(10) << bindLocalScale[i].y << ", " << std::setw(10) << bindLocalScale[i].z << ")\n";
+            std::cout << "      BindLocalTrans:   (" << std::setw(10) << bindLocalTranslation[i].x << ", " << std::setw(10) << bindLocalTranslation[i].y << ", " << std::setw(10) << bindLocalTranslation[i].z << ")\n";
+            std::cout << "      BindLocalRot:     (w=" << std::setw(8) << bindLocalRotation[i].w << ", x=" << std::setw(8) << bindLocalRotation[i].x
+                      << ", y=" << std::setw(8) << bindLocalRotation[i].y << ", z=" << std::setw(8) << bindLocalRotation[i].z << ")\n\n";
+        }
+
+        std::cout << "===============================================================================\n\n";
     }
 }
 
@@ -825,7 +933,15 @@ void M3Render::playAnimation(int index) {
     playingAnimation = index;
     animationTime = 0.0f;
     animationPaused = false;
+    g_M3DebugAnimationFrameCount = 0;
     updateAnimation(0.0f);
+
+    if (g_M3DebugAnimationStart) {
+        std::cout << "\n[M3Render] Playing animation " << index
+                  << " (seq=" << animations[index].sequenceId
+                  << ", duration=" << (animations[index].timestampEnd - animations[index].timestampStart) / 1000.0f << "s)\n";
+        DebugPrintAnimationBones("ANIMATION START", bones, worldTransforms, effectiveBindGlobal, animationTime);
+    }
 }
 
 void M3Render::stopAnimation() {
@@ -979,6 +1095,14 @@ void M3Render::updateAnimation(float deltaTime) {
         }
 
         boneMatrices[i] = GlmToXM(worldTransforms[i] * glm::inverse(bone.globalMatrix));
+    }
+
+    if (g_M3DebugAnimationUpdate && deltaTime > 0.0f) {
+        g_M3DebugAnimationFrameCount++;
+        if (g_M3DebugAnimationFrameCount % g_M3DebugAnimationFrameInterval == 0) {
+            DebugPrintAnimationBones("ANIMATION UPDATE (frame " + std::to_string(g_M3DebugAnimationFrameCount) + ")",
+                                     bones, worldTransforms, effectiveBindGlobal, animationTime);
+        }
     }
 }
 

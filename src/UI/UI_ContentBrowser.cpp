@@ -1703,4 +1703,110 @@ namespace UI_ContentBrowser {
             ImGui::End();
         }
     }
+
+    static IFileSystemEntryPtr FindFolderByPath(const IFileSystemEntryPtr& root, const std::vector<std::string>& pathParts, size_t startIndex = 0)
+    {
+        if (!root || !root->isDirectory()) return nullptr;
+        if (startIndex >= pathParts.size()) return root;
+
+        const std::string& targetName = pathParts[startIndex];
+
+        for (const auto& child : root->getChildren())
+        {
+            if (!child || !child->isDirectory()) continue;
+
+            std::string childName = wstring_to_utf8(child->getEntryName());
+
+            bool match = (childName.size() == targetName.size());
+            if (match)
+            {
+                for (size_t i = 0; i < childName.size() && match; ++i)
+                {
+                    if (std::tolower(static_cast<unsigned char>(childName[i])) !=
+                        std::tolower(static_cast<unsigned char>(targetName[i])))
+                        match = false;
+                }
+            }
+
+            if (match)
+            {
+                if (startIndex + 1 >= pathParts.size())
+                    return child;
+                return FindFolderByPath(child, pathParts, startIndex + 1);
+            }
+        }
+        return nullptr;
+    }
+
+    static std::vector<std::string> SplitPath(const std::string& path)
+    {
+        std::vector<std::string> parts;
+        std::string current;
+
+        for (char c : path)
+        {
+            if (c == '/' || c == '\\')
+            {
+                if (!current.empty())
+                {
+                    parts.push_back(current);
+                    current.clear();
+                }
+            }
+            else
+            {
+                current += c;
+            }
+        }
+        if (!current.empty())
+            parts.push_back(current);
+
+        return parts;
+    }
+
+    static std::string ExtractFolderPath(const std::string& filePath)
+    {
+        size_t lastSlash = filePath.find_last_of("/\\");
+        if (lastSlash != std::string::npos)
+            return filePath.substr(0, lastSlash);
+        return "";
+    }
+
+    void NavigateToPath(AppState& state, const std::string& folderPath)
+    {
+        if (folderPath.empty()) return;
+
+        std::vector<std::string> pathParts = SplitPath(folderPath);
+        if (pathParts.empty()) return;
+
+        for (const auto& archive : state.archives)
+        {
+            if (!archive) continue;
+            auto root = archive->getRoot();
+            if (!root) continue;
+
+            IFileSystemEntryPtr found = FindFolderByPath(root, pathParts, 0);
+            if (found)
+            {
+                sSelectedFolder = found;
+                sSelectedArchive = archive;
+                sSearchFilter[0] = '\0';
+                sRequestTreeSync = true;
+                sNeedsRefresh = true;
+
+                if (!sIsOpen)
+                {
+                    sIsOpen = true;
+                }
+
+                return;
+            }
+        }
+
+        std::string justFolder = ExtractFolderPath(folderPath);
+        if (!justFolder.empty() && justFolder != folderPath)
+        {
+            NavigateToPath(state, justFolder);
+        }
+    }
 }

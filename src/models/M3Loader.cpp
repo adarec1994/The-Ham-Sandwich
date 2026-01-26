@@ -4,6 +4,117 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
+
+static bool g_M3DebugBonesOnLoad = true;
+
+static void DebugPrintBonesOnLoad(const M3ModelData& model) {
+    if (!g_M3DebugBonesOnLoad || model.bones.empty()) return;
+
+    std::cout << "\n===============================================================================\n";
+    std::cout << "M3 BONE DEBUG - LOAD TIME\n";
+    std::cout << "===============================================================================\n";
+    std::cout << "Total bones: " << model.bones.size() << "\n\n";
+
+    std::cout << "--- BONE HIERARCHY ---\n";
+    for (size_t i = 0; i < model.bones.size(); ++i) {
+        const auto& bone = model.bones[i];
+
+        int depth = 0;
+        int parentId = bone.parentId;
+        while (parentId >= 0 && parentId < (int)model.bones.size() && depth < 20) {
+            depth++;
+            parentId = model.bones[parentId].parentId;
+        }
+        std::string indent(depth * 2, ' ');
+
+        std::cout << indent << "[" << i << "] " << bone.name
+                  << " (parent=" << bone.parentId
+                  << ", globalId=" << bone.globalId
+                  << ", flags=0x" << std::hex << bone.flags << std::dec << ")\n";
+    }
+
+    std::cout << "\n--- BONE TRANSFORMS ---\n";
+    for (size_t i = 0; i < model.bones.size(); ++i) {
+        const auto& bone = model.bones[i];
+
+        glm::vec3 pos = glm::vec3(bone.globalMatrix[3]);
+
+        glm::mat4 localMatrix = bone.globalMatrix;
+        if (bone.parentId >= 0 && bone.parentId < (int)model.bones.size()) {
+            localMatrix = model.bones[bone.parentId].inverseGlobalMatrix * bone.globalMatrix;
+        }
+
+        glm::vec3 localPos = glm::vec3(localMatrix[3]);
+
+        glm::vec3 scaleX = glm::vec3(localMatrix[0]);
+        glm::vec3 scaleY = glm::vec3(localMatrix[1]);
+        glm::vec3 scaleZ = glm::vec3(localMatrix[2]);
+        float sx = glm::length(scaleX);
+        float sy = glm::length(scaleY);
+        float sz = glm::length(scaleZ);
+
+        float det = glm::determinant(glm::mat3(localMatrix));
+
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name << "\n";
+        std::cout << "      GlobalPos: (" << std::setw(8) << pos.x << ", " << std::setw(8) << pos.y << ", " << std::setw(8) << pos.z << ")\n";
+        std::cout << "      LocalPos:  (" << std::setw(8) << localPos.x << ", " << std::setw(8) << localPos.y << ", " << std::setw(8) << localPos.z << ")\n";
+        std::cout << "      Scale:     (" << std::setw(8) << sx << ", " << std::setw(8) << sy << ", " << std::setw(8) << sz << ")";
+        if (det < 0) std::cout << " [MIRRORED det=" << det << "]";
+        std::cout << "\n";
+        std::cout << "      StoredPos: (" << std::setw(8) << bone.position.x << ", " << std::setw(8) << bone.position.y << ", " << std::setw(8) << bone.position.z << ")\n";
+
+        bool hasScaleTrack = false;
+        bool hasRotTrack = false;
+        bool hasTransTrack = false;
+        for (int t = 0; t <= 2; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) hasScaleTrack = true;
+        }
+        for (int t = 4; t <= 5; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) hasRotTrack = true;
+        }
+        if (!bone.tracks[6].keyframes.empty()) hasTransTrack = true;
+
+        if (hasScaleTrack || hasRotTrack || hasTransTrack) {
+            std::cout << "      Tracks:    ";
+            if (hasScaleTrack) {
+                for (int t = 0; t <= 2; ++t) {
+                    if (!bone.tracks[t].keyframes.empty()) {
+                        auto& kf = bone.tracks[t].keyframes[0];
+                        std::cout << "Scale" << t << "=(" << kf.scale.x << "," << kf.scale.y << "," << kf.scale.z << ") ";
+                    }
+                }
+            }
+            if (hasRotTrack) {
+                for (int t = 4; t <= 5; ++t) {
+                    if (!bone.tracks[t].keyframes.empty()) {
+                        auto& kf = bone.tracks[t].keyframes[0];
+                        std::cout << "Rot" << t << "=(w=" << kf.rotation.w << ",x=" << kf.rotation.x << ",y=" << kf.rotation.y << ",z=" << kf.rotation.z << ") ";
+                    }
+                }
+            }
+            if (hasTransTrack) {
+                auto& kf = bone.tracks[6].keyframes[0];
+                std::cout << "Trans=(" << kf.translation.x << "," << kf.translation.y << "," << kf.translation.z << ")";
+            }
+            std::cout << "\n";
+        }
+
+        std::cout << "      GlobalMatrix:\n";
+        for (int r = 0; r < 4; ++r) {
+            std::cout << "        [";
+            for (int c = 0; c < 4; ++c) {
+                std::cout << std::setw(10) << bone.globalMatrix[c][r];
+                if (c < 3) std::cout << ", ";
+            }
+            std::cout << "]\n";
+        }
+        std::cout << "\n";
+    }
+
+    std::cout << "===============================================================================\n\n";
+}
 
 template<typename T>
 T M3Loader::Read(const uint8_t* data, size_t offset) {
@@ -87,12 +198,10 @@ M3ModelData M3Loader::LoadFromFile(const ArchivePtr& arc, const std::shared_ptr<
     arc->getFileData(entry, buffer);
     if (buffer.empty()) return {};
 
-    // Check version and use appropriate loader
     if (buffer.size() >= 8) {
         uint32_t version = 0;
         std::memcpy(&version, buffer.data() + 4, sizeof(version));
 
-        // Use V95 loader for older versions
         if (version >= 90 && version < 100) {
             std::cout << "[M3Loader] Using V95 loader for version " << version << std::endl;
             return M3LoaderV95::Load(buffer);
@@ -108,7 +217,6 @@ bool M3Loader::ReadHeader(const uint8_t* ptr, size_t size, M3Header& h) {
     std::memcpy(h.signature, ptr, 4);
     h.version = Read<uint32_t>(ptr, 4);
 
-    // Only version 100 is supported - version 95 has different structure
     if (h.version != 100) {
         return false;
     }
@@ -705,6 +813,8 @@ M3ModelData M3Loader::Load(const std::vector<uint8_t>& buffer) {
     ApplyBoneMapping(model);
     ReadLights(ptr, size, model);
     ReadSubmeshGroups(ptr, size, model);
+
+    DebugPrintBonesOnLoad(model);
 
     model.success = true;
     return model;
