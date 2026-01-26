@@ -116,19 +116,125 @@ namespace UI_Details
 
         if (materialCount > 0 && ImGui::CollapsingHeader("Materials"))
         {
+            const auto& allMaterials = render->getAllMaterials();
+            const auto& allTextures = render->getAllTextures();
+            const auto& srvTextures = render->getGLTextures();
+            float thumbSize = 48.0f;
+
             for (size_t i = 0; i < materialCount; ++i)
             {
                 ImGui::PushID((int)i);
-                if (ImGui::TreeNode((void*)(intptr_t)i, "Material %zu", i))
+
+                int currentVar = render->getMaterialSelectedVariant(i);
+                int variantCount = (int)render->getMaterialVariantCount(i);
+
+
+                int validVariantCount = 0;
+                std::vector<int> validVariantIndices;
+                if (i < allMaterials.size())
                 {
-                    int currentVar = render->getMaterialSelectedVariant(i);
-                    int variantCount = (int)render->getMaterialVariantCount(i);
-                    if (variantCount > 1)
+                    for (int v = 0; v < (int)allMaterials[i].variants.size(); ++v)
                     {
-                        if (ImGui::SliderInt("Variant", &currentVar, 0, variantCount - 1))
-                            render->setMaterialSelectedVariant(i, currentVar);
+                        if (allMaterials[i].variants[v].textureIndexA >= 0)
+                        {
+                            validVariantIndices.push_back(v);
+                            validVariantCount++;
+                        }
                     }
-                    ImGui::Text("Variants: %d", variantCount);
+                }
+
+                char headerLabel[64];
+                if (validVariantCount > 1)
+                    snprintf(headerLabel, sizeof(headerLabel), "Material %zu [Variant %d/%d]", i, currentVar + 1, validVariantCount);
+                else
+                    snprintf(headerLabel, sizeof(headerLabel), "Material %zu", i);
+
+                if (ImGui::TreeNode((void*)(intptr_t)i, "%s", headerLabel))
+                {
+                    if (validVariantCount > 1)
+                    {
+
+                        int currentValidIdx = 0;
+                        for (int v = 0; v < (int)validVariantIndices.size(); ++v)
+                        {
+                            if (validVariantIndices[v] == currentVar)
+                            {
+                                currentValidIdx = v;
+                                break;
+                            }
+                        }
+
+                        ImGui::SetNextItemWidth(120.0f);
+                        if (ImGui::SliderInt("Variant", &currentValidIdx, 0, validVariantCount - 1))
+                        {
+                            if (currentValidIdx < (int)validVariantIndices.size())
+                                render->setMaterialSelectedVariant(i, validVariantIndices[currentValidIdx]);
+                        }
+                    }
+
+                    if (i < allMaterials.size())
+                    {
+                        const auto& mat = allMaterials[i];
+
+                        ImGui::Text("Specular: %d, %d", mat.specularX, mat.specularY);
+
+                        if (!mat.variants.empty() && currentVar >= 0 && currentVar < (int)mat.variants.size())
+                        {
+                            const auto& variant = mat.variants[currentVar];
+
+                            ImGui::Separator();
+
+                            auto drawTexture = [&](const char* id, int16_t texIndex, const std::string& path) {
+                                if (texIndex >= 0 && texIndex < (int)srvTextures.size())
+                                {
+                                    ID3D11ShaderResourceView* srv = srvTextures[texIndex].Get();
+                                    if (srv)
+                                    {
+                                        ImGui::PushID(id);
+                                        if (ImGui::ImageButton("##tex", reinterpret_cast<ImTextureID>(srv), ImVec2(thumbSize, thumbSize)))
+                                        {
+                                            int texWidth = 0, texHeight = 0;
+                                            ID3D11Resource* resource = nullptr;
+                                            srv->GetResource(&resource);
+                                            if (resource)
+                                            {
+                                                ID3D11Texture2D* texture2D = nullptr;
+                                                if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&texture2D)))
+                                                {
+                                                    D3D11_TEXTURE2D_DESC desc;
+                                                    texture2D->GetDesc(&desc);
+                                                    texWidth = static_cast<int>(desc.Width);
+                                                    texHeight = static_cast<int>(desc.Height);
+                                                    texture2D->Release();
+                                                }
+                                                resource->Release();
+                                            }
+                                            std::string title = path.empty() ?
+                                                (texIndex < (int)allTextures.size() ? allTextures[texIndex].path : "Texture Preview") : path;
+                                            Tex::OpenTexPreviewFromSRV(state, srv, texWidth, texHeight, title);
+                                        }
+                                        ImGui::PopID();
+
+                                        if (ImGui::IsItemHovered())
+                                        {
+                                            ImGui::BeginTooltip();
+                                            ImGui::Text("[%d] %s", texIndex,
+                                                texIndex < (int)allTextures.size() ? allTextures[texIndex].path.c_str() : path.c_str());
+                                            ImGui::EndTooltip();
+                                        }
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            };
+
+                            bool drewColor = drawTexture("color", variant.textureIndexA, variant.textureColorPath);
+                            if (drewColor && variant.textureIndexB >= 0)
+                                ImGui::SameLine();
+                            drawTexture("normal", variant.textureIndexB, variant.textureNormalPath);
+                        }
+                    }
+
                     ImGui::TreePop();
                 }
                 ImGui::PopID();
@@ -178,6 +284,11 @@ namespace UI_Details
                     {
                         ImGui::BeginTooltip();
                         ImGui::Text("[%zu] %s", i, tex.path.c_str());
+                        ImGui::Text("Type: %s", tex.type == 0 ? "color" : (tex.type == 1 ? "normal" : "unknown"));
+                        if (tex.intensity != 0.0f)
+                            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Intensity: %.3f", tex.intensity);
+                        if (tex.hasAlpha)
+                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Has Alpha");
                         ImGui::EndTooltip();
                     }
                 }

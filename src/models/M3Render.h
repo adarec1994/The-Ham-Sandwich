@@ -117,6 +117,7 @@ private:
     static ComPtr<ID3D11RasterizerState> sRasterState;
     static ComPtr<ID3D11DepthStencilState> sDepthState;
     static ComPtr<ID3D11BlendState> sBlendState;
+    static ComPtr<ID3D11BlendState> sAlphaBlendState;
     static bool sShadersInitialized;
 
     static std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> sTextureSRVCache;
@@ -177,7 +178,8 @@ private:
 
     void precomputeBoneData();
     void loadTextures(const M3ModelData& data, const ArchivePtr& arc);
-    ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path);
+    ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path, bool* outHasAlpha = nullptr);
+    bool materialUsesAlpha(uint16_t materialId, int variant) const;
     ComPtr<ID3D11ShaderResourceView> createFallbackWhite();
     ID3D11ShaderResourceView* resolveDiffuseTexture(uint16_t materialId, int variant) const;
 

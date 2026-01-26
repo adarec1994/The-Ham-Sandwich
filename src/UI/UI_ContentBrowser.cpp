@@ -24,6 +24,7 @@
 #include <deque>
 #include <atomic>
 #include <condition_variable>
+#include <fstream>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
@@ -962,6 +963,91 @@ namespace UI_ContentBrowser {
                             ImGui::PopStyleVar(2);
                         }
 
+                        if (file.extension == ".tex" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##texcontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                if (ImGui::MenuItem("Extract Raw (.tex)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".tex";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractTexRawDlg", "Extract Raw Texture", ".tex", config);
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Export as PNG"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".png";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexPNGDlg", "Export PNG", ".png", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as JPG"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".jpg";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexJPGDlg", "Export JPG", ".jpg", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as TIFF"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".tiff";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexTIFFDlg", "Export TIFF", ".tiff", config);
+                                }
+
+                                if (ImGui::MenuItem("Export as DDS"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".dds";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportTexDDSDlg", "Export DDS", ".dds", config);
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
                         bool isSelected = (sSelectedFileIndex == static_cast<int>(i));
                         bool isHovered = ImGui::IsItemHovered();
 
@@ -1459,6 +1545,91 @@ namespace UI_ContentBrowser {
                     sNotificationMessage = "Failed to load model for export";
                     sNotificationTimer = 3.0f;
                 }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExtractTexRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::vector<uint8_t> buffer;
+                if (sExportArchive->openFileStream(sExportFileEntry, buffer))
+                {
+                    std::ofstream out(filePath, std::ios::binary);
+                    if (out.is_open())
+                    {
+                        out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                        out.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "Texture extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to write file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read texture from archive";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexPNGDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::PNG);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "PNG exported successfully!" : "Failed to export PNG";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexJPGDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::JPEG);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "JPG exported successfully!" : "Failed to export JPG";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexTIFFDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::TIFF);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "TIFF exported successfully!" : "Failed to export TIFF";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportTexDDSDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::DDS);
+                sNotificationSuccess = success;
+                sNotificationMessage = success ? "DDS exported successfully!" : "Failed to export DDS";
+                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }

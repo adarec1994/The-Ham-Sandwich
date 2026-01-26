@@ -116,6 +116,7 @@ struct M3Texture {
     uint64_t offset = 0;
     std::string path;
     std::string textureType;
+    bool hasAlpha = false;
 };
 
 struct M3MaterialVariant {

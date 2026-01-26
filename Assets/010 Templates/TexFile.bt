@@ -1,0 +1,103 @@
+LittleEndian();
+
+local string TextureTypeStr(uint32 format, uint32 version, uint32 isCompressed, uint32 compressionFormat) {
+    if (format == 0) {
+        if (version > 0 && isCompressed == 1) {
+            switch (compressionFormat) {
+                case 0: return "Jpeg1";
+                case 1: return "Jpeg2";
+                case 2: return "Jpeg3";
+                default: return "Unknown Jpeg";
+            }
+        }
+        return "ARGB1";
+    }
+    switch (format) {
+        case 1: return "ARGB2";
+        case 5: return "ARGB16";
+        case 6: return "Grayscale";
+        case 13: return "DXT1";
+        case 14: return "DXT3";
+        case 15: return "DXT5";
+        case 18: return "Garbage";
+        default: return "Unknown";
+    }
+}
+
+typedef struct {
+    int8 quality;
+    int8 hasReplacement;
+    int8 replacement;
+} LayerInfo <read=ReadLayerInfo>;
+
+string ReadLayerInfo(LayerInfo &l) {
+    string s;
+    SPrintf(s, "q=%d, hasRepl=%d, repl=%d", l.quality, l.hasReplacement, l.replacement);
+    return s;
+}
+
+typedef struct {
+    uint32 magic <format=hex, bgcolor=cLtBlue>;
+    if (magic != 0x00474658) {
+        Warning("Invalid magic! Expected 0x00474658 (XFG)");
+        return;
+    }
+    
+    uint32 version <bgcolor=cLtGreen>;
+    int32 width <bgcolor=cLtYellow>;
+    int32 height <bgcolor=cLtYellow>;
+    uint32 depth;
+    uint32 sides;
+    int32 mipCount <bgcolor=cLtPurple>;
+    uint32 format <bgcolor=cLtRed>;
+    
+    if (version > 0) {
+        uint32 isCompressed <bgcolor=cLtAqua>;
+        uint32 compressionFormat <bgcolor=cLtAqua>;
+        LayerInfo layerInfos[4];
+        uint32 imageSizesCount;
+        uint32 imageSizes[13];
+        int32 unk;
+    }
+    
+    local string typeStr = TextureTypeStr(format, version, 
+        version > 0 ? isCompressed : 0, 
+        version > 0 ? compressionFormat : 0);
+} TexHeader <read=ReadTexHeader>;
+
+string ReadTexHeader(TexHeader &h) {
+    string s;
+    local string typeStr = TextureTypeStr(h.format, h.version, 
+        h.version > 0 ? h.isCompressed : 0, 
+        h.version > 0 ? h.compressionFormat : 0);
+    SPrintf(s, "%dx%d, %d mips, %s", h.width, h.height, h.mipCount, typeStr);
+    return s;
+}
+
+TexHeader header;
+
+local int headerSize = (header.version > 0) ? 96 : 32;
+local int dataSize = FileSize() - headerSize;
+
+if (dataSize > 0) {
+    FSeek(headerSize);
+    
+    if (header.version > 0 && header.imageSizesCount > 0) {
+        local int i;
+        local int totalRead = 0;
+        for (i = 0; i < header.imageSizesCount && i < 13; i++) {
+            if (header.imageSizes[i] > 0 && totalRead + header.imageSizes[i] <= dataSize) {
+                struct {
+                    ubyte data[header.imageSizes[i]] <bgcolor=cDkGray>;
+                } MipLevel;
+                totalRead += header.imageSizes[i];
+            }
+        }
+        
+        if (totalRead < dataSize) {
+            ubyte remainingData[dataSize - totalRead] <bgcolor=cGray>;
+        }
+    } else {
+        ubyte textureData[dataSize] <bgcolor=cDkGray>;
+    }
+}

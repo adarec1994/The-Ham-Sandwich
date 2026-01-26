@@ -1,0 +1,441 @@
+
+
+
+
+
+
+
+
+
+
+
+LittleEndian();
+
+typedef struct {
+    int64 count;
+    int64 offset;
+} M3MetaDef <read=ReadMetaDef>;
+
+string ReadMetaDef(M3MetaDef &m) {
+    string s;
+    SPrintf(s, "count=%d, offset=0x%X", m.count, m.offset);
+    return s;
+}
+
+typedef struct {
+    int64 count;
+    int64 offsetA;
+    int64 offsetB;
+} M3TrackDef;
+
+typedef struct {
+    float minX, minY, minZ, pad0;
+    float maxX, maxY, maxZ, pad1;
+    float centerX, centerY, centerZ, pad2;
+    float radius, pad3;
+} M3Bounds;
+
+typedef struct {
+    char signature[4];      
+    uint32 version;         
+    uint32 unk008;
+    uint32 pad00C;
+    
+    M3MetaDef animations;   
+    M3TrackDef trackAnim[4];
+    M3MetaDef struct080;    
+    M3TrackDef track090;
+    M3TrackDef track0A8;
+    M3TrackDef track0C0;
+    M3TrackDef track0D8;
+    M3MetaDef struct0F0;    
+    M3TrackDef track100;
+    M3TrackDef track118;
+    M3TrackDef track130;
+    M3TrackDef track148;
+    M3TrackDef track160;
+    float unkFloat178;
+    uint32 pad17C;
+    M3MetaDef bones;        
+    M3MetaDef lut190;
+    M3MetaDef lut1A0;
+    M3MetaDef lutBoneIds;   
+    M3MetaDef textures;     
+    M3MetaDef lut1D0;
+    M3MetaDef struct1E0;
+    M3MetaDef materials;    
+    M3MetaDef submeshIds;   
+    M3MetaDef lut210;
+    byte reserved220[48];
+    M3MetaDef geometry;     
+    M3MetaDef lut260;
+    M3MetaDef lut270;
+    M3MetaDef lut280;
+    M3TrackDef track290;
+    byte reserved2A8[16];
+    M3MetaDef struct2B8;
+    M3MetaDef lut2C8;
+    byte reserved2D8[32];
+    M3MetaDef struct2F8;
+    M3MetaDef struct308;
+    M3MetaDef lights;       
+    M3MetaDef struct328;
+    M3MetaDef lut338;
+    int64 idUnk348;
+    M3TrackDef track350;
+    int64 idUnk368;
+    M3TrackDef track370;
+    float floatUnk388[2];
+    
+    M3Bounds bounds0;
+    byte pad0[8];
+    M3Bounds bounds1;
+    byte pad1[8];
+    M3Bounds bounds2;
+    byte pad2[8];
+    M3Bounds bounds3;
+    byte pad3[8];
+    
+    M3MetaDef struct490;
+    M3MetaDef lut4A0;
+    M3Bounds bounds4;
+    byte pad4[8];
+    float floatUnk4F0;
+    uint32 pad4F4;
+    float floatUnk4F8;
+    uint32 pad4FC;
+    float posUnk500[3];
+    uint32 pad50C;
+    M3MetaDef lut510;
+    M3MetaDef lut520;
+    M3MetaDef lut530;
+    M3MetaDef struct540;
+    M3MetaDef lut550;
+    M3MetaDef struct560;
+    M3MetaDef struct570;
+    int64 idUnk580;
+    M3MetaDef struct588;
+    M3MetaDef customBoneMinMax;
+    M3MetaDef lutBoneToCustom;
+    byte pad5B8[8];
+    M3TrackDef track5C0;
+    float floatUnk5D8; uint32 pad5DC;
+    float floatUnk5E0; uint32 pad5E4;
+    float floatUnk5E8; uint32 pad5EC;
+    float floatUnk5F0; uint32 pad5F4;
+    float floatUnk5F8; uint32 pad5FC;
+    float floatUnk600; uint32 pad604;
+    float floatUnk608; uint32 pad60C;
+    float floatUnk610; uint32 pad614;
+    float floatUnk618; uint32 pad61C;
+    float floatUnk620; uint32 pad624;
+    uint32 pad628;
+    uint32 pad62C;
+} M3Header;
+
+
+typedef struct {
+    int16 unk0;
+    ubyte type;           
+    ubyte unk1;
+    int32 flags <format=hex>;
+    float intensity;
+    ubyte unk4;
+    ubyte unk5;
+    ubyte unk6;
+    ubyte unk7;
+    uint64 nrLetters;
+    uint64 stringOffset;
+    
+    
+    if (nrLetters > 0) {
+        local int64 savedPos = FTell();
+        local int64 strBase = dataBase + header.textures.offset + header.textures.count * 32;
+        FSeek(strBase + stringOffset);
+        wchar_t path[nrLetters] <bgcolor=cLtYellow>;
+        FSeek(savedPos);
+    }
+} M3Texture <read=ReadTexture>;
+
+string ReadTexture(M3Texture &t) {
+    string s;
+    if (t.nrLetters > 0) {
+        SPrintf(s, "[%s] %s", t.type == 0 ? "color" : "normal", t.path);
+    } else {
+        SPrintf(s, "[%s] (no path)", t.type == 0 ? "color" : "normal");
+    }
+    return s;
+}
+
+
+typedef struct {
+    ubyte unk0 <format=hex, bgcolor=cLtRed>;
+    ubyte unk1 <format=hex, bgcolor=cLtRed>;
+    ubyte unk2 <format=hex, bgcolor=cLtRed>;
+    ubyte unk3 <format=hex, bgcolor=cLtRed>;
+    ubyte unk4 <format=hex, bgcolor=cLtGreen>;
+    ubyte unk5 <format=hex, bgcolor=cLtGreen>;
+    ubyte unk6 <format=hex, bgcolor=cLtGreen>;
+    ubyte unk7 <format=hex, bgcolor=cLtGreen>;
+    ubyte unk8 <format=hex, bgcolor=cLtBlue>;
+    ubyte unk9 <format=hex, bgcolor=cLtBlue>;
+    ubyte unk10 <format=hex, bgcolor=cLtBlue>;
+    ubyte unk11 <format=hex, bgcolor=cLtBlue>;
+    uint16 unk12 <format=hex>;
+    uint16 unk14 <format=hex>;
+    uint32 unk16 <format=hex>;
+    uint32 unk20 <format=hex>;
+    int32 specularX;
+    int32 specularY;
+    uint64 nrVariants;
+    uint64 variantsOffset;
+} M3Material <read=ReadMaterial>;
+
+string ReadMaterial(M3Material &m) {
+    string s;
+    SPrintf(s, "variants=%d, spec=(%d,%d)", m.nrVariants, m.specularX, m.specularY);
+    return s;
+}
+
+
+
+typedef struct {
+    int16 textureIndexColor <bgcolor=cYellow>;    
+    int16 textureIndexNormal <bgcolor=cYellow>;   
+    
+    
+    
+    uint16 grp0[4] <bgcolor=cLtRed, format=hex>;      
+    uint16 grp1[4] <bgcolor=cLtGreen, format=hex>;    
+    uint16 grp2[4] <bgcolor=cLtBlue, format=hex>;     
+    uint16 grp3[4] <bgcolor=cLtPurple, format=hex>;   
+    uint16 grp4[4] <bgcolor=cLtAqua, format=hex>;     
+    uint16 grp5[4] <bgcolor=cLtGray, format=hex>;     
+    uint16 grp6[4] <bgcolor=cDkRed, format=hex>;      
+    uint16 grp7[4] <bgcolor=cDkGreen, format=hex>;    
+    uint16 grp8[4] <bgcolor=cDkBlue, format=hex>;     
+    uint16 grp9[4] <bgcolor=cDkPurple, format=hex>;   
+    uint16 rest[106] <format=hex>;                     
+} M3MaterialVariant <read=ReadVariant>;
+
+string ReadVariant(M3MaterialVariant &v) {
+    string s;
+    SPrintf(s, "tex=%d/%d grp0=[%d,%d,%d,%d]", 
+        v.textureIndexColor, v.textureIndexNormal,
+        v.grp0[0], v.grp0[1], v.grp0[2], v.grp0[3]);
+    return s;
+}
+
+
+typedef struct {
+    uint32 startIndex;
+    uint32 startVertex;
+    uint32 indexCount;
+    uint32 vertexCount;
+    uint16 startBoneMapping;
+    uint16 nrBoneMapping;
+    uint16 unk1;
+    uint16 materialID <bgcolor=cYellow>;
+    uint16 unk2;
+    uint16 unk3;
+    uint16 unk4;
+    ubyte groupId;
+    ubyte unkGroupRelated;
+    ubyte color0[4] <bgcolor=cLtRed, format=hex>;   
+    ubyte color1[4] <bgcolor=cLtGreen, format=hex>; 
+    float boundMin[4];
+    float boundMax[4];
+    float unkVec4[4];
+    byte padding[24];
+} M3Submesh <read=ReadSubmesh>;
+
+string ReadSubmesh(M3Submesh &s) {
+    string ss;
+    SPrintf(ss, "mat=%d, tris=%d, col0=[%02X,%02X,%02X,%02X]", 
+        s.materialID, s.indexCount/3, 
+        s.color0[0], s.color0[1], s.color0[2], s.color0[3]);
+    return ss;
+}
+
+
+typedef struct {
+    byte reserved0[24];
+    uint32 nrVertices;
+    uint16 vertexSize;
+    int16 vertexFlags <format=hex>;
+    ubyte fieldTypes[11];
+    byte pad;
+    byte reserved1[76];
+    uint32 nrIndices;
+    int16 indexFlags <format=hex>;
+    byte reserved2[10];
+    uint32 ofsIndices;
+    uint32 pad2;
+    uint32 nrSubmeshes;
+    uint32 pad3;
+    uint32 ofsSubmeshes;
+    byte reserved3[124];
+} M3Geometry <read=ReadGeometry>;
+
+string ReadGeometry(M3Geometry &g) {
+    string s;
+    SPrintf(s, "verts=%d, indices=%d, submeshes=%d", g.nrVertices, g.nrIndices, g.nrSubmeshes);
+    return s;
+}
+
+
+typedef struct {
+    uint64 nrLetters;
+    uint64 nameOffset;
+    int32 id;
+    int16 globalId;
+    uint16 flags <format=hex>;
+    int16 parentId;
+    int16 unk01;
+    ubyte unk02;
+    ubyte unk03;
+    ubyte unk04;
+    ubyte unk05;
+    uint32 unk06;
+    M3TrackDef tracks[8];
+    float globalMatrix[16];
+    float inverseGlobalMatrix[16];
+    float posX, posY, posZ;
+    uint32 pad;
+} M3Bone <read=ReadBone>;
+
+string ReadBone(M3Bone &b) {
+    string s;
+    SPrintf(s, "id=%d, parent=%d", b.id, b.parentId);
+    return s;
+}
+
+
+typedef struct {
+    uint16 sequenceId;
+    uint16 unk1;
+    uint16 unk2;
+    uint16 unk3;
+    uint16 unk4;
+    uint16 fallbackSequence;
+    uint32 timestampStart;
+    uint32 timestampEnd;
+    uint16 unk10;
+    uint16 unk11;
+    uint16 unk12;
+    uint16 unk13;
+    uint16 unk14;
+    uint16 unk15;
+    float bound1[3];
+    uint32 unk19;
+    float bound2[3];
+    uint32 unk23;
+    float bound3[3];
+    uint32 unk25;
+    float bound4[3];
+    uint32 unk27;
+    uint64 unk28;
+    uint64 unk29;
+} M3Animation <read=ReadAnimation>;
+
+string ReadAnimation(M3Animation &a) {
+    string s;
+    SPrintf(s, "seq=%d, time=%d-%d", a.sequenceId, a.timestampStart, a.timestampEnd);
+    return s;
+}
+
+
+
+typedef struct {
+    uint16 boneId <bgcolor=cYellow>;
+    uint16 unk00;
+    int16 unk01;
+    int16 unk02;
+    int16 unk03;
+    int16 values1[39] <bgcolor=cLtRed>;
+    M3TrackDef trackdefs1[3];
+    int16 values2[60] <bgcolor=cLtGreen>;
+    M3TrackDef trackdefs2[3];
+    int16 values3[24] <bgcolor=cLtBlue>;
+} M3Light <read=ReadLight>;
+
+string ReadLight(M3Light &l) {
+    string s;
+    SPrintf(s, "boneId=%d", l.boneId);
+    return s;
+}
+
+
+typedef struct {
+    uint16 submeshId;
+    uint16 unk1;
+} M3SubmeshGroup;
+
+
+
+
+
+local int64 dataBase = 1584; 
+
+M3Header header;
+
+
+if (header.textures.count > 0) {
+    FSeek(dataBase + header.textures.offset);
+    M3Texture textures[header.textures.count];
+}
+
+
+if (header.materials.count > 0) {
+    FSeek(dataBase + header.materials.offset);
+    M3Material materials[header.materials.count];
+    
+    
+    local int64 matDataStart = dataBase + header.materials.offset + header.materials.count * 48;
+    local int i;
+    for (i = 0; i < header.materials.count; i++) {
+        if (materials[i].nrVariants > 0) {
+            FSeek(matDataStart + materials[i].variantsOffset);
+            struct {
+                M3MaterialVariant variants[materials[i].nrVariants];
+            } materialVariants;
+        }
+    }
+}
+
+
+if (header.geometry.count > 0) {
+    FSeek(dataBase + header.geometry.offset);
+    M3Geometry geometryHeader[header.geometry.count];
+    
+    
+    local int64 geoDataBase = dataBase + header.geometry.offset + 208;
+    if (geometryHeader[0].nrSubmeshes > 0) {
+        FSeek(geoDataBase + geometryHeader[0].ofsSubmeshes);
+        M3Submesh submeshes[geometryHeader[0].nrSubmeshes];
+    }
+}
+
+
+if (header.bones.count > 0) {
+    FSeek(dataBase + header.bones.offset);
+    M3Bone bones[header.bones.count];
+}
+
+
+if (header.animations.count > 0) {
+    FSeek(dataBase + header.animations.offset);
+    M3Animation animations[header.animations.count];
+}
+
+
+if (header.lights.count > 0) {
+    FSeek(dataBase + header.lights.offset);
+    M3Light lights[header.lights.count];
+}
+
+
+if (header.submeshIds.count > 0) {
+    FSeek(dataBase + header.submeshIds.offset);
+    M3SubmeshGroup submeshGroups[header.submeshIds.count];
+}
