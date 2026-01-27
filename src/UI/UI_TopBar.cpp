@@ -1,6 +1,6 @@
 #include "UI_TopBar.h"
+#include "UI_Globals.h"
 #include <imgui.h>
-#include <cstdio>
 
 namespace UI_TopBar
 {
@@ -47,6 +47,15 @@ namespace UI_TopBar
 
                 if (ImGui::BeginMenu("File"))
                 {
+                    bool hasArchives = !state.archives.empty();
+
+                    if (ImGui::MenuItem("Dump All Archives...", nullptr, false, hasArchives))
+                    {
+                        gShowDumpFolderDialog = true;
+                    }
+
+                    ImGui::Separator();
+
                     if (ImGui::MenuItem("Settings"))
                     {
                         *showSettings = true;
