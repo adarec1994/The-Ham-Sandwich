@@ -5,6 +5,9 @@
 #include "UI_Outliner.h"
 #include "UI_Details.h"
 #include "UI_ContentBrowser.h"
+#include "UI_TopBar.h"
+#include "../settings/Settings.h"
+#include "about.h"
 
 #include "splashscreen.h"
 #include "../tex/tex.h"
@@ -14,6 +17,15 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+
+bool gShowSettings = false;
+bool gShowAbout = false;
+bool gRequestQuit = false;
+
+bool ShouldQuit()
+{
+    return gRequestQuit;
+}
 
 static void RenderLoadingOverlay()
 {
@@ -245,6 +257,8 @@ void RenderUI(AppState& state)
         return;
     }
 
+    UI_TopBar::Draw(state, &gShowSettings, &gShowAbout, &gRequestQuit);
+
     UI_Outliner::Draw(state);
     UI_Details::Draw(state);
     UI_ContentBrowser::Draw(state);
@@ -258,4 +272,14 @@ void RenderUI(AppState& state)
     RenderExtractDialog(state);
     RenderDumpOverlay();
     RenderLoadingOverlay();
+
+    if (gShowSettings)
+    {
+        RenderSettingsWindow(&gShowSettings);
+    }
+
+    if (gShowAbout)
+    {
+        RenderAboutWindow(&gShowAbout);
+    }
 }

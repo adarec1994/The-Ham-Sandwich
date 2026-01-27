@@ -307,6 +307,8 @@ set(HAM_SANDWICH_SOURCES
         src/Skybox/Sky.h
         src/Skybox/Sky_Manager.cpp
         src/Skybox/Sky_Manager.h
+        src/UI/UI_TopBar.cpp
+        src/UI/UI_TopBar.h
 )
 
 if(WIN32)

@@ -3,6 +3,7 @@
 #include "ImGuiFileDialog.h"
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -11,46 +12,257 @@ static bool gSkipIconLoaded = false;
 static ID3D11ShaderResourceView* gSkipIconTexture = nullptr;
 static int gSkipIconWidth = 0;
 static int gSkipIconHeight = 0;
+static bool gAutoLoadAttempted = false;
+static const char* CONFIG_FILENAME = "wildstar_path.cfg";
 
-void LoadArchivesFromPath(AppState& state, const std::string& pathStr) {
-    if (!fs::exists(pathStr) || !fs::is_directory(pathStr)) return;
+ArchiveLoadState gArchiveLoadState;
 
-    for (const auto& entry : fs::recursive_directory_iterator(pathStr)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".index") {
-            std::string filename = entry.path().filename().string();
+static const std::vector<std::string> DEFAULT_PATHS = {
+    R"(C:\Program Files (x86)\NCSOFT\WildStar)",
+    R"(C:\Program Files (x86)\Steam\steamapps\common\WildStar)",
+    R"(C:\Program Files\NCSOFT\WildStar)",
+    R"(C:\Program Files\Steam\steamapps\common\WildStar)"
+};
 
-            if (filename == "Bootstrap.index" ||
-                filename == "Launcher.index" ||
-                filename == "Client64.index" ||
-                filename == "Patch.index") {
-                continue;
-            }
-
-            try {
-                std::cout << "Loading: " << entry.path() << std::endl;
-
-                std::wstring wpath = entry.path().wstring();
-
-                auto archive = std::make_shared<Archive>(wpath);
-                archive->loadIndexInfo();
-                archive->loadArchiveInfo();
-                archive->asyncLoad();
-
-                state.archives.push_back(archive);
-            }
-            catch (const std::exception& e) {
-                std::cerr << "[Warning] Failed to load " << entry.path().string()
-                          << ": " << e.what() << std::endl;
-            }
-        }
+std::string LoadLastUsedPath() {
+    std::ifstream file(CONFIG_FILENAME);
+    if (!file.is_open()) {
+        return "";
     }
 
-    if (!state.archives.empty()) {
-        state.archivesLoaded = true;
+    std::string path;
+    std::getline(file, path);
+    file.close();
+
+    while (!path.empty() && (path.back() == '\n' || path.back() == '\r' || path.back() == ' ')) {
+        path.pop_back();
+    }
+
+    return path;
+}
+
+void SaveLastUsedPath(const std::string& path) {
+    std::ofstream file(CONFIG_FILENAME);
+    if (file.is_open()) {
+        file << path;
+        file.close();
+        std::cout << "[Config] Saved WildStar path: " << path << std::endl;
+    } else {
+        std::cerr << "[Config] Failed to save path to config file" << std::endl;
     }
 }
 
+bool PathHasArchives(const std::string& pathStr) {
+    if (!fs::exists(pathStr) || !fs::is_directory(pathStr)) {
+        return false;
+    }
+
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(pathStr)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".index") {
+                std::string filename = entry.path().filename().string();
+
+                if (filename == "Bootstrap.index" ||
+                    filename == "Launcher.index" ||
+                    filename == "Client64.index" ||
+                    filename == "Patch.index") {
+                    continue;
+                }
+
+                return true;
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Warning] Error scanning path " << pathStr << ": " << e.what() << std::endl;
+    }
+
+    return false;
+}
+
+static void ScanForArchives(const std::string& pathStr) {
+    gArchiveLoadState.pendingArchives.clear();
+    gArchiveLoadState.totalArchives = 0;
+    gArchiveLoadState.loadedArchives = 0;
+    gArchiveLoadState.scanComplete = false;
+
+    if (!fs::exists(pathStr) || !fs::is_directory(pathStr)) {
+        gArchiveLoadState.scanComplete = true;
+        return;
+    }
+
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(pathStr)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".index") {
+                std::string filename = entry.path().filename().string();
+
+                if (filename == "Bootstrap.index" ||
+                    filename == "Launcher.index" ||
+                    filename == "Client64.index" ||
+                    filename == "Patch.index") {
+                    continue;
+                }
+
+                gArchiveLoadState.pendingArchives.push_back(entry.path());
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Warning] Error scanning path " << pathStr << ": " << e.what() << std::endl;
+    }
+
+    gArchiveLoadState.totalArchives = static_cast<int>(gArchiveLoadState.pendingArchives.size());
+    gArchiveLoadState.scanComplete = true;
+}
+
+static void StartArchiveLoading(AppState& state, const std::string& pathStr, bool savePath) {
+    gArchiveLoadState.isLoading = true;
+    gArchiveLoadState.loadPath = pathStr;
+    gArchiveLoadState.savePathOnComplete = savePath;
+    gArchiveLoadState.currentArchiveName = "Scanning...";
+    state.currentDialogPath = pathStr;
+    ScanForArchives(pathStr);
+}
+
+static void ProcessArchiveLoading(AppState& state) {
+    if (!gArchiveLoadState.isLoading) return;
+    if (!gArchiveLoadState.scanComplete) return;
+
+    if (gArchiveLoadState.loadedArchives >= gArchiveLoadState.totalArchives) {
+        gArchiveLoadState.isLoading = false;
+
+        if (!state.archives.empty()) {
+            state.archivesLoaded = true;
+            if (gArchiveLoadState.savePathOnComplete) {
+                SaveLastUsedPath(gArchiveLoadState.loadPath);
+            }
+        }
+        return;
+    }
+
+    const auto& archivePath = gArchiveLoadState.pendingArchives[gArchiveLoadState.loadedArchives];
+    gArchiveLoadState.currentArchiveName = archivePath.filename().string();
+
+    try {
+        std::cout << "Loading: " << archivePath << std::endl;
+
+        std::wstring wpath = archivePath.wstring();
+
+        auto archive = std::make_shared<Archive>(wpath);
+        archive->loadIndexInfo();
+        archive->loadArchiveInfo();
+        archive->asyncLoad();
+
+        state.archives.push_back(archive);
+    }
+    catch (const std::exception& e) {
+        std::cerr << "[Warning] Failed to load " << archivePath.string()
+                  << ": " << e.what() << std::endl;
+    }
+
+    gArchiveLoadState.loadedArchives++;
+}
+
+bool TryAutoLoadArchives(AppState& state) {
+    for (const auto& path : DEFAULT_PATHS) {
+        std::cout << "[AutoLoad] Checking default path: " << path << std::endl;
+        if (PathHasArchives(path)) {
+            std::cout << "[AutoLoad] Found archives in: " << path << std::endl;
+            StartArchiveLoading(state, path, false);
+            return true;
+        }
+    }
+
+    std::string savedPath = LoadLastUsedPath();
+    if (!savedPath.empty()) {
+        std::cout << "[AutoLoad] Checking saved path: " << savedPath << std::endl;
+        if (PathHasArchives(savedPath)) {
+            std::cout << "[AutoLoad] Found archives in saved path: " << savedPath << std::endl;
+            StartArchiveLoading(state, savedPath, false);
+            return true;
+        } else {
+            std::cout << "[AutoLoad] Saved path no longer valid: " << savedPath << std::endl;
+        }
+    }
+
+    std::cout << "[AutoLoad] No archives found in default or saved locations" << std::endl;
+    return false;
+}
+
+void LoadArchivesFromPath(AppState& state, const std::string& pathStr) {
+    StartArchiveLoading(state, pathStr, true);
+}
+
+static void RenderLoadingBar() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::SetNextWindowBgAlpha(0.8f);
+
+    ImGuiWindowFlags overlayFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                     ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    ImGui::Begin("##ArchiveLoadOverlay", nullptr, overlayFlags);
+    ImGui::End();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 20));
+
+    float windowWidth = 450.0f;
+    ImVec2 windowPos(
+        viewport->Pos.x + (viewport->Size.x - windowWidth) * 0.5f,
+        viewport->Pos.y + (viewport->Size.y - 120.0f) * 0.5f
+    );
+
+    ImGui::SetNextWindowPos(windowPos);
+    ImGui::SetNextWindowSize(ImVec2(windowWidth, 0));
+
+    ImGuiWindowFlags loadingFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+
+    if (ImGui::Begin("##ArchiveLoadWindow", nullptr, loadingFlags)) {
+        ImGui::Text("Loading Archives...");
+        ImGui::Spacing();
+
+        float progress = gArchiveLoadState.totalArchives > 0
+            ? static_cast<float>(gArchiveLoadState.loadedArchives) / static_cast<float>(gArchiveLoadState.totalArchives)
+            : 0.0f;
+
+        ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20));
+
+        ImGui::Spacing();
+
+        char countText[64];
+        snprintf(countText, sizeof(countText), "%d / %d",
+                 gArchiveLoadState.loadedArchives, gArchiveLoadState.totalArchives);
+        ImGui::Text("%s", countText);
+
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s",
+                          gArchiveLoadState.currentArchiveName.c_str());
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(2);
+}
+
 void RenderSplashScreen(AppState& state) {
+    if (!gAutoLoadAttempted) {
+        gAutoLoadAttempted = true;
+        TryAutoLoadArchives(state);
+    }
+
+    ProcessArchiveLoading(state);
+
+    if (gArchiveLoadState.isLoading) {
+        RenderLoadingBar();
+        return;
+    }
+
+    if (state.archivesLoaded) {
+        return;
+    }
+
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->Pos);
     ImGui::SetNextWindowSize(viewport->Size);

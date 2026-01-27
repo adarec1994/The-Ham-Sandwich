@@ -147,16 +147,33 @@ void SnapCameraToProp(AppState& state, const glm::vec3& position, float scale)
     state.camera.MovementSpeed = std::max(10.0f, estimatedSize * 2.0f);
 }
 
+static const float SPEED_MIN = 1.0f;
+static const float SPEED_MAX = 500.0f;
+
 void scroll_callback(HWND hwnd, short delta, AppState* state)
 {
     if (GetAsyncKeyState(VK_RBUTTON) & 0x8000)
     {
         if (state)
         {
-            float scrollAmount = static_cast<float>(delta) / WHEEL_DELTA;
-            state->camera.MovementSpeed += scrollAmount * 5.0f;
-            if (state->camera.MovementSpeed < 1.0f) state->camera.MovementSpeed = 1.0f;
-            if (state->camera.MovementSpeed > 500.0f) state->camera.MovementSpeed = 500.0f;
+            float scrollDirection = (delta > 0) ? 1.0f : -1.0f;
+
+            float currentSpeed = state->camera.MovementSpeed;
+            float normalizedPos = (currentSpeed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN);
+
+            float scaleFactor = 0.05f + normalizedPos * 0.15f;
+
+            if (scrollDirection > 0)
+            {
+                state->camera.MovementSpeed *= (1.0f + scaleFactor);
+            }
+            else
+            {
+                state->camera.MovementSpeed /= (1.0f + scaleFactor);
+            }
+
+            if (state->camera.MovementSpeed < SPEED_MIN) state->camera.MovementSpeed = SPEED_MIN;
+            if (state->camera.MovementSpeed > SPEED_MAX) state->camera.MovementSpeed = SPEED_MAX;
         }
     }
 }
@@ -186,7 +203,6 @@ void UpdateCamera(HWND hwnd, AppState& state)
         gCameraActive = true;
         SetCapture(hwnd);
 
-        // Lock cursor at current position
         GetCursorPos(&gLockPos);
 
         while (ShowCursor(FALSE) >= 0);
@@ -207,7 +223,6 @@ void UpdateCamera(HWND hwnd, AppState& state)
         float deltaX = static_cast<float>(currentPos.x - gLockPos.x);
         float deltaY = static_cast<float>(currentPos.y - gLockPos.y);
 
-        // Reset cursor to locked position
         SetCursorPos(gLockPos.x, gLockPos.y);
 
         state.camera.Yaw   += deltaX * state.camera.MouseSensitivity;

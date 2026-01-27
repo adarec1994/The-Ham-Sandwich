@@ -78,3 +78,4 @@ void UpdateCamera(HWND hwnd, AppState& state);
 void scroll_callback(HWND hwnd, short delta, AppState* state);
 void RenderAreas(const AppState& state, int display_w, int display_h);
 void RenderUI(AppState& state);
+bool ShouldQuit();

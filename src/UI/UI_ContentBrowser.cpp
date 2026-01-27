@@ -32,9 +32,9 @@ extern ID3D11Device* gDevice;
 extern ID3D11DeviceContext* gContext;
 
 namespace UI_ContentBrowser {
-    static bool sIsOpen = false;
-    static bool sIsDocked = false;
-    static float sCurrentHeight = 0.0f;
+    static bool sIsOpen = true;
+    static bool sIsDocked = true;
+    static float sCurrentHeight = 300.0f;
     static float sTargetHeight = 300.0f;
     static float sAnimSpeed = 1500.0f;
     static float sTreeWidth = 200.0f;
