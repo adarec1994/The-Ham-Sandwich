@@ -950,6 +950,21 @@ namespace UI_ContentBrowser {
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
                                 }
 
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Extract Raw (.m3)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".m3";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractM3RawDlg", "Extract Raw M3", ".m3", config);
+                                }
+
                                 if (!canExport)
                                 {
                                     ImGui::EndDisabled();
@@ -1545,6 +1560,39 @@ namespace UI_ContentBrowser {
                     sNotificationMessage = "Failed to load model for export";
                     sNotificationTimer = 3.0f;
                 }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExtractM3RawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::vector<uint8_t> buffer;
+                if (sExportArchive->openFileStream(sExportFileEntry, buffer))
+                {
+                    std::ofstream out(filePath, std::ios::binary);
+                    if (out.is_open())
+                    {
+                        out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                        out.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "M3 extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to write file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read M3 from archive";
+                }
+                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }

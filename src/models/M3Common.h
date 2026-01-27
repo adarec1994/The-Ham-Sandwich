@@ -120,11 +120,15 @@ struct M3Texture {
 };
 
 struct M3MaterialVariant {
-    int16_t textureIndexA = -1;
-    int16_t textureIndexB = -1;
+    int16_t textureIndexA = -1;  // Diffuse/color layer 0
+    int16_t textureIndexB = -1;  // Normal map
+    int16_t textureIndexC = -1;  // Color layer 1 (texture blend)
+    int16_t textureIndexD = -1;  // Color layer 2 (texture blend)
     std::array<uint16_t, 146> unkValues{};
     std::string textureColorPath;
     std::string textureNormalPath;
+    std::string textureColor2Path;  // Second color layer
+    std::string textureColor3Path;  // Third color layer
 };
 
 struct M3Material {
@@ -195,6 +199,10 @@ struct M3Geometry {
     uint32_t ofsIndices = 0;
     uint32_t nrSubmeshes = 0;
     uint32_t ofsSubmeshes = 0;
+
+    // True if blend values look like texture layer blends (dominant channel ~255)
+    // False if blend values are vertex colors or other data
+    bool usesTextureLayerBlending = false;
 
     std::vector<M3Vertex> vertices;
     std::vector<uint32_t> indices;
@@ -322,4 +330,4 @@ struct M3ModelData {
     bool success = false;
 };
 
-#pragma pack(pop)
+#pragma pack(pop)w

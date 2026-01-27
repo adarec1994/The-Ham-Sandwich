@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
+#include <vector>
 
 static bool g_M3DebugBonesOnLoad = true;
 
@@ -12,30 +13,27 @@ static void DebugPrintBonesOnLoad(const M3ModelData& model) {
     if (!g_M3DebugBonesOnLoad || model.bones.empty()) return;
 
     std::cout << "\n===============================================================================\n";
-    std::cout << "M3 BONE DEBUG - LOAD TIME\n";
+    std::cout << "M3 BONE DEBUG - LOAD TIME (showing legs + mirrored only)\n";
     std::cout << "===============================================================================\n";
     std::cout << "Total bones: " << model.bones.size() << "\n\n";
 
-    std::cout << "--- BONE HIERARCHY ---\n";
+    // First pass: identify mirrored bones
+    std::vector<bool> isMirrored(model.bones.size(), false);
     for (size_t i = 0; i < model.bones.size(); ++i) {
-        const auto& bone = model.bones[i];
-
-        int depth = 0;
-        int parentId = bone.parentId;
-        while (parentId >= 0 && parentId < (int)model.bones.size() && depth < 20) {
-            depth++;
-            parentId = model.bones[parentId].parentId;
+        glm::mat4 localMatrix = model.bones[i].globalMatrix;
+        if (model.bones[i].parentId >= 0 && model.bones[i].parentId < (int)model.bones.size()) {
+            localMatrix = model.bones[model.bones[i].parentId].inverseGlobalMatrix * model.bones[i].globalMatrix;
         }
-        std::string indent(depth * 2, ' ');
-
-        std::cout << indent << "[" << i << "] " << bone.name
-                  << " (parent=" << bone.parentId
-                  << ", globalId=" << bone.globalId
-                  << ", flags=0x" << std::hex << bone.flags << std::dec << ")\n";
+        float det = glm::determinant(glm::mat3(localMatrix));
+        isMirrored[i] = (det < 0);
     }
 
-    std::cout << "\n--- BONE TRANSFORMS ---\n";
+    std::cout << "--- BONE TRANSFORMS (legs 0-20 + mirrored) ---\n";
     for (size_t i = 0; i < model.bones.size(); ++i) {
+        // Only show bones 0-20 or mirrored bones
+        bool isLegBone = (i <= 20);
+        if (!isLegBone && !isMirrored[i]) continue;
+
         const auto& bone = model.bones[i];
 
         glm::vec3 pos = glm::vec3(bone.globalMatrix[3]);
@@ -46,69 +44,39 @@ static void DebugPrintBonesOnLoad(const M3ModelData& model) {
         }
 
         glm::vec3 localPos = glm::vec3(localMatrix[3]);
-
-        glm::vec3 scaleX = glm::vec3(localMatrix[0]);
-        glm::vec3 scaleY = glm::vec3(localMatrix[1]);
-        glm::vec3 scaleZ = glm::vec3(localMatrix[2]);
-        float sx = glm::length(scaleX);
-        float sy = glm::length(scaleY);
-        float sz = glm::length(scaleZ);
-
         float det = glm::determinant(glm::mat3(localMatrix));
 
         std::cout << std::fixed << std::setprecision(4);
-        std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name << "\n";
+        std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
+        if (isMirrored[i]) std::cout << " [MIRRORED det=" << det << "]";
+        std::cout << "\n";
         std::cout << "      GlobalPos: (" << std::setw(8) << pos.x << ", " << std::setw(8) << pos.y << ", " << std::setw(8) << pos.z << ")\n";
         std::cout << "      LocalPos:  (" << std::setw(8) << localPos.x << ", " << std::setw(8) << localPos.y << ", " << std::setw(8) << localPos.z << ")\n";
-        std::cout << "      Scale:     (" << std::setw(8) << sx << ", " << std::setw(8) << sy << ", " << std::setw(8) << sz << ")";
-        if (det < 0) std::cout << " [MIRRORED det=" << det << "]";
-        std::cout << "\n";
-        std::cout << "      StoredPos: (" << std::setw(8) << bone.position.x << ", " << std::setw(8) << bone.position.y << ", " << std::setw(8) << bone.position.z << ")\n";
 
-        bool hasScaleTrack = false;
-        bool hasRotTrack = false;
-        bool hasTransTrack = false;
-        for (int t = 0; t <= 2; ++t) {
-            if (!bone.tracks[t].keyframes.empty()) hasScaleTrack = true;
+        // Show first keyframe of each track if present
+        bool hasAnyTrack = false;
+        for (int t = 0; t < 8; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) hasAnyTrack = true;
         }
-        for (int t = 4; t <= 5; ++t) {
-            if (!bone.tracks[t].keyframes.empty()) hasRotTrack = true;
-        }
-        if (!bone.tracks[6].keyframes.empty()) hasTransTrack = true;
-
-        if (hasScaleTrack || hasRotTrack || hasTransTrack) {
+        if (hasAnyTrack) {
             std::cout << "      Tracks:    ";
-            if (hasScaleTrack) {
-                for (int t = 0; t <= 2; ++t) {
-                    if (!bone.tracks[t].keyframes.empty()) {
-                        auto& kf = bone.tracks[t].keyframes[0];
-                        std::cout << "Scale" << t << "=(" << kf.scale.x << "," << kf.scale.y << "," << kf.scale.z << ") ";
-                    }
+            for (int t = 0; t <= 2; ++t) {
+                if (!bone.tracks[t].keyframes.empty()) {
+                    auto& kf = bone.tracks[t].keyframes[0];
+                    std::cout << "S" << t << "=(" << kf.scale.x << "," << kf.scale.y << "," << kf.scale.z << ") ";
                 }
             }
-            if (hasRotTrack) {
-                for (int t = 4; t <= 5; ++t) {
-                    if (!bone.tracks[t].keyframes.empty()) {
-                        auto& kf = bone.tracks[t].keyframes[0];
-                        std::cout << "Rot" << t << "=(w=" << kf.rotation.w << ",x=" << kf.rotation.x << ",y=" << kf.rotation.y << ",z=" << kf.rotation.z << ") ";
-                    }
+            for (int t = 4; t <= 5; ++t) {
+                if (!bone.tracks[t].keyframes.empty()) {
+                    auto& kf = bone.tracks[t].keyframes[0];
+                    std::cout << "R" << t << "=(w=" << kf.rotation.w << ",xyz=" << kf.rotation.x << "," << kf.rotation.y << "," << kf.rotation.z << ") ";
                 }
             }
-            if (hasTransTrack) {
+            if (!bone.tracks[6].keyframes.empty()) {
                 auto& kf = bone.tracks[6].keyframes[0];
-                std::cout << "Trans=(" << kf.translation.x << "," << kf.translation.y << "," << kf.translation.z << ")";
+                std::cout << "T=(" << kf.translation.x << "," << kf.translation.y << "," << kf.translation.z << ")";
             }
             std::cout << "\n";
-        }
-
-        std::cout << "      GlobalMatrix:\n";
-        for (int r = 0; r < 4; ++r) {
-            std::cout << "        [";
-            for (int c = 0; c < 4; ++c) {
-                std::cout << std::setw(10) << bone.globalMatrix[c][r];
-                if (c < 3) std::cout << ", ";
-            }
-            std::cout << "]\n";
         }
         std::cout << "\n";
     }
@@ -417,6 +385,18 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
                 var.textureIndexB = Read<int16_t>(ptr, descOfs + 2);
                 std::memcpy(var.unkValues.data(), ptr + descOfs + 4, 292);
 
+                // Extract additional texture layer index from unkValues[144]
+                // This is only used for rendering if geometry has layer blend weights
+                int16_t layerC = static_cast<int16_t>(var.unkValues[144]);
+
+                // Validate layer C - must be in range and be a color texture (type 0)
+                // Also must be different from A and B
+                if (layerC > 0 && layerC < (int)model.textures.size() &&
+                    model.textures[layerC].type == 0 &&
+                    layerC != var.textureIndexA && layerC != var.textureIndexB) {
+                    var.textureIndexC = layerC;
+                }
+
                 if (var.textureIndexA >= 0 && var.textureIndexA < (int)model.textures.size()) {
                     auto& tex = model.textures[var.textureIndexA];
                     size_t dotPos = tex.path.find('.');
@@ -427,6 +407,18 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
                     auto& tex = model.textures[var.textureIndexB];
                     size_t dotPos = tex.path.find('.');
                     var.textureNormalPath = (dotPos != std::string::npos) ?
+                        tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
+                }
+                if (var.textureIndexC >= 0 && var.textureIndexC < (int)model.textures.size()) {
+                    auto& tex = model.textures[var.textureIndexC];
+                    size_t dotPos = tex.path.find('.');
+                    var.textureColor2Path = (dotPos != std::string::npos) ?
+                        tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
+                }
+                if (var.textureIndexD >= 0 && var.textureIndexD < (int)model.textures.size()) {
+                    auto& tex = model.textures[var.textureIndexD];
+                    size_t dotPos = tex.path.find('.');
+                    var.textureColor3Path = (dotPos != std::string::npos) ?
                         tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
                 }
             }
@@ -681,10 +673,44 @@ void M3Loader::ReadGeometry(const uint8_t* ptr, size_t size, M3ModelData& model)
             v.color = col / 255.0f;
         }
         if (geo.vertexFlags & 0x0080) {
-            v.blend = ReadVertexV4(vData, geo.fieldTypes[7], localOfs);
+            glm::vec4 bl = ReadVertexV4(vData, geo.fieldTypes[7], localOfs);
+            v.blend = bl / 255.0f;  // Normalize blend weights from 0-255 to 0-1
         }
         if (geo.vertexFlags & 0x0100) v.uv1 = ReadVertexV2(vData, geo.fieldTypes[8], localOfs);
         if (geo.vertexFlags & 0x0200) v.uv2 = ReadVertexV2(vData, geo.fieldTypes[9], localOfs);
+    }
+
+    // Detect if blend values are texture layer weights
+    // Texture layer weights sum to ~1.0 (255 raw), other uses don't
+    // Require 90%+ of vertices to have proper weights to enable layer blending
+    if (geo.vertexFlags & 0x0080) {
+        int layerBlendCount = 0;
+        int sampleCount = std::min((uint32_t)500, geo.nrVertices);
+        float firstTotal = 0;
+
+        // Debug: print first 5 blend values
+        std::cout << "[M3Loader] First 5 blend values (normalized):" << std::endl;
+        for (int i = 0; i < std::min(5, sampleCount); i++) {
+            const auto& bl = geo.vertices[i].blend;
+            std::cout << "  V" << i << ": (" << bl.x << ", " << bl.y << ", " << bl.z << ", " << bl.w << ")" << std::endl;
+        }
+
+        for (int i = 0; i < sampleCount; i++) {
+            const auto& bl = geo.vertices[i].blend;
+            float total = bl.x + bl.y + bl.z + bl.w;
+            if (i == 0) firstTotal = total;
+            // Texture layer blends should sum to ~1.0 (normalized from 255)
+            if (total >= 0.95f && total <= 1.05f) {
+                layerBlendCount++;
+            }
+        }
+
+        // Require 90%+ of vertices to have proper layer weights
+        geo.usesTextureLayerBlending = (layerBlendCount >= (sampleCount * 9 / 10));
+
+        std::cout << "[M3Loader] Blend detection: " << layerBlendCount << "/" << sampleCount
+                  << " vertices sum to ~1.0 (first vertex total=" << firstTotal << ")"
+                  << " -> usesTextureLayerBlending=" << (geo.usesTextureLayerBlending ? "YES" : "NO") << std::endl;
     }
 
     size_t indexStart = geomOfs + GEOM_SIZE + geo.ofsIndices;

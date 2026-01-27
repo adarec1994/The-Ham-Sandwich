@@ -107,6 +107,7 @@ AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
     , mMaxBounds(-FLT_MAX, -FLT_MAX, -FLT_MAX)
     , mBaseColor(1.0f, 1.0f, 1.0f, 1.0f)
     , mWorldOffset(0.0f, 0.0f, 0.0f)
+    , mPropsAreWorldCoords(false)
 {
     if (mArchive && mFile)
     {
@@ -255,6 +256,89 @@ bool AreaFile::load()
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
 
+    printf("[AreaDebug] Area %d_%d (load): terrain local bounds X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
+           mTileX, mTileY, mMinBounds.x, mMaxBounds.x, mMinBounds.z, mMaxBounds.z);
+    printf("[AreaDebug] WorldOffset=(%.1f, %.1f, %.1f)\n",
+           mWorldOffset.x, mWorldOffset.y, mWorldOffset.z);
+
+    mPropsAreWorldCoords = false;
+    if (!mProps.empty())
+    {
+        float minPropX = FLT_MAX, maxPropX = -FLT_MAX;
+        float minPropZ = FLT_MAX, maxPropZ = -FLT_MAX;
+        uint32_t minPlaceX = UINT32_MAX, minPlaceY = UINT32_MAX;
+
+        for (const auto& prop : mProps)
+        {
+            minPropX = std::min(minPropX, prop.position.x);
+            maxPropX = std::max(maxPropX, prop.position.x);
+            minPropZ = std::min(minPropZ, prop.position.z);
+            maxPropZ = std::max(maxPropZ, prop.position.z);
+            minPlaceX = std::min(minPlaceX, (uint32_t)prop.placement.minX);
+            minPlaceY = std::min(minPlaceY, (uint32_t)prop.placement.minY);
+        }
+
+        float propCenterX = (minPropX + maxPropX) * 0.5f;
+        float propCenterZ = (minPropZ + maxPropZ) * 0.5f;
+
+        int placementTileX = minPlaceX / 16;
+        int placementTileY = minPlaceY / 16;
+
+        float placementWorldX = static_cast<float>(placementTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
+        float placementWorldZ = static_cast<float>(placementTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+
+        printf("[AreaDebug] Props bounds: X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
+               minPropX, maxPropX, minPropZ, maxPropZ);
+        printf("[AreaDebug] Props center: (%.1f, %.1f)\n", propCenterX, propCenterZ);
+        printf("[AreaDebug] Min placement cells: (%u, %u) -> tiles (%d, %d)\n",
+               minPlaceX, minPlaceY, placementTileX, placementTileY);
+        printf("[AreaDebug] Placement world origin: (%.1f, %.1f)\n", placementWorldX, placementWorldZ);
+
+        printf("[AreaDebug] First 5 props with placement info:\n");
+        for (size_t i = 0; i < std::min((size_t)5, mProps.size()); i++)
+        {
+            printf("[AreaDebug]   Prop %u: pos=(%.1f, %.1f, %.1f) placement=(%u,%u)-(%u,%u)\n",
+                   mProps[i].uniqueID,
+                   mProps[i].position.x, mProps[i].position.y, mProps[i].position.z,
+                   mProps[i].placement.minX, mProps[i].placement.minY,
+                   mProps[i].placement.maxX, mProps[i].placement.maxY);
+        }
+
+        int propsInTerrainBounds = 0;
+        for (const auto& prop : mProps)
+        {
+            if (prop.position.x >= 0 && prop.position.x <= 512 &&
+                prop.position.z >= 0 && prop.position.z <= 512)
+            {
+                propsInTerrainBounds++;
+            }
+        }
+        printf("[AreaDebug] Props within terrain bounds (0-512): %d of %d\n",
+               propsInTerrainBounds, (int)mProps.size());
+
+        if (propsInTerrainBounds < (int)mProps.size() / 2)
+        {
+            float offsetX = minPropX - mMinBounds.x;
+            float offsetZ = minPropZ - mMinBounds.z;
+
+            printf("[AreaDebug] Aligning props min to terrain min: shifting by (%.1f, %.1f)\n", -offsetX, -offsetZ);
+
+            for (auto& prop : mProps)
+            {
+                prop.position.x -= offsetX;
+                prop.position.z -= offsetZ;
+            }
+
+            printf("[AreaDebug] After alignment - first prop pos: (%.1f, %.1f, %.1f)\n",
+                   mProps[0].position.x, mProps[0].position.y, mProps[0].position.z);
+        }
+        else
+        {
+            printf("[AreaDebug] Props already aligned with terrain - no shift needed\n");
+        }
+    }
+    fflush(stdout);
+
     try
     {
         Sky::Manager::Instance().loadSkyForArea(this);
@@ -305,6 +389,52 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
     }
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
+
+    printf("[AreaDebug] Area %d_%d: terrain local bounds X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
+           mTileX, mTileY, mMinBounds.x, mMaxBounds.x, mMinBounds.z, mMaxBounds.z);
+    printf("[AreaDebug] WorldOffset=(%.1f, %.1f, %.1f)\n",
+           mWorldOffset.x, mWorldOffset.y, mWorldOffset.z);
+
+    mPropsAreWorldCoords = false;
+    if (!mProps.empty())
+    {
+        float minPropX = FLT_MAX, maxPropX = -FLT_MAX;
+        float minPropZ = FLT_MAX, maxPropZ = -FLT_MAX;
+
+        for (const auto& prop : mProps)
+        {
+            minPropX = std::min(minPropX, prop.position.x);
+            maxPropX = std::max(maxPropX, prop.position.x);
+            minPropZ = std::min(minPropZ, prop.position.z);
+            maxPropZ = std::max(maxPropZ, prop.position.z);
+        }
+
+        float propCenterX = (minPropX + maxPropX) * 0.5f;
+        float propCenterZ = (minPropZ + maxPropZ) * 0.5f;
+
+        int propsInTerrainBounds = 0;
+        for (const auto& prop : mProps)
+        {
+            if (prop.position.x >= 0 && prop.position.x <= 512 &&
+                prop.position.z >= 0 && prop.position.z <= 512)
+            {
+                propsInTerrainBounds++;
+            }
+        }
+
+        if (propsInTerrainBounds < (int)mProps.size() / 2)
+        {
+            float offsetX = minPropX - mMinBounds.x;
+            float offsetZ = minPropZ - mMinBounds.z;
+
+            for (auto& prop : mProps)
+            {
+                prop.position.x -= offsetX;
+                prop.position.z -= offsetZ;
+            }
+        }
+    }
+    fflush(stdout);
 
     try
     {

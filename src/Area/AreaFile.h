@@ -282,6 +282,7 @@ class AreaFile
     XMFLOAT3 mWorldOffset;
 
     bool mHasTexture = false;
+    bool mPropsAreWorldCoords = false;
 
     std::vector<Prop> mProps;
     std::unordered_map<uint32_t, size_t> mPropLookup;

@@ -148,7 +148,9 @@ private:
     std::vector<glm::vec3> bindLocalScale;
     std::vector<glm::quat> bindLocalRotation;
     std::vector<glm::vec3> bindLocalTranslation;
+    std::vector<glm::mat4> bindLocalMatrix;  // Store the actual local matrix for mirrored bones
     std::vector<bool> boneAtOrigin;
+    std::vector<bool> boneMirrored;  // Track bones with negative determinant local matrices
     std::vector<glm::mat4> worldTransforms;
     std::vector<XMMATRIX> boneMatrices;
     size_t mSkeletonVBSize = 0;
@@ -182,6 +184,7 @@ private:
     bool materialUsesAlpha(uint16_t materialId, int variant) const;
     ComPtr<ID3D11ShaderResourceView> createFallbackWhite();
     ID3D11ShaderResourceView* resolveDiffuseTexture(uint16_t materialId, int variant) const;
+    int resolveTextureLayers(uint16_t materialId, int variant, ID3D11ShaderResourceView* outSRVs[4]) const;
 
     struct alignas(16) M3ConstantBuffer {
         XMMATRIX model;
@@ -190,7 +193,8 @@ private:
         XMFLOAT3 highlightColor;
         float highlightMix;
         int useSkinning;
-        XMFLOAT3 pad;
+        int useLayerBlending;  // Whether to use multi-texture layer blending
+        XMFLOAT2 pad;
     };
 
     struct alignas(16) BoneMatrixBuffer {

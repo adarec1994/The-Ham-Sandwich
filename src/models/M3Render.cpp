@@ -17,7 +17,7 @@
 #include <limits>
 
 static bool g_M3DebugAnimationStart = true;
-static bool g_M3DebugAnimationUpdate = true;
+static bool g_M3DebugAnimationUpdate = false;
 static int g_M3DebugAnimationFrameInterval = 60;
 static int g_M3DebugAnimationFrameCount = 0;
 
@@ -25,6 +25,7 @@ static void DebugPrintAnimationBones(const std::string& context,
                                       const std::vector<M3Bone>& bones,
                                       const std::vector<glm::mat4>& worldTransforms,
                                       const std::vector<glm::mat4>& effectiveBindGlobal,
+                                      const std::vector<bool>& boneMirrored,
                                       float animTime) {
     std::cout << "\n===============================================================================\n";
     std::cout << "M3 ANIMATION DEBUG - " << context << "\n";
@@ -34,6 +35,11 @@ static void DebugPrintAnimationBones(const std::string& context,
     std::cout << std::fixed << std::setprecision(4);
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
+
+        // Only show bones 0-20 (legs/feet) or mirrored bones
+        bool isLegBone = (i <= 20);
+        bool isMirrored = (i < boneMirrored.size() && boneMirrored[i]);
+        if (!isLegBone && !isMirrored) continue;
 
         glm::vec3 bindPos(0.0f);
         if (i < effectiveBindGlobal.size()) {
@@ -52,43 +58,25 @@ static void DebugPrintAnimationBones(const std::string& context,
         glm::vec3 delta = animPos - bindPos;
         float deltaMag = glm::length(delta);
 
-        bool hasIssue = (animScale.x < 0.01f || animScale.y < 0.01f || animScale.z < 0.01f ||
-                         animScale.x > 100.0f || animScale.y > 100.0f || animScale.z > 100.0f ||
-                         deltaMag > 1000.0f);
+        std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
+        if (isMirrored) std::cout << " [MIRRORED]";
+        std::cout << "\n";
+        std::cout << "      BindPos:  (" << std::setw(10) << bindPos.x << ", " << std::setw(10) << bindPos.y << ", " << std::setw(10) << bindPos.z << ")\n";
+        std::cout << "      AnimPos:  (" << std::setw(10) << animPos.x << ", " << std::setw(10) << animPos.y << ", " << std::setw(10) << animPos.z << ")\n";
+        std::cout << "      Delta:    (" << std::setw(10) << delta.x << ", " << std::setw(10) << delta.y << ", " << std::setw(10) << delta.z << ") mag=" << deltaMag << "\n";
 
-        if (hasIssue || context == "ANIMATION START") {
-            std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
-            if (hasIssue) std::cout << " [!!!]";
-            std::cout << "\n";
-            std::cout << "      BindPos:  (" << std::setw(10) << bindPos.x << ", " << std::setw(10) << bindPos.y << ", " << std::setw(10) << bindPos.z << ")\n";
-            std::cout << "      AnimPos:  (" << std::setw(10) << animPos.x << ", " << std::setw(10) << animPos.y << ", " << std::setw(10) << animPos.z << ")\n";
-            std::cout << "      Delta:    (" << std::setw(10) << delta.x << ", " << std::setw(10) << delta.y << ", " << std::setw(10) << delta.z << ") mag=" << deltaMag << "\n";
-            std::cout << "      Scale:    (" << std::setw(10) << animScale.x << ", " << std::setw(10) << animScale.y << ", " << std::setw(10) << animScale.z << ")\n";
-
-            bool hasScaleTrack = false;
-            bool hasRotTrack = false;
-            bool hasTransTrack = false;
-            for (int t = 0; t <= 2; ++t) if (!bone.tracks[t].keyframes.empty()) hasScaleTrack = true;
-            for (int t = 4; t <= 5; ++t) if (!bone.tracks[t].keyframes.empty()) hasRotTrack = true;
-            if (!bone.tracks[6].keyframes.empty()) hasTransTrack = true;
-
-            std::cout << "      Tracks: Scale=" << (hasScaleTrack ? "Y" : "N")
-                      << " Rot=" << (hasRotTrack ? "Y" : "N")
-                      << " Trans=" << (hasTransTrack ? "Y" : "N") << "\n";
-
-            if (i < worldTransforms.size()) {
-                std::cout << "      WorldTransform:\n";
-                for (int r = 0; r < 4; ++r) {
-                    std::cout << "        [";
-                    for (int c = 0; c < 4; ++c) {
-                        std::cout << std::setw(10) << worldTransforms[i][c][r];
-                        if (c < 3) std::cout << ", ";
-                    }
-                    std::cout << "]\n";
+        if (i < worldTransforms.size()) {
+            std::cout << "      WorldTransform:\n";
+            for (int r = 0; r < 4; ++r) {
+                std::cout << "        [";
+                for (int c = 0; c < 4; ++c) {
+                    std::cout << std::setw(10) << worldTransforms[i][c][r];
+                    if (c < 3) std::cout << ", ";
                 }
+                std::cout << "]\n";
             }
-            std::cout << "\n";
         }
+        std::cout << "\n";
     }
 
     std::cout << "===============================================================================\n\n";
@@ -131,6 +119,7 @@ struct VSInput {
     float3 position : POSITION;
     float3 normal : NORMAL;
     float2 texCoord : TEXCOORD0;
+    float4 blendWeights : TEXCOORD1;  // Texture layer blend weights
     float4 boneWeights : BLENDWEIGHT;
     uint4 boneIndices : BLENDINDICES;
 };
@@ -138,6 +127,7 @@ struct PSInput {
     float4 position : SV_POSITION;
     float3 normal : TEXCOORD0;
     float2 texCoord : TEXCOORD1;
+    float4 blendWeights : TEXCOORD2;  // Pass blend weights to pixel shader
 };
 PSInput main(VSInput input) {
     PSInput output;
@@ -155,6 +145,7 @@ PSInput main(VSInput input) {
     output.position = mul(projection, mul(view, worldPos));
     output.normal = norm;
     output.texCoord = input.texCoord;
+    output.blendWeights = input.blendWeights;
     return output;
 }
 )";
@@ -167,19 +158,46 @@ cbuffer M3CB : register(b0) {
     float3 highlightColor;
     float highlightMix;
     int useSkinning;
-    float3 pad;
+    int useLayerBlending;  // Whether to use texture layer blending
+    float2 pad;
 };
-Texture2D diffTexture : register(t0);
+Texture2D diffTexture : register(t0);   // Layer 0 (primary diffuse)
+Texture2D diffTexture1 : register(t1);  // Layer 1
+Texture2D diffTexture2 : register(t2);  // Layer 2
+Texture2D diffTexture3 : register(t3);  // Layer 3
 SamplerState samplerState : register(s0);
 struct PSInput {
     float4 position : SV_POSITION;
     float3 normal : TEXCOORD0;
     float2 texCoord : TEXCOORD1;
+    float4 blendWeights : TEXCOORD2;  // Texture layer blend weights
 };
 float4 main(PSInput input) : SV_TARGET {
     float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(input.normal), lightDir), 0.3);
-    float4 texColor = diffTexture.Sample(samplerState, input.texCoord);
+
+    float4 texColor;
+    if (useLayerBlending == 1) {
+        // Blend up to 4 texture layers based on vertex blend weights
+        float4 layer0 = diffTexture.Sample(samplerState, input.texCoord);
+        float4 layer1 = diffTexture1.Sample(samplerState, input.texCoord);
+        float4 layer2 = diffTexture2.Sample(samplerState, input.texCoord);
+        float4 layer3 = diffTexture3.Sample(samplerState, input.texCoord);
+
+        // Normalize blend weights to ensure they sum to 1
+        float4 weights = input.blendWeights;
+        float totalWeight = weights.x + weights.y + weights.z + weights.w;
+        if (totalWeight > 0.001) {
+            weights /= totalWeight;
+        } else {
+            weights = float4(1, 0, 0, 0);  // Default to layer 0 only
+        }
+
+        texColor = layer0 * weights.x + layer1 * weights.y + layer2 * weights.z + layer3 * weights.w;
+    } else {
+        texColor = diffTexture.Sample(samplerState, input.texCoord);
+    }
+
     if (texColor.a < 0.5) discard;
     float3 baseColor = texColor.rgb * diff;
     float3 finalColor = lerp(baseColor, highlightColor, highlightMix);
@@ -222,6 +240,7 @@ struct RenderVertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    glm::vec4 blendWeights;   // Texture layer blend weights
     glm::vec4 boneWeights;
     glm::uvec4 boneIndices;
 };
@@ -255,8 +274,9 @@ void M3Render::InitSharedResources() {
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"BLENDINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},  // blendWeights
+            {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"BLENDINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, 64, D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
         sDevice->CreateInputLayout(layout, _countof(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &sSharedLayout);
     }
@@ -391,6 +411,7 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
         rv.position = v.position;
         rv.normal = v.normal;
         rv.uv = v.uv1;
+        rv.blendWeights = v.blend;  // Texture layer blend weights
         rv.boneWeights = v.boneWeights;
         rv.boneIndices = v.boneIndices;
         renderVerts.push_back(rv);
@@ -424,6 +445,41 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
 
     cbd.ByteWidth = sizeof(SkeletonCB);
     sDevice->CreateBuffer(&cbd, nullptr, &mSkeletonCB);
+
+    // Diagnostic: check for vertex blend weights and multi-layer materials
+    int vertsWithBlend = 0;
+    for (const auto& v : data.geometry.vertices) {
+        // Check if any component of blend is non-zero
+        if (v.blend.x > 0.01f || v.blend.y > 0.01f || v.blend.z > 0.01f || v.blend.w > 0.01f) {
+            vertsWithBlend++;
+        }
+    }
+
+    int materialsWithMultiLayer = 0;
+    for (size_t mi = 0; mi < materials.size(); ++mi) {
+        const auto& mat = materials[mi];
+        for (size_t vi = 0; vi < mat.variants.size(); ++vi) {
+            const auto& var = mat.variants[vi];
+            if (var.textureIndexC >= 0 || var.textureIndexD >= 0) {
+                if (materialsWithMultiLayer == 0) {
+                    std::cout << "[M3Render] Multi-layer materials detected:" << std::endl;
+                }
+                std::cout << "  Material " << mi << " variant " << vi << ": ";
+                std::cout << "A=" << var.textureIndexA << " B=" << var.textureIndexB;
+                if (var.textureIndexC >= 0) std::cout << " C=" << var.textureIndexC;
+                if (var.textureIndexD >= 0) std::cout << " D=" << var.textureIndexD;
+                std::cout << std::endl;
+                materialsWithMultiLayer++;
+            }
+        }
+    }
+
+    if (vertsWithBlend > 0 || materialsWithMultiLayer > 0) {
+        std::cout << "[M3Render] Texture layer blending info:" << std::endl;
+        std::cout << "  Vertices with blend weights: " << vertsWithBlend << "/" << data.geometry.vertices.size() << std::endl;
+        std::cout << "  Materials with multi-layer textures: " << materialsWithMultiLayer << "/" << materials.size() << std::endl;
+        std::cout << "  Uses texture layer blending: " << (geometry.usesTextureLayerBlending ? "YES" : "NO") << std::endl;
+    }
 }
 
 M3Render::~M3Render() = default;
@@ -437,7 +493,9 @@ void M3Render::precomputeBoneData() {
     bindLocalScale.resize(numBones, glm::vec3(1.0f));
     bindLocalRotation.resize(numBones, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
     bindLocalTranslation.resize(numBones, glm::vec3(0.0f));
+    bindLocalMatrix.resize(numBones, glm::mat4(1.0f));
     boneAtOrigin.resize(numBones, false);
+    boneMirrored.resize(numBones, false);
 
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
@@ -446,8 +504,59 @@ void M3Render::precomputeBoneData() {
         boneAtOrigin[i] = atOrigin;
 
         if (atOrigin && !bone.tracks[6].keyframes.empty()) {
+            // For AT_ORIGIN bones, compute effective bind pose from all tracks
             glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
-            glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
+
+            // Check if original globalMatrix was mirrored
+            float origDet = glm::determinant(glm::mat3(bone.globalMatrix));
+            bool needNegativeDet = (origDet < 0.0f);
+
+            // Get scale - prefer a track with matching determinant sign
+            glm::vec3 bindScale(1.0f);
+            bool foundMatchingScale = false;
+            for (int t = 0; t <= 2; ++t) {
+                if (!bone.tracks[t].keyframes.empty()) {
+                    glm::vec3 trackScale = bone.tracks[t].keyframes[0].scale;
+                    float trackDet = trackScale.x * trackScale.y * trackScale.z;
+                    bool trackNegative = (trackDet < 0.0f);
+
+                    if (trackNegative == needNegativeDet) {
+                        bindScale = trackScale;
+                        foundMatchingScale = true;
+                        break;
+                    }
+                }
+            }
+
+            // If no matching track, use first available and fix determinant
+            if (!foundMatchingScale) {
+                for (int t = 0; t <= 2; ++t) {
+                    if (!bone.tracks[t].keyframes.empty()) {
+                        bindScale = bone.tracks[t].keyframes[0].scale;
+                        float scaleDet = bindScale.x * bindScale.y * bindScale.z;
+                        if ((scaleDet < 0.0f) != needNegativeDet) {
+                            bindScale.x = -bindScale.x;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Get rotation from first available rotation track (R4 or R5)
+            glm::quat bindRot(1.0f, 0.0f, 0.0f, 0.0f);
+            for (int t = 4; t <= 5; ++t) {
+                if (!bone.tracks[t].keyframes.empty()) {
+                    bindRot = bone.tracks[t].keyframes[0].rotation;
+                    break;
+                }
+            }
+
+            // Compose local transform: T * R * S (standard order)
+            glm::mat4 T = glm::translate(glm::mat4(1.0f), track6Pos);
+            glm::mat4 R = glm::mat4_cast(glm::normalize(bindRot));
+            glm::mat4 S = glm::scale(glm::mat4(1.0f), bindScale);
+            glm::mat4 localT = T * R * S;
+
             if (!isRootBone) {
                 effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
             } else {
@@ -471,10 +580,33 @@ void M3Render::precomputeBoneData() {
             bindLocal = inverseEffectiveBindGlobal[bone.parentId] * effectiveBindGlobal[i];
         }
 
+        // Store the actual local matrix (needed for mirrored bones)
+        bindLocalMatrix[i] = bindLocal;
+
+        // Check for mirrored matrix (negative determinant)
+        float det = glm::determinant(glm::mat3(bindLocal));
+        boneMirrored[i] = (det < 0);
+
         glm::vec3 skew;
         glm::vec4 perspective;
         glm::decompose(bindLocal, bindLocalScale[i], bindLocalRotation[i], bindLocalTranslation[i], skew, perspective);
         bindLocalRotation[i] = glm::normalize(bindLocalRotation[i]);
+
+        // Normalize quaternion to positive hemisphere (w >= 0) for consistent interpolation
+        // This ensures that when we slerp from bind to animation, we take the shorter path
+        if (bindLocalRotation[i].w < 0) {
+            bindLocalRotation[i] = -bindLocalRotation[i];
+        }
+
+        // IMPORTANT: glm::decompose always extracts positive scale, but for mirrored bones
+        // we need to preserve the negative determinant. Fix the scale by negating X if needed.
+        if (boneMirrored[i]) {
+            float scaleDet = bindLocalScale[i].x * bindLocalScale[i].y * bindLocalScale[i].z;
+            if (scaleDet > 0.0f) {
+                // Scale is positive but we need negative det - negate X
+                bindLocalScale[i].x = -bindLocalScale[i].x;
+            }
+        }
     }
 
     if (g_M3DebugAnimationStart) {
@@ -493,6 +625,7 @@ void M3Render::precomputeBoneData() {
 
             std::cout << "[" << std::setw(3) << i << "] " << std::setw(12) << bone.name;
             if (boneAtOrigin[i]) std::cout << " [AT_ORIGIN]";
+            if (boneMirrored[i]) std::cout << " [MIRRORED]";
             if (hasIssue) std::cout << " [SCALE_ISSUE]";
             std::cout << "\n";
             std::cout << "      OrigGlobalPos:    (" << std::setw(10) << origPos.x << ", " << std::setw(10) << origPos.y << ", " << std::setw(10) << origPos.z << ")\n";
@@ -510,17 +643,21 @@ void M3Render::precomputeBoneData() {
 void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
     mTextureSRVs.clear();
     mTextureSRVs.reserve(data.textures.size());
-    for (const auto& tex : data.textures) {
+
+    std::cout << "[M3Render] Loading " << data.textures.size() << " textures:" << std::endl;
+
+    for (size_t i = 0; i < data.textures.size(); ++i) {
+        const auto& tex = data.textures[i];
         auto srv = loadTextureFromArchive(arc, tex.path);
         if (srv) {
             mTextureSRVs.push_back(srv);
+            std::cout << "  [" << i << "] OK: " << tex.path << " (type=" << tex.type << ")" << std::endl;
         } else {
-
             mTextureSRVs.push_back(mFallbackWhiteSRV);
+            std::cout << "  [" << i << "] FAILED: " << tex.path << " (type=" << tex.type << ")" << std::endl;
             try {
                 RecordTextureFailure(modelName, tex.path);
             } catch (...) {
-
             }
         }
     }
@@ -761,6 +898,50 @@ bool M3Render::materialUsesAlpha(uint16_t materialId, int variant) const {
     return false;
 }
 
+// Resolve up to 4 texture layers for layer blending
+// Returns the number of valid layers (1-4)
+int M3Render::resolveTextureLayers(uint16_t materialId, int variant,
+                                    ID3D11ShaderResourceView* outSRVs[4]) const {
+    // Initialize all to fallback
+    for (int i = 0; i < 4; ++i) {
+        outSRVs[i] = mFallbackWhiteSRV.Get();
+    }
+
+    if (materialId >= materials.size()) return 1;
+    const auto& m = materials[materialId];
+    if (m.variants.empty()) return 1;
+
+    int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
+    const auto& var = m.variants[v];
+
+    int layerCount = 0;
+
+    // Slot 0 (X channel) - textureIndexA (primary diffuse)
+    int idxA = var.textureIndexA;
+    if (idxA >= 0 && idxA < (int)mTextureSRVs.size() && mTextureSRVs[idxA]) {
+        outSRVs[0] = mTextureSRVs[idxA].Get();
+        layerCount = 1;
+    }
+
+    // Slot 1 (Y channel) - textureIndexC (secondary color layer)
+    int idxC = var.textureIndexC;
+    if (idxC >= 0 && idxC < (int)mTextureSRVs.size() && mTextureSRVs[idxC]) {
+        outSRVs[1] = mTextureSRVs[idxC].Get();
+        layerCount = std::max(layerCount, 2);
+    }
+
+    // Slot 2 (Z channel) - textureIndexD (tertiary color layer)
+    int idxD = var.textureIndexD;
+    if (idxD >= 0 && idxD < (int)mTextureSRVs.size() && mTextureSRVs[idxD]) {
+        outSRVs[2] = mTextureSRVs[idxD].Get();
+        layerCount = std::max(layerCount, 3);
+    }
+
+    // Slot 3 (W channel) - could add another layer if needed
+
+    return layerCount;
+}
+
 void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj) {
     render(view, proj, XMMatrixIdentity(), -1);
 }
@@ -786,6 +967,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     cb.highlightColor = XMFLOAT3(mHighlightR, mHighlightG, mHighlightB);
     cb.highlightMix = mHighlightMix;
     cb.useSkinning = useSkinning ? 1 : 0;
+    cb.useLayerBlending = 0;  // Will be set per-submesh if material has multiple layers
 
     D3D11_MAPPED_SUBRESOURCE mapped;
     if (SUCCEEDED(sContext->Map(mConstantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -841,14 +1023,24 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
             sContext->OMSetBlendState(sBlendState.Get(), blendFactor, 0xFFFFFFFF);
         }
 
-        ID3D11ShaderResourceView* srv = resolveDiffuseTexture(sm.materialID, variant);
-        if (srv) {
-            sContext->PSSetShaderResources(0, 1, &srv);
-        } else {
+        // Resolve texture layers for this material
+        ID3D11ShaderResourceView* layerSRVs[4];
+        int layerCount = resolveTextureLayers(sm.materialID, variant, layerSRVs);
 
-            ID3D11ShaderResourceView* nullSRV = nullptr;
-            sContext->PSSetShaderResources(0, 1, &nullSRV);
+        // Enable layer blending only if:
+        // 1. We have multiple texture layers defined
+        // 2. The model's blend values look like texture layer blends (dominant channel pattern)
+        bool needsLayerBlending = (layerCount > 1) && geometry.usesTextureLayerBlending;
+        if (cb.useLayerBlending != (needsLayerBlending ? 1 : 0)) {
+            cb.useLayerBlending = needsLayerBlending ? 1 : 0;
+            if (SUCCEEDED(sContext->Map(mConstantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+                memcpy(mapped.pData, &cb, sizeof(cb));
+                sContext->Unmap(mConstantBuffer.Get(), 0);
+            }
         }
+
+        // Bind all texture layers
+        sContext->PSSetShaderResources(0, 4, layerSRVs);
 
         if ((int)i == selectedSubmesh) {
             cb.highlightColor = XMFLOAT3(0.3f, 1.0f, 0.3f);
@@ -940,7 +1132,7 @@ void M3Render::playAnimation(int index) {
         std::cout << "\n[M3Render] Playing animation " << index
                   << " (seq=" << animations[index].sequenceId
                   << ", duration=" << (animations[index].timestampEnd - animations[index].timestampStart) / 1000.0f << "s)\n";
-        DebugPrintAnimationBones("ANIMATION START", bones, worldTransforms, effectiveBindGlobal, animationTime);
+        DebugPrintAnimationBones("ANIMATION START", bones, worldTransforms, effectiveBindGlobal, boneMirrored, animationTime);
     }
 }
 
@@ -1065,10 +1257,40 @@ void M3Render::updateAnimation(float deltaTime) {
         glm::quat rotation = bindLocalRotation[i];
         glm::vec3 translation = bindLocalTranslation[i];
 
+        // For mirrored bones, we need to select a scale track that preserves the
+        // bind pose determinant sign, otherwise we flip the mirroring
+        float bindScaleDet = bindLocalScale[i].x * bindLocalScale[i].y * bindLocalScale[i].z;
+        bool needNegativeDet = (bindScaleDet < 0.0f);
+
+        // First try to find a scale track with matching determinant
+        bool foundMatchingScale = false;
         for (int t = 0; t <= 2; ++t) {
             if (!bone.tracks[t].keyframes.empty()) {
-                scale = interpolateScale(bone.tracks[t], currentTimeMs);
-                break;
+                glm::vec3 trackScale = interpolateScale(bone.tracks[t], currentTimeMs);
+                float trackDet = trackScale.x * trackScale.y * trackScale.z;
+                bool trackNegative = (trackDet < 0.0f);
+
+                if (trackNegative == needNegativeDet) {
+                    // Determinant matches - use this track
+                    scale = trackScale;
+                    foundMatchingScale = true;
+                    break;
+                }
+            }
+        }
+
+        // If no matching track found, use the first available but fix the determinant
+        if (!foundMatchingScale) {
+            for (int t = 0; t <= 2; ++t) {
+                if (!bone.tracks[t].keyframes.empty()) {
+                    scale = interpolateScale(bone.tracks[t], currentTimeMs);
+                    // Fix the determinant by negating X if needed
+                    float scaleDet = scale.x * scale.y * scale.z;
+                    if ((scaleDet < 0.0f) != needNegativeDet) {
+                        scale.x = -scale.x;
+                    }
+                    break;
+                }
             }
         }
 
@@ -1083,10 +1305,23 @@ void M3Render::updateAnimation(float deltaTime) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
 
+        // Compose local transform from animation values
         glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
-        glm::mat4 R = glm::mat4_cast(glm::normalize(rotation));
         glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
-        glm::mat4 localTransform = T * R * S;
+
+        glm::quat finalRotation = glm::normalize(rotation);
+
+        glm::mat4 R = glm::mat4_cast(finalRotation);
+
+        glm::mat4 localTransform;
+        if (boneMirrored[i]) {
+            // Mirrored bone (bind pose has negative determinant)
+            // Use T * S * R order - rotation is applied in scaled (mirrored) space
+            localTransform = T * S * R;
+        } else {
+            // Normal bone: standard T * R * S order
+            localTransform = T * R * S;
+        }
 
         if (isRoot) {
             worldTransforms[i] = localTransform;
@@ -1094,14 +1329,14 @@ void M3Render::updateAnimation(float deltaTime) {
             worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
         }
 
-        boneMatrices[i] = GlmToXM(worldTransforms[i] * glm::inverse(bone.globalMatrix));
+        boneMatrices[i] = GlmToXM(worldTransforms[i] * inverseEffectiveBindGlobal[i]);
     }
 
     if (g_M3DebugAnimationUpdate && deltaTime > 0.0f) {
         g_M3DebugAnimationFrameCount++;
         if (g_M3DebugAnimationFrameCount % g_M3DebugAnimationFrameInterval == 0) {
             DebugPrintAnimationBones("ANIMATION UPDATE (frame " + std::to_string(g_M3DebugAnimationFrameCount) + ")",
-                                     bones, worldTransforms, effectiveBindGlobal, animationTime);
+                                     bones, worldTransforms, effectiveBindGlobal, boneMirrored, animationTime);
         }
     }
 }
