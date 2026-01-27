@@ -10,6 +10,7 @@
 #include "../export/M3Export.h"
 #include "../export/TerrainExport.h"
 #include "../tex/tex.h"
+#include "../audio/AudioPlayer.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <ImGuiFileDialog.h>
@@ -567,6 +568,23 @@ namespace UI_ContentBrowser {
         {
             UI_Tables::OpenTblFile(state, file.archive, fileEntry);
         }
+        else if (file.extension == ".wem")
+        {
+            std::vector<uint8_t> wemData;
+            if (file.archive->getFileData(fileEntry, wemData) && !wemData.empty())
+            {
+                if (!Audio::AudioManager::Get().PlayWEM(wemData))
+                {
+                    auto* player = Audio::AudioManager::Get().GetPlayer();
+                    if (player)
+                    {
+                        sNotificationMessage = player->GetLastError();
+                        sNotificationSuccess = false;
+                        sNotificationTimer = 5.0f;
+                    }
+                }
+            }
+        }
     }
 
     static void RenderTreeNode(AppState& state, const IFileSystemEntryPtr& entry, const ArchivePtr& archive, int depth = 0)
@@ -1107,6 +1125,66 @@ namespace UI_ContentBrowser {
                             ImGui::PopStyleVar(2);
                         }
 
+                        if (file.extension == ".wem" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##wemcontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                if (ImGui::MenuItem("Play"))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (fe)
+                                    {
+                                        std::vector<uint8_t> wemData;
+                                        if (file.archive->getFileData(fe, wemData) && !wemData.empty())
+                                        {
+                                            if (!Audio::AudioManager::Get().PlayWEM(wemData))
+                                            {
+                                                auto* player = Audio::AudioManager::Get().GetPlayer();
+                                                if (player)
+                                                {
+                                                    sNotificationMessage = player->GetLastError();
+                                                    sNotificationSuccess = false;
+                                                    sNotificationTimer = 5.0f;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (ImGui::MenuItem("Stop"))
+                                {
+                                    Audio::AudioManager::Get().StopAll();
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Extract Raw (.wem)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".wem";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractWemRawDlg", "Extract Raw WEM", ".wem", config);
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
                         bool isSelected = (sSelectedFileIndex == static_cast<int>(i));
                         bool isHovered = ImGui::IsItemHovered();
 
@@ -1286,6 +1364,8 @@ namespace UI_ContentBrowser {
         sExportDefaultName.clear();
         sExportInProgress = false;
         sNotificationTimer = 0.0f;
+
+        Audio::AudioManager::Get().StopAll();
     }
 
     void Draw(AppState& state)
@@ -1780,6 +1860,39 @@ namespace UI_ContentBrowser {
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "Failed to load area file";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExtractWemRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::vector<uint8_t> buffer;
+                if (sExportArchive->openFileStream(sExportFileEntry, buffer))
+                {
+                    std::ofstream out(filePath, std::ios::binary);
+                    if (out.is_open())
+                    {
+                        out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                        out.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "WEM extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to write file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read WEM from archive";
                 }
                 sNotificationTimer = 3.0f;
             }

@@ -13,9 +13,7 @@ if(MINGW)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static -mwindows")
 endif()
 
-if(MSVC)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
-endif()
+
 
 include(FetchContent)
 
@@ -129,81 +127,102 @@ add_definitions(-DLZMA_API_STATIC)
 
 set(HAM_SANDWICH_SOURCES
         src/main.cpp
-        src/Archive.cpp
-        src/Archive.h
-        src/UI/UI.cpp
-        src/UI/UI.h
-        src/UI/splashscreen.cpp
-        src/UI/splashscreen.h
+
         src/About/about.cpp
         src/About/about.h
-        src/settings/Settings.cpp
-        src/settings/Settings.h
-        src/settings/Keybinds.cpp
-        src/settings/Keybinds.h
+
+        src/Archive.cpp
+        src/Archive.h
+
         src/Area/AreaFile.cpp
         src/Area/AreaFile.h
         src/Area/AreaRender.cpp
         src/Area/AreaRender.h
-        src/Utils/BinStream.h
-        src/Utils/ParallelAreaLoader.cpp
-        src/Utils/ParallelAreaLoader.h
-        ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
-        src/tex/tex.cpp
-        src/tex/tex.h
-        src/tex/texjpeg.cpp
-        src/tex/texjpeg.h
         src/Area/DataTable.cpp
         src/Area/DataTable.h
-        src/UI/camera.cpp
-        src/UI/design.cpp
-        src/models/M3Common.h
-        src/models/M3Loader.cpp
-        src/models/M3Loader.h
-        src/models/M3Render.cpp
-        src/models/M3Render.h
-        src/UI/UI_Globals.cpp
-        src/UI/UI_Globals.h
-        src/UI/UI_Utils.cpp
-        src/UI/UI_Utils.h
-        src/UI/UI_Selection.cpp
-        src/UI/UI_Selection.h
-        src/UI/UI_RenderWorld.cpp
-        src/UI/UI_RenderWorld.h
-        src/Area/TerrainTexture.cpp
-        src/Area/TerrainTexture.h
+        src/Area/Props.cpp
+        src/Area/Props.h
         src/Area/TerrainShader.cpp
         src/Area/TerrainShader.h
-        src/UI/UI_Tables.cpp
-        src/UI/UI_Tables.h
-        src/UI/UI_AreaInfo.cpp
-        src/UI/UI_AreaInfo.h
-        src/export/FBXExport.cpp
-        src/export/FBXExport.h
+        src/Area/TerrainTexture.cpp
+        src/Area/TerrainTexture.h
+
+        src/Audio/AudioPlayer.cpp
+        src/Audio/AudioPlayer.h
+        src/Audio/BNKReader.cpp
+        src/Audio/BNKReader.h
+        src/Audio/WEMExtractor.cpp
+        src/Audio/WEMExtractor.h
+        src/Audio/wwise/WwiseCodebooks.cpp
+        src/Audio/wwise/WwiseCodebooks.h
+        src/Audio/wwise/WwiseVorbisDecoder.cpp
+        src/Audio/wwise/WwiseVorbisDecoder.h
+
         src/Database/Tbl.cpp
         src/Database/Tbl.h
         src/Database/TblReader.h
         src/Database/TblRecords.h
-        src/Database/Definitions/ZoneCompletion.h
-        src/Database/Definitions/XpPerLevel.h
-        src/Database/Definitions/VisualEffect.h
-        src/Database/Definitions/WorldZone.h
-        src/Database/Definitions/WorldWaterWake.h
-        src/Database/Definitions/WorldWaterType.h
-        src/Database/Definitions/WorldWaterLayer.h
-        src/Database/Definitions/WorldWaterFog.h
-        src/Database/Definitions/WorldWaterEnvironment.h
-        src/Database/Definitions/WorldSocket.h
-        src/Database/Definitions/WorldSky.h
-        src/Database/Definitions/WorldLocation2.h
-        src/Database/Definitions/WorldLayer.h
-        src/Database/Definitions/WorldClutter.h
-        src/Database/Definitions/World.h
-        src/Database/Definitions/WordFilterAlt.h
-        src/Database/Definitions/WorldFilter.h
-        src/Database/Definitions/Wind.h
-        src/Database/Definitions/WaterSurfaceEffect.h
-        src/Database/Definitions/WindSpawn.h
+        src/Database/Definitions/RewardTrackRewards.h
+        src/Database/Definitions/Salvage.h
+        src/Database/Definitions/SalvageException.h
+        src/Database/Definitions/SkyCloudSet.h
+        src/Database/Definitions/SoundBank.h
+        src/Database/Definitions/SoundCombatLoop.h
+        src/Database/Definitions/SoundContext.h
+        src/Database/Definitions/SoundDirectionalAmbience.h
+        src/Database/Definitions/SoundEnvironment.h
+        src/Database/Definitions/SoundEvent.h
+        src/Database/Definitions/SoundImpactEvents.h
+        src/Database/Definitions/SoundMusicSet.h
+        src/Database/Definitions/SoundParameter.h
+        src/Database/Definitions/SoundReplace.h
+        src/Database/Definitions/SoundReplaceDescription.h
+        src/Database/Definitions/SoundStates.h
+        src/Database/Definitions/SoundSwitch.h
+        src/Database/Definitions/SoundUIContext.h
+        src/Database/Definitions/SoundZoneKit.h
+        src/Database/Definitions/Spell4.h
+        src/Database/Definitions/Spell4GroupList.h
+        src/Database/Definitions/Spell4HitResults.h
+        src/Database/Definitions/Spell4Modification.h
+        src/Database/Definitions/Spell4Prerequisites.h
+        src/Database/Definitions/Spell4Reagent.h
+        src/Database/Definitions/Spell4Runner.h
+        src/Database/Definitions/Spell4ServiceTokenCost.h
+        src/Database/Definitions/Spell4SpellTypes.h
+        src/Database/Definitions/Spell4StackGroup.h
+        src/Database/Definitions/Spell4Tag.h
+        src/Database/Definitions/Spell4TargetAngle.h
+        src/Database/Definitions/Spell4TargetMechanics.h
+        src/Database/Definitions/Spell4Telegraph.h
+        src/Database/Definitions/Spell4Thresholds.h
+        src/Database/Definitions/Spell4TierRequirements.h
+        src/Database/Definitions/Spell4ValidTargets.h
+        src/Database/Definitions/Spell4Visual.h
+        src/Database/Definitions/Spell4VisualGroup.h
+        src/Database/Definitions/SpellCooldown.h
+        src/Database/Definitions/SpellEffectType.h
+        src/Database/Definitions/SpellLevel.h
+        src/Database/Definitions/SpellPhase.h
+        src/Database/Definitions/Spline2.h
+        src/Database/Definitions/Spline2Node.h
+        src/Database/Definitions/StoreDisplayInfo.h
+        src/Database/Definitions/StoreKeyword.h
+        src/Database/Definitions/StoreLink.h
+        src/Database/Definitions/StoryPanel.h
+        src/Database/Definitions/TargetGroup.h
+        src/Database/Definitions/TargetMarker.h
+        src/Database/Definitions/TaxiNode.h
+        src/Database/Definitions/TaxiRoute.h
+        src/Database/Definitions/TelegraphDamage.h
+        src/Database/Definitions/TicketCategory.h
+        src/Database/Definitions/TicketSubCategory.h
+        src/Database/Definitions/TrackingSlot.h
+        src/Database/Definitions/Tradeskill.h
+        src/Database/Definitions/TradeskillAchievementAward.h
+        src/Database/Definitions/TradeskillAchievementLayout.h
+        src/Database/Definitions/TradeskillAchievementReward.h
+        src/Database/Definitions/TradeskillAdditive.h
         src/Database/Definitions/TradeskillBonus.h
         src/Database/Definitions/TradeskillCatalyst.h
         src/Database/Definitions/TradeskillCatalystOrdering.h
@@ -223,94 +242,96 @@ set(HAM_SANDWICH_SOURCES
         src/Database/Definitions/UnitVehicle.h
         src/Database/Definitions/VeteranTier.h
         src/Database/Definitions/VirtualItem.h
+        src/Database/Definitions/VisualEffect.h
         src/Database/Definitions/Vital.h
-        src/Database/Definitions/SpellLevel.h
-        src/Database/Definitions/SpellPhase.h
-        src/Database/Definitions/Spline2.h
-        src/Database/Definitions/Spline2Node.h
-        src/Database/Definitions/StoreDisplayInfo.h
-        src/Database/Definitions/StoreKeyword.h
-        src/Database/Definitions/StoreLink.h
-        src/Database/Definitions/StoryPanel.h
-        src/Database/Definitions/TargetGroup.h
-        src/Database/Definitions/TargetMarker.h
-        src/Database/Definitions/TaxiNode.h
-        src/Database/Definitions/TaxiRoute.h
-        src/Database/Definitions/TelegraphDamage.h
-        src/Database/Definitions/TicketCategory.h
-        src/Database/Definitions/TicketSubCategory.h
-        src/Database/Definitions/TrackingSlot.h
-        src/Database/Definitions/Tradeskill.h
-        src/Database/Definitions/TradeskillAchievementLayout.h
-        src/Database/Definitions/TradeskillAchievementAward.h
-        src/Database/Definitions/TradeskillAchievementReward.h
-        src/Database/Definitions/TradeskillAdditive.h
-        src/Database/Definitions/Spell4Thresholds.h
-        src/Database/Definitions/Spell4TierRequirements.h
-        src/Database/Definitions/Spell4ValidTargets.h
-        src/Database/Definitions/Spell4Visual.h
-        src/Database/Definitions/Spell4VisualGroup.h
-        src/Database/Definitions/SpellCooldown.h
-        src/Database/Definitions/SpellEffectType.h
-        src/Database/Definitions/Spell4GroupList.h
-        src/Database/Definitions/Spell4HitResults.h
-        src/Database/Definitions/Spell4Modification.h
-        src/Database/Definitions/Spell4Prerequisites.h
-        src/Database/Definitions/Spell4Reagent.h
-        src/Database/Definitions/Spell4Runner.h
-        src/Database/Definitions/Spell4ServiceTokenCost.h
-        src/Database/Definitions/Spell4SpellTypes.h
-        src/Database/Definitions/Spell4StackGroup.h
-        src/Database/Definitions/Spell4Tag.h
-        src/Database/Definitions/Spell4TargetAngle.h
-        src/Database/Definitions/Spell4TargetMechanics.h
-        src/Database/Definitions/Spell4Telegraph.h
-        src/Database/Definitions/Spell4.h
-        src/Database/Definitions/SoundImpactEvents.h
-        src/Database/Definitions/SoundMusicSet.h
-        src/Database/Definitions/SoundParameter.h
-        src/Database/Definitions/SoundReplace.h
-        src/Database/Definitions/SoundReplaceDescription.h
-        src/Database/Definitions/SoundStates.h
-        src/Database/Definitions/SoundSwitch.h
-        src/Database/Definitions/SoundUIContext.h
-        src/Database/Definitions/SoundZoneKit.h
-        src/Database/Definitions/RewardTrackRewards.h
-        src/Database/Definitions/Salvage.h
-        src/Database/Definitions/SalvageException.h
-        src/Database/Definitions/SkyCloudSet.h
-        src/Database/Definitions/SoundBank.h
-        src/Database/Definitions/SoundCombatLoop.h
-        src/Database/Definitions/SoundContext.h
-        src/Database/Definitions/SoundDirectionalAmbience.h
-        src/Database/Definitions/SoundEnvironment.h
-        src/Database/Definitions/SoundEvent.h
+        src/Database/Definitions/WaterSurfaceEffect.h
+        src/Database/Definitions/Wind.h
+        src/Database/Definitions/WindSpawn.h
+        src/Database/Definitions/WordFilterAlt.h
+        src/Database/Definitions/World.h
+        src/Database/Definitions/WorldClutter.h
+        src/Database/Definitions/WorldFilter.h
+        src/Database/Definitions/WorldLayer.h
+        src/Database/Definitions/WorldLocation2.h
+        src/Database/Definitions/WorldSky.h
+        src/Database/Definitions/WorldSocket.h
+        src/Database/Definitions/WorldWaterEnvironment.h
+        src/Database/Definitions/WorldWaterFog.h
+        src/Database/Definitions/WorldWaterLayer.h
+        src/Database/Definitions/WorldWaterType.h
+        src/Database/Definitions/WorldWaterWake.h
+        src/Database/Definitions/WorldZone.h
+        src/Database/Definitions/XpPerLevel.h
+        src/Database/Definitions/ZoneCompletion.h
+
+        src/export/FBXExport.cpp
+        src/export/FBXExport.h
         src/export/GLBExport.cpp
         src/export/GLBExport.h
-        src/export/TerrainExport.cpp
-        src/export/TerrainExport.h
         src/export/M3Export.cpp
         src/export/M3Export.h
-        src/Area/Props.cpp
-        src/Area/Props.h
+        src/export/TerrainExport.cpp
+        src/export/TerrainExport.h
+
+        src/models/M3Common.h
+        src/models/M3Loader.cpp
+        src/models/M3Loader.h
         src/models/M3LoaderV95.cpp
         src/models/M3LoaderV95.h
-        src/UI/UI_Outliner.cpp
-        src/UI/UI_Outliner.h
-        src/UI/UI_Details.cpp
-        src/UI/UI_Details.h
-        src/UI/UI_ContentBrowser.cpp
-        src/UI/UI_ContentBrowser.h
-        src/UI/UI_Sky.cpp
-        src/UI/UI_Sky.h
+        src/models/M3Render.cpp
+        src/models/M3Render.h
+
+        src/settings/Keybinds.cpp
+        src/settings/Keybinds.h
+        src/settings/Settings.cpp
+        src/settings/Settings.h
+
         src/Skybox/Sky.cpp
         src/Skybox/Sky.h
         src/Skybox/Sky_Manager.cpp
         src/Skybox/Sky_Manager.h
-        src/UI/UI_TopBar.cpp
-        src/UI/UI_TopBar.h
+
+        src/tex/tex.cpp
+        src/tex/tex.h
+        src/tex/texjpeg.cpp
+        src/tex/texjpeg.h
+
         src/UI/AddonManager.cpp
         src/UI/AddonManager.h
+        src/UI/camera.cpp
+        src/UI/design.cpp
+        src/UI/splashscreen.cpp
+        src/UI/splashscreen.h
+        src/UI/UI.cpp
+        src/UI/UI.h
+        src/UI/UI_AreaInfo.cpp
+        src/UI/UI_AreaInfo.h
+        src/UI/UI_ContentBrowser.cpp
+        src/UI/UI_ContentBrowser.h
+        src/UI/UI_Details.cpp
+        src/UI/UI_Details.h
+        src/UI/UI_Globals.cpp
+        src/UI/UI_Globals.h
+        src/UI/UI_Outliner.cpp
+        src/UI/UI_Outliner.h
+        src/UI/UI_RenderWorld.cpp
+        src/UI/UI_RenderWorld.h
+        src/UI/UI_Selection.cpp
+        src/UI/UI_Selection.h
+        src/UI/UI_Sky.cpp
+        src/UI/UI_Sky.h
+        src/UI/UI_Tables.cpp
+        src/UI/UI_Tables.h
+        src/UI/UI_TopBar.cpp
+        src/UI/UI_TopBar.h
+        src/UI/UI_Utils.cpp
+        src/UI/UI_Utils.h
+
+        src/Utils/BinStream.h
+        src/Utils/ParallelAreaLoader.cpp
+        src/Utils/ParallelAreaLoader.h
+
+        ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
 if(WIN32)
@@ -325,10 +346,17 @@ endif()
 
 target_include_directories(The_Ham_Sandwich PRIVATE
         src
-        src/UI
-        src/settings
         src/About
         src/Area
+        src/Audio
+        src/Audio/wwise
+        src/Database
+        src/export
+        src/models
+        src/settings
+        src/Skybox
+        src/tex
+        src/UI
         src/Utils
         ${zlib_SOURCE_DIR}
         ${zlib_BINARY_DIR}
@@ -352,6 +380,7 @@ if(WIN32)
             d3dcompiler
             dxgi
             dwmapi
+            xaudio2
     )
 else()
     find_package(OpenGL REQUIRED)
