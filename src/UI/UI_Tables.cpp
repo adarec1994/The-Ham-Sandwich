@@ -4,7 +4,6 @@
 #include "../Archive.h"
 
 #include <imgui.h>
-#include <iostream>
 
 static TblViewState gTblState;
 
@@ -15,28 +14,22 @@ namespace UI_Tables
         if (!arc || !fileEntry) return;
 
         std::string name = wstring_to_utf8(fileEntry->getEntryName());
-        std::cout << "Loading TBL: " << name << std::endl;
 
         std::vector<uint8_t> data;
         if (!arc->getFileData(fileEntry, data) || data.empty())
         {
-            std::cout << "Failed to read TBL file data." << std::endl;
             return;
         }
 
         auto tblFile = std::make_unique<Tbl::File>();
         if (!tblFile->load(data.data(), data.size()))
         {
-            std::cout << "Failed to parse TBL file." << std::endl;
             return;
         }
 
         gTblState.file = std::move(tblFile);
         gTblState.tableName = name;
         gTblState.show_window = true;
-
-        std::cout << "TBL loaded. Records: " << gTblState.file->getRecordCount()
-                  << ", Columns: " << gTblState.file->getColumns().size() << std::endl;
     }
 
     static const char* DataTypeToString(Tbl::DataType type)

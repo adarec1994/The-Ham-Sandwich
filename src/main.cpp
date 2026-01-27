@@ -3,6 +3,7 @@
 #include "imgui_impl_dx11.h"
 #include "UI/UI.h"
 #include "UI/UI_Globals.h"
+#include "settings/Keybinds.h"
 #include "resource.h"
 #include "Area/AreaFile.h"
 #include "Area/TerrainTexture.h"
@@ -129,18 +130,6 @@ static bool LoadCharacterIcon()
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    AllocConsole();
-    FILE* fDummy;
-#ifdef _MSC_VER
-    freopen_s(&fDummy, "CONOUT$", "w", stdout);
-    freopen_s(&fDummy, "CONOUT$", "w", stderr);
-#else
-    fDummy = freopen("CONOUT$", "w", stdout);
-    fDummy = freopen("CONOUT$", "w", stderr);
-    (void)fDummy;
-#endif
-    printf("=== Ham Sandwich Debug Console ===\n");
-
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -179,9 +168,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ImGui_ImplWin32_Init(gHwnd);
     ImGui_ImplDX11_Init(gDevice, gContext);
 
-    printf("D3D11 Device: %p\n", (void*)gDevice);
-    printf("D3D11 Context: %p\n", (void*)gContext);
-
     AppState appState;
     gAppStatePtr = &appState;
     appState.device = gDevice;
@@ -190,11 +176,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     M3Render::SetDevice(gDevice, gContext);
     AreaChunkRender::SetDevice(gDevice, gContext);
     TerrainTexture::Manager::Instance().SetDevice(gDevice, gContext);
-    printf("All device pointers initialized\n");
-
+    Keybinds::Init();
     InitUI(appState);
     InitGrid(appState);
-    printf("UI and Grid initialized\n");
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
 

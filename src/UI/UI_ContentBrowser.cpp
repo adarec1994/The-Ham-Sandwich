@@ -8,6 +8,7 @@
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../export/M3Export.h"
+#include "../export/TerrainExport.h"
 #include "../tex/tex.h"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -500,8 +501,6 @@ namespace UI_ContentBrowser {
             state.currentArea = af;
             SnapCameraToLoaded(state);
 
-            // Auto-load props
-            printf("Auto-loading props...\n");
             af->loadAllPropsAsync();
             gShowProps = true;
         }
@@ -1055,6 +1054,51 @@ namespace UI_ContentBrowser {
                                     config.fileName = baseName + ".dds";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportTexDDSDlg", "Export DDS", ".dds", config);
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
+                        if (file.extension == ".area" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##areacontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                if (ImGui::MenuItem("Extract Raw (.area)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".area";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractAreaRawDlg", "Extract Raw Area", ".area", config);
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Export as .wsterrain"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportWsTerrainDlg", "Export Terrain", nullptr, config);
                                 }
 
                                 ImGui::EndPopup();
@@ -1677,6 +1721,66 @@ namespace UI_ContentBrowser {
                 bool success = Tex::ExportTextureFromArchive(sExportArchive, sExportFileEntry, filePath, Tex::ExportFormat::DDS);
                 sNotificationSuccess = success;
                 sNotificationMessage = success ? "DDS exported successfully!" : "Failed to export DDS";
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExtractAreaRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::vector<uint8_t> buffer;
+                if (sExportArchive->openFileStream(sExportFileEntry, buffer))
+                {
+                    std::ofstream out(filePath, std::ios::binary);
+                    if (out.is_open())
+                    {
+                        out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                        out.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "Area extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to write file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read area from archive";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportWsTerrainDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                auto areaFile = std::make_shared<AreaFile>(sExportArchive, sExportFileEntry);
+                if (areaFile->load())
+                {
+                    TerrainExport::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.scale = 1.0f;
+
+                    auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings);
+                    sNotificationSuccess = result.success;
+                    sNotificationMessage = result.success ? "Terrain exported successfully!" : ("Export failed: " + result.errorMessage);
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to load area file";
+                }
                 sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();

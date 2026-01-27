@@ -6,8 +6,9 @@
 #include "UI_Details.h"
 #include "UI_ContentBrowser.h"
 #include "UI_TopBar.h"
-#include "../settings/Settings.h"
+#include "Settings.h"
 #include "about.h"
+#include "AddonManager.h"
 
 #include "splashscreen.h"
 #include "../tex/tex.h"
@@ -21,6 +22,9 @@
 bool gShowSettings = false;
 bool gShowAbout = false;
 bool gRequestQuit = false;
+static float sAddonNotificationTimer = 0.0f;
+static bool sAddonNotificationSuccess = false;
+static std::string sAddonNotificationMessage;
 
 bool ShouldQuit()
 {
@@ -281,5 +285,54 @@ void RenderUI(AppState& state)
     if (gShowAbout)
     {
         RenderAboutWindow(&gShowAbout);
+    }
+
+    if (UI_TopBar::ShouldShowAddonSaveDialog())
+    {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        config.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog("AddonSaveDlg", "Select Download Location", nullptr, config);
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("AddonSaveDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+    {
+        if (ImGuiFileDialog::Instance()->IsOk())
+        {
+            std::string outputPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+            bool success = AddonManager::SaveBlenderTerrainAddon(outputPath);
+            sAddonNotificationSuccess = success;
+            sAddonNotificationMessage = success ? "Addon saved successfully!" : "Failed to save addon";
+            sAddonNotificationTimer = 3.0f;
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (sAddonNotificationTimer > 0.0f)
+    {
+        sAddonNotificationTimer -= ImGui::GetIO().DeltaTime;
+        float alpha = std::min(1.0f, sAddonNotificationTimer);
+
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 80.0f);
+
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+
+        ImGuiWindowFlags notifyFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                       ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize;
+
+        if (ImGui::Begin("##AddonNotification", nullptr, notifyFlags))
+        {
+            if (sAddonNotificationSuccess)
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", sAddonNotificationMessage.c_str());
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", sAddonNotificationMessage.c_str());
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(2);
     }
 }

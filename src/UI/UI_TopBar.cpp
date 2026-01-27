@@ -8,10 +8,18 @@ namespace UI_TopBar
     static const float TOOLBAR_HEIGHT = 32.0f;
     static bool sShowSpeedPopup = false;
     static bool sSpeedPopupJustOpened = false;
+    static bool sShowAddonSaveDialog = false;
 
     float GetHeight()
     {
         return MENUBAR_HEIGHT + TOOLBAR_HEIGHT;
+    }
+
+    bool ShouldShowAddonSaveDialog()
+    {
+        bool result = sShowAddonSaveDialog;
+        sShowAddonSaveDialog = false;
+        return result;
     }
 
     void Draw(AppState& state, bool* showSettings, bool* showAbout, bool* requestQuit)
@@ -34,6 +42,9 @@ namespace UI_TopBar
         {
             if (ImGui::BeginMenuBar())
             {
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+
                 if (ImGui::BeginMenu("File"))
                 {
                     if (ImGui::MenuItem("Settings"))
@@ -51,6 +62,21 @@ namespace UI_TopBar
                     }
                     ImGui::EndMenu();
                 }
+
+                if (ImGui::BeginMenu("Addons"))
+                {
+                    if (ImGui::BeginMenu("Blender"))
+                    {
+                        if (ImGui::MenuItem("Download .wsterrain Addon"))
+                        {
+                            sShowAddonSaveDialog = true;
+                        }
+                        ImGui::EndMenu();
+                    }
+                    ImGui::EndMenu();
+                }
+
+                ImGui::PopStyleVar(2);
                 ImGui::EndMenuBar();
             }
         }

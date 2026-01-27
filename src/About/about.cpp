@@ -34,16 +34,11 @@ Licensing Information:
 ----------------------
 This software uses the following open-source libraries:
 
-1. Dear ImGui (MIT License)
-2. GLFW (zlib/libpng License)
-3. GLAD (MIT License)
-4. STB Image (MIT License / Public Domain)
+1. Dear ImGui
+2. GLFW
+3. GLAD
+4. STB Image
 
-Controls:
----------
-- Right-Click + WASD: Move Camera
-- Right-Click + Mouse: Pan Camera
-- Scroll Wheel: Adjust Camera Speed
 )";
 
 void RenderAboutWindow(bool* p_open) {

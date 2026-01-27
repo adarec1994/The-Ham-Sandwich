@@ -5,14 +5,12 @@
 #include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
 #include <windows.h>
-#include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <cfloat>
-#include <cstdio>
 
 glm::mat4 gViewMatrix = glm::mat4(1.0f);
 glm::mat4 gProjMatrix = glm::mat4(1.0f);
@@ -79,8 +77,6 @@ void ProcessModelLoading(AppState& state)
 
     if (!gModelLoadComplete) return;
 
-    printf("ProcessModelLoading: Model load complete!\n");
-
     gLoadedAreas.clear();
     gSelectedChunk = nullptr;
     gSelectedChunkIndex = -1;
@@ -89,13 +85,10 @@ void ProcessModelLoading(AppState& state)
 
     if (gLoadedModelData.success)
     {
-        printf("ProcessModelLoading: Creating M3Render...\n");
         gLoadedModel = std::make_shared<M3Render>(gLoadedModelData, gPendingModelArchive);
         gLoadedModel->setModelName(gLoadingModelName);
         state.m3Render = gLoadedModel;
         state.show_models_window = true;
-
-        printf("ProcessModelLoading: Submesh count = %zu\n", gLoadedModel->getSubmeshCount());
 
         const auto& verts = gLoadedModel->getVertices();
         if (!verts.empty())
@@ -111,19 +104,15 @@ void ProcessModelLoading(AppState& state)
                 maxB.y = std::max(maxB.y, v.position.y);
                 maxB.z = std::max(maxB.z, v.position.z);
             }
-            printf("ProcessModelLoading: Bounds min(%.1f, %.1f, %.1f) max(%.1f, %.1f, %.1f)\n",
-                      minB.x, minB.y, minB.z, maxB.x, maxB.y, maxB.z);
             SnapCameraToModel(state, minB, maxB);
         }
         else
         {
-            printf("ProcessModelLoading: No vertices!\n");
             SnapCameraToModel(state, glm::vec3(-1.0f), glm::vec3(1.0f));
         }
     }
     else
     {
-        printf("ProcessModelLoading: Load FAILED!\n");
         gLoadedModel = nullptr;
         state.m3Render = nullptr;
         state.show_models_window = false;
@@ -299,9 +288,8 @@ void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& ou
                         }
                     }
                 }
-                catch (const std::exception& e)
+                catch (const std::exception&)
                 {
-                    std::cerr << "Failed to dump: " << relPath << " - " << e.what() << std::endl;
                 }
 
                 gDumpCurrent++;
@@ -316,7 +304,6 @@ void StartDumpAll(const std::vector<ArchivePtr>& archives, const std::string& ou
         }
         gDumpThreads.clear();
         gIsDumping = false;
-        std::cout << "Dump complete: " << gDumpCurrent.load() << " files" << std::endl;
     });
     convergenceThread.detach();
 }

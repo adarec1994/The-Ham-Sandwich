@@ -3,6 +3,7 @@
 #include "UI_Selection.h"
 #include "UI_Utils.h"
 #include "UI_ContentBrowser.h"
+#include "UI_TopBar.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
 #include "../Skybox/Sky_Manager.h"
@@ -57,8 +58,9 @@ namespace UI_Outliner
         if (sSidebarWidth < 200.0f) sSidebarWidth = 200.0f;
         if (sSidebarWidth > viewport->Size.x - 50.0f) sSidebarWidth = viewport->Size.x - 50.0f;
 
+        float topBarHeight = UI_TopBar::GetHeight();
         float startX = viewport->Pos.x + viewport->Size.x - sSidebarWidth;
-        float startY = viewport->Pos.y;
+        float startY = viewport->Pos.y + topBarHeight;
 
         ImGui::SetNextWindowPos(ImVec2(startX, startY), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(sSidebarWidth, sWindowHeight), ImGuiCond_Always);

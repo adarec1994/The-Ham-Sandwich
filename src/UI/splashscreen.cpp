@@ -2,7 +2,6 @@
 #include "../Archive.h"
 #include "ImGuiFileDialog.h"
 #include <filesystem>
-#include <iostream>
 #include <fstream>
 #include <string>
 
@@ -46,9 +45,6 @@ void SaveLastUsedPath(const std::string& path) {
     if (file.is_open()) {
         file << path;
         file.close();
-        std::cout << "[Config] Saved WildStar path: " << path << std::endl;
-    } else {
-        std::cerr << "[Config] Failed to save path to config file" << std::endl;
     }
 }
 
@@ -72,8 +68,7 @@ bool PathHasArchives(const std::string& pathStr) {
                 return true;
             }
         }
-    } catch (const std::exception& e) {
-        std::cerr << "[Warning] Error scanning path " << pathStr << ": " << e.what() << std::endl;
+    } catch (const std::exception&) {
     }
 
     return false;
@@ -105,8 +100,7 @@ static void ScanForArchives(const std::string& pathStr) {
                 gArchiveLoadState.pendingArchives.push_back(entry.path());
             }
         }
-    } catch (const std::exception& e) {
-        std::cerr << "[Warning] Error scanning path " << pathStr << ": " << e.what() << std::endl;
+    } catch (const std::exception&) {
     }
 
     gArchiveLoadState.totalArchives = static_cast<int>(gArchiveLoadState.pendingArchives.size());
@@ -142,8 +136,6 @@ static void ProcessArchiveLoading(AppState& state) {
     gArchiveLoadState.currentArchiveName = archivePath.filename().string();
 
     try {
-        std::cout << "Loading: " << archivePath << std::endl;
-
         std::wstring wpath = archivePath.wstring();
 
         auto archive = std::make_shared<Archive>(wpath);
@@ -153,9 +145,7 @@ static void ProcessArchiveLoading(AppState& state) {
 
         state.archives.push_back(archive);
     }
-    catch (const std::exception& e) {
-        std::cerr << "[Warning] Failed to load " << archivePath.string()
-                  << ": " << e.what() << std::endl;
+    catch (const std::exception&) {
     }
 
     gArchiveLoadState.loadedArchives++;
@@ -163,9 +153,7 @@ static void ProcessArchiveLoading(AppState& state) {
 
 bool TryAutoLoadArchives(AppState& state) {
     for (const auto& path : DEFAULT_PATHS) {
-        std::cout << "[AutoLoad] Checking default path: " << path << std::endl;
         if (PathHasArchives(path)) {
-            std::cout << "[AutoLoad] Found archives in: " << path << std::endl;
             StartArchiveLoading(state, path, false);
             return true;
         }
@@ -173,17 +161,12 @@ bool TryAutoLoadArchives(AppState& state) {
 
     std::string savedPath = LoadLastUsedPath();
     if (!savedPath.empty()) {
-        std::cout << "[AutoLoad] Checking saved path: " << savedPath << std::endl;
         if (PathHasArchives(savedPath)) {
-            std::cout << "[AutoLoad] Found archives in saved path: " << savedPath << std::endl;
             StartArchiveLoading(state, savedPath, false);
             return true;
-        } else {
-            std::cout << "[AutoLoad] Saved path no longer valid: " << savedPath << std::endl;
         }
     }
 
-    std::cout << "[AutoLoad] No archives found in default or saved locations" << std::endl;
     return false;
 }
 

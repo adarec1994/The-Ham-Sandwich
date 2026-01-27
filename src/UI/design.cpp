@@ -11,8 +11,6 @@
 #include <stb_image.h>
 
 #include <vector>
-#include <iostream>
-#include <fstream>
 
 static ID3D11Device* sDevice = nullptr;
 static ID3D11DeviceContext* sContext = nullptr;
@@ -93,8 +91,6 @@ void InitGrid(AppState& state)
                             "main", "vs_5_0", flags, 0, &vsBlob, &vsError);
     if (FAILED(hr))
     {
-        if (vsError)
-            std::cout << "ERROR::VERTEX_SHADER::COMPILATION_FAILED\n" << (char*)vsError->GetBufferPointer() << std::endl;
         return;
     }
 
@@ -104,8 +100,6 @@ void InitGrid(AppState& state)
                     "main", "ps_5_0", flags, 0, &psBlob, &psError);
     if (FAILED(hr))
     {
-        if (psError)
-            std::cout << "ERROR::PIXEL_SHADER::COMPILATION_FAILED\n" << (char*)psError->GetBufferPointer() << std::endl;
         return;
     }
 

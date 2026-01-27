@@ -10,7 +10,11 @@ set(CMAKE_WARN_DEPRECATED OFF)
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
 
 if(MINGW)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static -mwindows")
+endif()
+
+if(MSVC)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 endif()
 
 include(FetchContent)
@@ -135,6 +139,8 @@ set(HAM_SANDWICH_SOURCES
         src/About/about.h
         src/settings/Settings.cpp
         src/settings/Settings.h
+        src/settings/Keybinds.cpp
+        src/settings/Keybinds.h
         src/Area/AreaFile.cpp
         src/Area/AreaFile.h
         src/Area/AreaRender.cpp
@@ -156,8 +162,6 @@ set(HAM_SANDWICH_SOURCES
         src/models/M3Loader.h
         src/models/M3Render.cpp
         src/models/M3Render.h
-        src/UI/UI_Models.cpp
-        src/UI/UI_Models.h
         src/UI/UI_Globals.cpp
         src/UI/UI_Globals.h
         src/UI/UI_Utils.cpp
@@ -166,8 +170,6 @@ set(HAM_SANDWICH_SOURCES
         src/UI/UI_Selection.h
         src/UI/UI_RenderWorld.cpp
         src/UI/UI_RenderWorld.h
-        src/UI/UI_FileTree.cpp
-        src/UI/UI_FileTree.h
         src/Area/TerrainTexture.cpp
         src/Area/TerrainTexture.h
         src/Area/TerrainShader.cpp
@@ -283,8 +285,6 @@ set(HAM_SANDWICH_SOURCES
         src/Database/Definitions/SoundDirectionalAmbience.h
         src/Database/Definitions/SoundEnvironment.h
         src/Database/Definitions/SoundEvent.h
-        src/UI/UI_ChunkTextures.cpp
-        src/UI/UI_ChunkTextures.h
         src/export/GLBExport.cpp
         src/export/GLBExport.h
         src/export/TerrainExport.cpp
@@ -309,6 +309,8 @@ set(HAM_SANDWICH_SOURCES
         src/Skybox/Sky_Manager.h
         src/UI/UI_TopBar.cpp
         src/UI/UI_TopBar.h
+        src/UI/AddonManager.cpp
+        src/UI/AddonManager.h
 )
 
 if(WIN32)
@@ -324,7 +326,7 @@ endif()
 target_include_directories(The_Ham_Sandwich PRIVATE
         src
         src/UI
-        src/Settings
+        src/settings
         src/About
         src/Area
         src/Utils

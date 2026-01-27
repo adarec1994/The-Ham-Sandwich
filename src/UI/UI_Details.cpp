@@ -4,6 +4,7 @@
 #include "UI_ContentBrowser.h"
 #include "UI_Selection.h"
 #include "UI_Utils.h"
+#include "UI_TopBar.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
@@ -563,10 +564,11 @@ namespace UI_Details
         if (!render) return;
 
         ImGuiViewport* vp = ImGui::GetMainViewport();
+        float topBarHeight = UI_TopBar::GetHeight();
         float sidebarWidth = UI_Outliner::GetSidebarWidth();
         float playbackWidth = 180.0f;
         float popupX = vp->Pos.x + vp->Size.x - sidebarWidth - playbackWidth - 20.0f;
-        float popupY = vp->Pos.y + 40.0f;
+        float popupY = vp->Pos.y + topBarHeight + 10.0f;
 
         ImGui::SetNextWindowPos(ImVec2(popupX, popupY), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(0.9f);
@@ -662,12 +664,13 @@ namespace UI_Details
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
+        float topBarHeight = UI_TopBar::GetHeight();
         float sidebarWidth = UI_Outliner::GetSidebarWidth();
         float outlinerHeight = UI_Outliner::GetWindowHeight();
         float contentBrowserHeight = UI_ContentBrowser::GetHeight();
 
-        float topY = viewport->Pos.y + outlinerHeight;
-        float availableHeight = viewport->Size.y - outlinerHeight - contentBrowserHeight;
+        float topY = viewport->Pos.y + topBarHeight + outlinerHeight;
+        float availableHeight = viewport->Size.y - topBarHeight - outlinerHeight - contentBrowserHeight;
         float startX = viewport->Pos.x + viewport->Size.x - sidebarWidth;
 
         ImGui::SetNextWindowPos(ImVec2(startX, topY), ImGuiCond_Always);
