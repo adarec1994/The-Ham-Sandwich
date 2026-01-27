@@ -332,6 +332,7 @@ set(HAM_SANDWICH_SOURCES
         src/Utils/ParallelAreaLoader.h
 
         ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
+        src/Audio/Wwise/WwiseCodebookData.h
 )
 
 if(WIN32)
