@@ -461,24 +461,9 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
         for (size_t vi = 0; vi < mat.variants.size(); ++vi) {
             const auto& var = mat.variants[vi];
             if (var.textureIndexC >= 0 || var.textureIndexD >= 0) {
-                if (materialsWithMultiLayer == 0) {
-                    std::cout << "[M3Render] Multi-layer materials detected:" << std::endl;
-                }
-                std::cout << "  Material " << mi << " variant " << vi << ": ";
-                std::cout << "A=" << var.textureIndexA << " B=" << var.textureIndexB;
-                if (var.textureIndexC >= 0) std::cout << " C=" << var.textureIndexC;
-                if (var.textureIndexD >= 0) std::cout << " D=" << var.textureIndexD;
-                std::cout << std::endl;
                 materialsWithMultiLayer++;
             }
         }
-    }
-
-    if (vertsWithBlend > 0 || materialsWithMultiLayer > 0) {
-        std::cout << "[M3Render] Texture layer blending info:" << std::endl;
-        std::cout << "  Vertices with blend weights: " << vertsWithBlend << "/" << data.geometry.vertices.size() << std::endl;
-        std::cout << "  Materials with multi-layer textures: " << materialsWithMultiLayer << "/" << materials.size() << std::endl;
-        std::cout << "  Uses texture layer blending: " << (geometry.usesTextureLayerBlending ? "YES" : "NO") << std::endl;
     }
 }
 
@@ -666,9 +651,8 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     if (!sDevice) return nullptr;
 
-
-
-    uint32_t px = 0xFF808080u;
+    // Actual white pixel (was 0xFF808080 grey before!)
+    uint32_t px = 0xFFFFFFFFu;
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = 1;
     td.Height = 1;
@@ -902,7 +886,6 @@ bool M3Render::materialUsesAlpha(uint16_t materialId, int variant) const {
 // Returns the number of valid layers (1-4)
 int M3Render::resolveTextureLayers(uint16_t materialId, int variant,
                                     ID3D11ShaderResourceView* outSRVs[4]) const {
-    // Initialize all to fallback
     for (int i = 0; i < 4; ++i) {
         outSRVs[i] = mFallbackWhiteSRV.Get();
     }
@@ -914,30 +897,33 @@ int M3Render::resolveTextureLayers(uint16_t materialId, int variant,
     int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
     const auto& var = m.variants[v];
 
-    int layerCount = 0;
-
-    // Slot 0 (X channel) - textureIndexA (primary diffuse)
     int idxA = var.textureIndexA;
+    ID3D11ShaderResourceView* baseSRV = mFallbackWhiteSRV.Get();
     if (idxA >= 0 && idxA < (int)mTextureSRVs.size() && mTextureSRVs[idxA]) {
-        outSRVs[0] = mTextureSRVs[idxA].Get();
-        layerCount = 1;
+        baseSRV = mTextureSRVs[idxA].Get();
     }
 
-    // Slot 1 (Y channel) - textureIndexC (secondary color layer)
+    int layerCount = 1;
+
+    outSRVs[0] = baseSRV;
+
     int idxC = var.textureIndexC;
     if (idxC >= 0 && idxC < (int)mTextureSRVs.size() && mTextureSRVs[idxC]) {
         outSRVs[1] = mTextureSRVs[idxC].Get();
-        layerCount = std::max(layerCount, 2);
+        layerCount = 2;
+    } else {
+        outSRVs[1] = baseSRV;
     }
 
-    // Slot 2 (Z channel) - textureIndexD (tertiary color layer)
     int idxD = var.textureIndexD;
     if (idxD >= 0 && idxD < (int)mTextureSRVs.size() && mTextureSRVs[idxD]) {
         outSRVs[2] = mTextureSRVs[idxD].Get();
-        layerCount = std::max(layerCount, 3);
+        layerCount = 3;
+    } else {
+        outSRVs[2] = baseSRV;
     }
 
-    // Slot 3 (W channel) - could add another layer if needed
+    outSRVs[3] = baseSRV;
 
     return layerCount;
 }
@@ -1002,9 +988,32 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     sContext->PSSetConstantBuffers(0, 1, cbs);
     sContext->PSSetSamplers(0, 1, sSharedSampler.GetAddressOf());
 
+    // Find minimum groupId (highest LOD) - skip groupId 255 (always visible)
+    uint8_t minGroupId = 255;
+    for (const auto& sm : submeshes) {
+        if (sm.groupId != 255 && sm.groupId < minGroupId) {
+            minGroupId = sm.groupId;
+        }
+    }
+
+    // Debug: count how many submeshes we're actually rendering
+    static bool lodDebugPrinted = false;
+    if (!lodDebugPrinted) {
+        int renderCount = 0;
+        for (const auto& sm : submeshes) {
+            if (sm.groupId == minGroupId || sm.groupId == 255) renderCount++;
+        }
+        std::cout << "[M3Render] LOD filtering: minGroupId=" << (int)minGroupId
+                  << ", rendering " << renderCount << "/" << submeshes.size() << " submeshes" << std::endl;
+        lodDebugPrinted = true;
+    }
+
     for (size_t i = 0; i < submeshes.size(); ++i) {
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
         const auto& sm = submeshes[i];
+
+        // Only render highest LOD (lowest groupId) or always-visible submeshes (255)
+        if (sm.groupId != minGroupId && sm.groupId != 255) continue;
 
 
         int variant = 0;

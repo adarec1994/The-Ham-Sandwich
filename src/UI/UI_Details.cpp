@@ -262,7 +262,15 @@ namespace UI_Details
                             bool drewColor = drawTexture("color", variant.textureIndexA, variant.textureColorPath);
                             if (drewColor && variant.textureIndexB >= 0)
                                 ImGui::SameLine();
-                            drawTexture("normal", variant.textureIndexB, variant.textureNormalPath);
+                            bool drewNormal = drawTexture("normal", variant.textureIndexB, variant.textureNormalPath);
+
+                            if ((drewColor || drewNormal) && variant.textureIndexC >= 0)
+                                ImGui::SameLine();
+                            bool drewColor2 = drawTexture("color2", variant.textureIndexC, variant.textureColor2Path);
+
+                            if ((drewColor || drewNormal || drewColor2) && variant.textureIndexD >= 0)
+                                ImGui::SameLine();
+                            drawTexture("color3", variant.textureIndexD, variant.textureColor3Path);
                         }
                     }
 

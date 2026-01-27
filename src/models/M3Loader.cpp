@@ -171,7 +171,6 @@ M3ModelData M3Loader::LoadFromFile(const ArchivePtr& arc, const std::shared_ptr<
         std::memcpy(&version, buffer.data() + 4, sizeof(version));
 
         if (version >= 90 && version < 100) {
-            std::cout << "[M3Loader] Using V95 loader for version " << version << std::endl;
             return M3LoaderV95::Load(buffer);
         }
     }
@@ -385,16 +384,45 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
                 var.textureIndexB = Read<int16_t>(ptr, descOfs + 2);
                 std::memcpy(var.unkValues.data(), ptr + descOfs + 4, 292);
 
-                // Extract additional texture layer index from unkValues[144]
-                // This is only used for rendering if geometry has layer blend weights
-                int16_t layerC = static_cast<int16_t>(var.unkValues[144]);
+                int16_t rawLayerC = static_cast<int16_t>(var.unkValues[4]);
+                int16_t rawLayerD = static_cast<int16_t>(var.unkValues[8]);
 
-                // Validate layer C - must be in range and be a color texture (type 0)
-                // Also must be different from A and B
-                if (layerC > 0 && layerC < (int)model.textures.size() &&
-                    model.textures[layerC].type == 0 &&
-                    layerC != var.textureIndexA && layerC != var.textureIndexB) {
-                    var.textureIndexC = layerC;
+                bool layerCValid = rawLayerC > 0 && rawLayerC < (int)model.textures.size() &&
+                                   model.textures[rawLayerC].type == 0 &&
+                                   rawLayerC != var.textureIndexA && rawLayerC != var.textureIndexB;
+
+                if (layerCValid) {
+                    var.textureIndexC = rawLayerC;
+                }
+
+                bool layerDValid = rawLayerD > 0 && rawLayerD < (int)model.textures.size() &&
+                                   model.textures[rawLayerD].type == 0 &&
+                                   rawLayerD != var.textureIndexA && rawLayerD != var.textureIndexB &&
+                                   rawLayerD != var.textureIndexC;
+
+                if (layerDValid) {
+                    var.textureIndexD = rawLayerD;
+                }
+
+                if (!layerCValid && var.textureIndexC < 0) {
+                    for (int ti = 0; ti < (int)model.textures.size(); ti++) {
+                        if (model.textures[ti].type == 0 &&
+                            ti != var.textureIndexA && ti != var.textureIndexB) {
+                            var.textureIndexC = ti;
+                            break;
+                        }
+                    }
+                }
+
+                if (!layerDValid && var.textureIndexD < 0) {
+                    for (int ti = 0; ti < (int)model.textures.size(); ti++) {
+                        if (model.textures[ti].type == 0 &&
+                            ti != var.textureIndexA && ti != var.textureIndexB &&
+                            ti != var.textureIndexC) {
+                            var.textureIndexD = ti;
+                            break;
+                        }
+                    }
                 }
 
                 if (var.textureIndexA >= 0 && var.textureIndexA < (int)model.textures.size()) {
@@ -686,31 +714,16 @@ void M3Loader::ReadGeometry(const uint8_t* ptr, size_t size, M3ModelData& model)
     if (geo.vertexFlags & 0x0080) {
         int layerBlendCount = 0;
         int sampleCount = std::min((uint32_t)500, geo.nrVertices);
-        float firstTotal = 0;
-
-        // Debug: print first 5 blend values
-        std::cout << "[M3Loader] First 5 blend values (normalized):" << std::endl;
-        for (int i = 0; i < std::min(5, sampleCount); i++) {
-            const auto& bl = geo.vertices[i].blend;
-            std::cout << "  V" << i << ": (" << bl.x << ", " << bl.y << ", " << bl.z << ", " << bl.w << ")" << std::endl;
-        }
 
         for (int i = 0; i < sampleCount; i++) {
             const auto& bl = geo.vertices[i].blend;
             float total = bl.x + bl.y + bl.z + bl.w;
-            if (i == 0) firstTotal = total;
-            // Texture layer blends should sum to ~1.0 (normalized from 255)
             if (total >= 0.95f && total <= 1.05f) {
                 layerBlendCount++;
             }
         }
 
-        // Require 90%+ of vertices to have proper layer weights
         geo.usesTextureLayerBlending = (layerBlendCount >= (sampleCount * 9 / 10));
-
-        std::cout << "[M3Loader] Blend detection: " << layerBlendCount << "/" << sampleCount
-                  << " vertices sum to ~1.0 (first vertex total=" << firstTotal << ")"
-                  << " -> usesTextureLayerBlending=" << (geo.usesTextureLayerBlending ? "YES" : "NO") << std::endl;
     }
 
     size_t indexStart = geomOfs + GEOM_SIZE + geo.ofsIndices;
