@@ -113,6 +113,79 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
             errorOut = "Unsupported PCM bits: " + std::to_string(bitsPerSample);
             return false;
         }
+    } else if (formatTag == 0x0002 && bitsPerSample == 4) {
+        // Wwise ADPCM (format 0x0002 with 4-bit) - uses IMA ADPCM algorithm
+        static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+        static const int IMA_StepTable[89] = {
+            7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+            50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+            337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+            2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+            15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+        };
+
+        auto decodeNibble = [&](int nibble, int& predictor, int& stepIndex) -> int16_t {
+            int step = IMA_StepTable[stepIndex];
+            int diff = step >> 3;
+            if (nibble & 1) diff += step >> 2;
+            if (nibble & 2) diff += step >> 1;
+            if (nibble & 4) diff += step;
+            if (nibble & 8) diff = -diff;
+            predictor += diff;
+            if (predictor > 32767) predictor = 32767;
+            if (predictor < -32768) predictor = -32768;
+            stepIndex += IMA_IndexTable[nibble];
+            if (stepIndex < 0) stepIndex = 0;
+            if (stepIndex > 88) stepIndex = 88;
+            return (int16_t)predictor;
+        };
+
+        if (blockAlign == 0 || channels == 0) {
+            errorOut = "Invalid Wwise ADPCM params";
+            return false;
+        }
+
+        // Wwise ADPCM: block is split by channel, NOT interleaved
+        // For stereo: [Left header 4B][Left data][Right header 4B][Right data]
+        size_t bytesPerChannel = blockAlign / channels;
+        size_t numBlocks = audioSize / blockAlign;
+
+        pcmOut.reserve(numBlocks * (bytesPerChannel - 4) * 2 * channels);
+
+        for (size_t blk = 0; blk < numBlocks; blk++) {
+            const uint8_t* blockStart = audioData + blk * blockAlign;
+
+            std::vector<std::vector<int16_t>> channelSamples(channels);
+
+            for (int ch = 0; ch < channels; ch++) {
+                const uint8_t* chData = blockStart + ch * bytesPerChannel;
+
+                // 4-byte header: predictor (2), step index (1), reserved (1)
+                int predictor = (int16_t)(chData[0] | (chData[1] << 8));
+                int stepIndex = chData[2];
+                if (stepIndex > 88) stepIndex = 88;
+
+                // First sample is the predictor
+                channelSamples[ch].push_back((int16_t)predictor);
+
+                // Decode data bytes
+                size_t dataBytes = bytesPerChannel - 4;
+                for (size_t i = 0; i < dataBytes; i++) {
+                    uint8_t byte = chData[4 + i];
+                    channelSamples[ch].push_back(decodeNibble(byte & 0x0F, predictor, stepIndex));
+                    channelSamples[ch].push_back(decodeNibble((byte >> 4) & 0x0F, predictor, stepIndex));
+                }
+            }
+
+            // Interleave channels
+            size_t samplesPerChannel = channelSamples[0].size();
+            for (size_t s = 0; s < samplesPerChannel; s++) {
+                for (int ch = 0; ch < channels; ch++) {
+                    pcmOut.push_back(channelSamples[ch][s]);
+                }
+            }
+        }
+        return true;
     } else if (formatTag == 0x0002) {
         static const int AdaptTable[] = { 230, 230, 230, 230, 307, 409, 512, 614, 768, 614, 512, 409, 307, 230, 230, 230 };
         static const int Coef1[] = { 256, 512, 0, 192, 240, 460, 392 };
@@ -168,6 +241,102 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
                         if (delta[ch] < 16) delta[ch] = 16;
                         pcmOut.push_back((int16_t)pred);
                     }
+                }
+            }
+        }
+        return true;
+    } else if (formatTag == 0x0069 || formatTag == 0x0011) {
+        // Wwise IMA ADPCM
+        static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+        static const int IMA_StepTable[89] = {
+            7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+            50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+            337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+            2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+            15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+        };
+
+        auto decodeNibble = [&](int nibble, int& predictor, int& stepIndex) -> int16_t {
+            int step = IMA_StepTable[stepIndex];
+            int diff = step >> 3;
+            if (nibble & 1) diff += step >> 2;
+            if (nibble & 2) diff += step >> 1;
+            if (nibble & 4) diff += step;
+            if (nibble & 8) diff = -diff;
+            predictor += diff;
+            if (predictor > 32767) predictor = 32767;
+            if (predictor < -32768) predictor = -32768;
+            stepIndex += IMA_IndexTable[nibble];
+            if (stepIndex < 0) stepIndex = 0;
+            if (stepIndex > 88) stepIndex = 88;
+            return (int16_t)predictor;
+        };
+
+        if (blockAlign == 0 || channels == 0) {
+            errorOut = "Invalid IMA ADPCM params";
+            return false;
+        }
+
+        size_t numBlocks = audioSize / blockAlign;
+        pcmOut.reserve(numBlocks * blockAlign * 2);
+
+        for (size_t blk = 0; blk < numBlocks; blk++) {
+            const uint8_t* bd = audioData + blk * blockAlign;
+
+            std::vector<int> predictor(channels), stepIndex(channels);
+
+            // Read headers (4 bytes per channel)
+            for (int ch = 0; ch < channels; ch++) {
+                size_t headerOff = ch * 4;
+                predictor[ch] = (int16_t)(bd[headerOff] | (bd[headerOff + 1] << 8));
+                stepIndex[ch] = bd[headerOff + 2];
+                if (stepIndex[ch] > 88) stepIndex[ch] = 88;
+            }
+
+            // Output initial samples
+            if (channels == 1) {
+                pcmOut.push_back((int16_t)predictor[0]);
+            } else {
+                pcmOut.push_back((int16_t)predictor[0]);
+                pcmOut.push_back((int16_t)predictor[1]);
+            }
+
+            const uint8_t* data = bd + 4 * channels;
+            size_t dataSize = blockAlign - 4 * channels;
+
+            if (channels == 1) {
+                for (size_t i = 0; i < dataSize; i++) {
+                    uint8_t byte = data[i];
+                    pcmOut.push_back(decodeNibble(byte & 0x0F, predictor[0], stepIndex[0]));
+                    pcmOut.push_back(decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]));
+                }
+            } else {
+                // Stereo: data comes in 4-byte chunks per channel, interleaved
+                size_t pos = 0;
+                while (pos + 8 <= dataSize) {
+                    int16_t left[8], right[8];
+
+                    // Decode 4 bytes (8 samples) from left channel
+                    for (int i = 0; i < 4; i++) {
+                        uint8_t byte = data[pos + i];
+                        left[i * 2] = decodeNibble(byte & 0x0F, predictor[0], stepIndex[0]);
+                        left[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]);
+                    }
+
+                    // Decode 4 bytes (8 samples) from right channel
+                    for (int i = 0; i < 4; i++) {
+                        uint8_t byte = data[pos + 4 + i];
+                        right[i * 2] = decodeNibble(byte & 0x0F, predictor[1], stepIndex[1]);
+                        right[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[1], stepIndex[1]);
+                    }
+
+                    // Interleave L R L R
+                    for (int i = 0; i < 8; i++) {
+                        pcmOut.push_back(left[i]);
+                        pcmOut.push_back(right[i]);
+                    }
+
+                    pos += 8;
                 }
             }
         }

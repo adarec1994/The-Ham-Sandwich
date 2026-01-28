@@ -12,7 +12,7 @@
 #include "../tex/tex.h"
 #include "../audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
-#include "../Audio/AudioExport.h"
+#include "../Export/AudioExport.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <ImGuiFileDialog.h>
