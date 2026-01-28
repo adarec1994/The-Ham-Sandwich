@@ -153,11 +153,8 @@ set(HAM_SANDWICH_SOURCES
         src/Audio/BNKReader.h
         src/Audio/WEMExtractor.cpp
         src/Audio/WEMExtractor.h
-        src/Audio/Wwise/WwiseCodeBooks.cpp
-        src/Audio/Wwise/WwiseCodeBooks.h
         src/Audio/Wwise/WwiseVorbisDecoder.cpp
         src/Audio/Wwise/WwiseVorbisDecoder.h
-        src/Audio/Wwise/WwiseCodebookData.h
 
         src/Database/Tbl.cpp
         src/Database/Tbl.h
@@ -265,6 +262,8 @@ set(HAM_SANDWICH_SOURCES
         src/Database/Definitions/XpPerLevel.h
         src/Database/Definitions/ZoneCompletion.h
 
+        src/export/AudioExport.cpp
+        src/export/AudioExport.h
         src/export/FBXExport.cpp
         src/export/FBXExport.h
         src/export/GLBExport.cpp
@@ -333,6 +332,10 @@ set(HAM_SANDWICH_SOURCES
         src/Utils/ParallelAreaLoader.h
 
         ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
+        src/Audio/AudioPlayerWidget.cpp
+        src/Audio/AudioPlayerWidget.h
+        src/Audio/Wwise/WwiseCodebookData.cpp
+        src/Audio/Wwise/WwiseCodebookData.h
 )
 
 if(WIN32)

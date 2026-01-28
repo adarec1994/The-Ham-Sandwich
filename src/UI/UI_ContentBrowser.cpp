@@ -11,6 +11,8 @@
 #include "../export/TerrainExport.h"
 #include "../tex/tex.h"
 #include "../audio/AudioPlayer.h"
+#include "../Audio/AudioPlayerWidget.h"
+#include "../Audio/AudioExport.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <ImGuiFileDialog.h>
@@ -74,7 +76,7 @@ namespace UI_ContentBrowser {
 
     static std::vector<IFileSystemEntryPtr> sBreadcrumbPath;
 
-    // Export state
+
     static ArchivePtr sExportArchive = nullptr;
     static std::shared_ptr<FileEntry> sExportFileEntry = nullptr;
     static std::string sExportDefaultName;
@@ -88,6 +90,9 @@ namespace UI_ContentBrowser {
     static float sNotificationTimer = 0.0f;
     static std::string sNotificationMessage;
     static bool sNotificationSuccess = true;
+
+    static std::vector<uint8_t> sAudioExportData;
+    static std::string sAudioExportName;
 
     struct ThumbnailRequest {
         ArchivePtr archive;
@@ -551,7 +556,7 @@ namespace UI_ContentBrowser {
         }
         else if (file.extension == ".tex")
         {
-            // Use already-loaded thumbnail if available (instant)
+
             if (file.textureID && file.texWidth > 0 && file.texHeight > 0)
             {
                 Tex::OpenTexPreviewFromSRV(state,
@@ -560,7 +565,7 @@ namespace UI_ContentBrowser {
             }
             else
             {
-                // Fallback to loading from disk
+
                 Tex::OpenTexPreviewFromEntry(state, file.archive, fileEntry);
             }
         }
@@ -573,16 +578,7 @@ namespace UI_ContentBrowser {
             std::vector<uint8_t> wemData;
             if (file.archive->getFileData(fileEntry, wemData) && !wemData.empty())
             {
-                if (!Audio::AudioManager::Get().PlayWEM(wemData))
-                {
-                    auto* player = Audio::AudioManager::Get().GetPlayer();
-                    if (player)
-                    {
-                        sNotificationMessage = player->GetLastError();
-                        sNotificationSuccess = false;
-                        sNotificationTimer = 5.0f;
-                    }
-                }
+    Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
             }
         }
     }
@@ -920,10 +916,10 @@ namespace UI_ContentBrowser {
                             HandleFileOpen(state, file);
                         }
 
-                        // Right-click context menu for .m3 files
+
                         if (file.extension == ".m3" && !file.isDirectory)
                         {
-                            // Style the popup - must be before BeginPopup
+
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
                             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
 
@@ -1145,16 +1141,7 @@ namespace UI_ContentBrowser {
                                         std::vector<uint8_t> wemData;
                                         if (file.archive->getFileData(fe, wemData) && !wemData.empty())
                                         {
-                                            if (!Audio::AudioManager::Get().PlayWEM(wemData))
-                                            {
-                                                auto* player = Audio::AudioManager::Get().GetPlayer();
-                                                if (player)
-                                                {
-                                                    sNotificationMessage = player->GetLastError();
-                                                    sNotificationSuccess = false;
-                                                    sNotificationTimer = 5.0f;
-                                                }
-                                            }
+Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
                                         }
                                     }
                                 }
@@ -1177,6 +1164,20 @@ namespace UI_ContentBrowser {
                                     config.fileName = baseName + ".wem";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractWemRawDlg", "Extract Raw WEM", ".wem", config);
+                                }
+
+                                if (ImGui::MenuItem("Convert to WAV"))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (fe && file.archive->getFileData(fe, sAudioExportData) && !sAudioExportData.empty())
+                                    {
+                                        sAudioExportName = baseName;
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + ".wav";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportAudioDlg", "Save WAV", ".wav", config);
+                                    }
                                 }
 
                                 ImGui::EndPopup();
@@ -1358,7 +1359,7 @@ namespace UI_ContentBrowser {
         sCachedFiles.clear();
         sNeedsRefresh = true;
 
-        // Reset export state
+
         sExportArchive = nullptr;
         sExportFileEntry = nullptr;
         sExportDefaultName.clear();
@@ -1564,7 +1565,7 @@ namespace UI_ContentBrowser {
 
         ImGui::PopStyleVar();
 
-        // Export GLB dialog
+
         if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
@@ -1575,7 +1576,7 @@ namespace UI_ContentBrowser {
                 size_t extPos = fileName.rfind('.');
                 std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
-                // Load the model data
+
                 M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
                 if (!modelData.geometry.vertices.empty())
                 {
@@ -1626,7 +1627,7 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Export FBX dialog
+
         if (ImGuiFileDialog::Instance()->Display("ExportFBXDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
@@ -1637,7 +1638,7 @@ namespace UI_ContentBrowser {
                 size_t extPos = fileName.rfind('.');
                 std::string exportName = (extPos != std::string::npos) ? fileName.substr(0, extPos) : fileName;
 
-                // Load the model data
+
                 M3ModelData modelData = M3Loader::LoadFromFile(sExportArchive, sExportFileEntry);
                 if (!modelData.geometry.vertices.empty())
                 {
@@ -1899,7 +1900,33 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Show export result notification
+        if (ImGuiFileDialog::Instance()->Display("ExportAudioDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && !sAudioExportData.empty())
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                Audio::AudioManager::Get().Initialize();
+
+                bool success = Audio::AudioExport::ExportWEMToWAV(sAudioExportData.data(), sAudioExportData.size(), filePath);
+
+                if (success)
+                {
+                    sNotificationSuccess = true;
+                    sNotificationMessage = "WAV exported successfully!";
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = Audio::AudioExport::GetLastError();
+                }
+                sNotificationTimer = 3.0f;
+                sAudioExportData.clear();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+
         if (sShowExportResult)
         {
             M3Export::ExportResult result;
@@ -1913,7 +1940,7 @@ namespace UI_ContentBrowser {
             sShowExportResult = false;
         }
 
-        // Draw notification
+
         if (sNotificationTimer > 0.0f)
         {
             sNotificationTimer -= ImGui::GetIO().DeltaTime;
@@ -1942,7 +1969,7 @@ namespace UI_ContentBrowser {
             ImGui::PopStyleVar(2);
         }
 
-        // Show export progress
+
         if (sExportInProgress.load())
         {
             ImGuiViewport* vp = ImGui::GetMainViewport();

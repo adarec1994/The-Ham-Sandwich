@@ -12,6 +12,7 @@
 
 #include "splashscreen.h"
 #include "../tex/tex.h"
+#include "../Audio/AudioPlayerWidget.h"
 
 #include <imgui.h>
 #include <ImGuiFileDialog.h>
@@ -271,6 +272,7 @@ void RenderUI(AppState& state)
         Tex::RenderTexPreviewWindow(*state.texPreview);
 
     UI_Tables::Draw(state);
+    Audio::AudioPlayerWidget::Get().Render();
 
     RenderDumpFolderDialog(state);
     RenderExtractDialog(state);

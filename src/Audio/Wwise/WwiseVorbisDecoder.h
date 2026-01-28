@@ -5,74 +5,45 @@
 
 namespace Audio {
 
-// Matches vgmstream's wwise_setup_t
-enum class WwiseSetupType {
-    HeaderTriad,        // WWV_HEADER_TRIAD - v34
-    FullSetup,          // WWV_FULL_SETUP - v38
-    InlineCodebooks,    // WWV_INLINE_CODEBOOKS - v44
-    ExternalCodebooks,  // WWV_EXTERNAL_CODEBOOKS - v48/v52/v53/v56
-    AoTuV603Codebooks   // WWV_AOTUV603_CODEBOOKS - v62+
-};
+    bool WwiseInitEmbedded();
+    bool WwiseInit(const std::string& codebooksPath, const std::string& logPath = "");
+    void WwiseShutdown();
 
-// Matches vgmstream's wwise_header_t
-enum class WwiseHeaderType {
-    Type8,  // 4+4 bytes (size + granule) - v34
-    Type6,  // 2+4 bytes - v38/v44/v48/v52
-    Type2   // 2 bytes (size only) - v53+
-};
+    class WwiseVorbisDecoder {
+    public:
+        bool ParseWEM(const uint8_t* data, size_t size);
+        bool ConvertToOgg(std::vector<uint8_t>& outOgg);
 
-// Matches vgmstream's wwise_packet_t
-enum class WwisePacketType {
-    Standard,   // Packets are unmodified vorbis
-    Modified    // Packets have window bits stripped
-};
+        uint32_t GetChannels() const { return m_channels; }
+        uint32_t GetSampleRate() const { return m_sampleRate; }
+        uint32_t GetSampleCount() const { return m_sampleCount; }
+        const std::string& GetLastError() const { return m_lastError; }
 
-struct WwiseConfig {
-    int channels = 0;
-    int sampleRate = 0;
-    int blocksize0Exp = 8;
-    int blocksize1Exp = 11;
-    uint32_t dataOffset = 0;
-    uint32_t dataSize = 0;
-    uint32_t setupOffset = 0;
-    uint32_t audioOffset = 0;
-    uint32_t totalSamples = 0;
-    bool bigEndian = false;
-    WwiseSetupType setupType = WwiseSetupType::AoTuV603Codebooks;
-    WwiseHeaderType headerType = WwiseHeaderType::Type2;
-    WwisePacketType packetType = WwisePacketType::Modified;
-};
+    private:
+        const uint8_t* m_data = nullptr;
+        size_t m_size = 0;
+        bool m_littleEndian = true;
+        std::string m_lastError;
 
-class WwiseVorbisDecoder {
-public:
-    bool ParseWEM(const uint8_t* data, size_t size);
-    bool ConvertToOgg(std::vector<uint8_t>& outOgg);
+        long m_fmtOffset = -1, m_fmtSize = -1;
+        long m_vorbOffset = -1, m_vorbSize = -1;
+        long m_dataOffset = -1, m_dataSize = -1;
 
-    int GetSampleRate() const { return m_config.sampleRate; }
-    int GetChannels() const { return m_config.channels; }
-    uint32_t GetTotalSamples() const { return m_config.totalSamples; }
-    const std::string& GetLastError() const { return m_lastError; }
-    const WwiseConfig& GetConfig() const { return m_config; }
+        uint16_t m_channels = 0;
+        uint32_t m_sampleRate = 0;
+        uint32_t m_avgBytesPerSec = 0;
 
-private:
-    bool ParseFmtChunk(const uint8_t* data, size_t size);
+        uint32_t m_sampleCount = 0;
+        uint32_t m_setupPacketOffset = 0;
+        uint32_t m_firstAudioPacketOffset = 0;
+        uint8_t m_blocksize0Pow = 0;
+        uint8_t m_blocksize1Pow = 0;
 
-    std::vector<uint8_t> BuildIdentificationHeader();
-    std::vector<uint8_t> BuildCommentHeader();
-    std::vector<uint8_t> BuildSetupHeader();
+        bool m_noGranule = false;
+        bool m_modPackets = false;
 
-    size_t GetPacketHeader(size_t offset, uint16_t& packetSize, int32_t& granule);
-    std::vector<uint8_t> RebuildAudioPacket(size_t offset, size_t dataEnd, bool& hasNext, uint8_t& nextFirstByte);
+        std::vector<bool> m_modeBlockflag;
+        int m_modeBits = 0;
+    };
 
-    const uint8_t* m_data = nullptr;
-    size_t m_size = 0;
-    std::string m_lastError;
-    WwiseConfig m_config;
-
-    // Mode info for packet reconstruction
-    std::vector<bool> m_modeBlockflag;
-    int m_modeBits = 0;
-    bool m_prevBlockflag = false;
-};
-
-} // namespace Audio
+}
