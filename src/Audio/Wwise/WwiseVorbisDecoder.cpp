@@ -68,6 +68,13 @@ public:
         }
     }
     
+    // Copy raw bytes directly (must be byte-aligned!)
+    void WriteBytes(const uint8_t* data, size_t size) {
+        FlushToByte();
+        m_buffer.insert(m_buffer.end(), data, data + size);
+        m_bitPos = m_buffer.size() * 8;
+    }
+
     void FlushToByte() {
         if (m_bitPos % 8 != 0) {
             m_bitPos = ((m_bitPos + 7) / 8) * 8;
@@ -78,11 +85,11 @@ public:
             m_buffer.push_back(0);
         }
     }
-    
+
     const std::vector<uint8_t>& Data() const { return m_buffer; }
     std::vector<uint8_t>& Data() { return m_buffer; }
     size_t BitPosition() const { return m_bitPos; }
-    
+
 private:
     std::vector<uint8_t> m_buffer;
     size_t m_bitPos;
@@ -101,7 +108,7 @@ static unsigned int book_maptype1_quantvals(unsigned int entries, unsigned int d
     if (dimensions == 0) return 0;
     int bits = ilog(entries);
     int vals = entries >> ((bits - 1) * (dimensions - 1) / dimensions);
-    
+
     while (1) {
         unsigned long acc = 1, acc1 = 1;
         for (unsigned int i = 0; i < dimensions; i++) {
@@ -121,24 +128,24 @@ static unsigned int book_maptype1_quantvals(unsigned int entries, unsigned int d
 static bool RebuildCodebook(BitReader& iw, BitWriter& ow) {
     // Write "VCB" sync pattern (0x564342 in LE = "BCV")
     ow.Write(0x564342, 24);
-    
+
     // Dimensions: 4 bits in Wwise -> 16 bits in Vorbis
     uint32_t dimensions = iw.Read(4);
     ow.Write(dimensions, 16);
-    
+
     // Entries: 14 bits in Wwise -> 24 bits in Vorbis
     uint32_t entries = iw.Read(14);
     ow.Write(entries, 24);
-    
+
     // Ordered flag
     uint32_t ordered = iw.Read(1);
     ow.Write(ordered, 1);
-    
+
     if (ordered) {
         // Ordered codebook
         uint32_t initialLength = iw.Read(5);
         ow.Write(initialLength, 5);
-        
+
         uint32_t currentEntry = 0;
         while (currentEntry < entries) {
             int numberBits = ilog(entries - currentEntry);
@@ -155,11 +162,11 @@ static bool RebuildCodebook(BitReader& iw, BitWriter& ow) {
         uint32_t codewordLengthLength = iw.Read(3);
         uint32_t sparse = iw.Read(1);
         ow.Write(sparse, 1);
-        
+
         if (codewordLengthLength == 0 || codewordLengthLength > 5) {
             return false; // Invalid
         }
-        
+
         for (uint32_t i = 0; i < entries; i++) {
             bool presentBool = true;
             if (sparse) {
@@ -167,18 +174,18 @@ static bool RebuildCodebook(BitReader& iw, BitWriter& ow) {
                 ow.Write(present, 1);
                 presentBool = (present != 0);
             }
-            
+
             if (presentBool) {
                 uint32_t codewordLength = iw.Read(codewordLengthLength);
                 ow.Write(codewordLength, 5); // Wwise uses variable bits, Vorbis uses 5
             }
         }
     }
-    
+
     // Lookup type: 1 bit in Wwise -> 4 bits in Vorbis
     uint32_t lookupType = iw.Read(1);
     ow.Write(lookupType, 4);
-    
+
     if (lookupType == 0) {
         // No lookup table
     }
@@ -192,7 +199,7 @@ static bool RebuildCodebook(BitReader& iw, BitWriter& ow) {
         ow.Write(valueLength, 4);
         uint32_t sequenceFlag = iw.Read(1);
         ow.Write(sequenceFlag, 1);
-        
+
         uint32_t quantvals = book_maptype1_quantvals(entries, dimensions);
         for (uint32_t i = 0; i < quantvals; i++) {
             uint32_t val = iw.Read(valueLength + 1);
@@ -202,23 +209,23 @@ static bool RebuildCodebook(BitReader& iw, BitWriter& ow) {
     else {
         return false; // Invalid lookup type
     }
-    
+
     return true;
 }
 
 //=============================================================================
-// Get codebook by ID and rebuild to Vorbis format
+// Get codebook by ID and rebuild from Wwise format to Vorbis format
 //=============================================================================
 static bool GetRebuiltCodebook(uint32_t codebookId, bool useAoTuV, BitWriter& ow) {
     // Find codebook in list
     const wvc_info* list = useAoTuV ? wvc_list_aotuv603 : wvc_list_standard;
-    int listSize = useAoTuV ? 
+    int listSize = useAoTuV ?
         (sizeof(wvc_list_aotuv603) / sizeof(wvc_info)) :
         (sizeof(wvc_list_standard) / sizeof(wvc_info));
-    
+
     const uint8_t* cbData = nullptr;
     size_t cbSize = 0;
-    
+
     for (int i = 0; i < listSize; i++) {
         if (list[i].id == codebookId) {
             cbData = list[i].codebook;
@@ -226,12 +233,12 @@ static bool GetRebuiltCodebook(uint32_t codebookId, bool useAoTuV, BitWriter& ow
             break;
         }
     }
-    
+
     if (!cbData || cbSize == 0) {
-        return false; // Codebook not found
+        return false;
     }
-    
-    // Rebuild from Wwise format to Vorbis format
+
+    // Rebuild from Wwise packed format to standard Vorbis format
     BitReader iw(cbData, cbSize);
     return RebuildCodebook(iw, ow);
 }
@@ -274,7 +281,7 @@ static uint32_t OggCRC32(const uint8_t* data, size_t size) {
         0x1b7a8dd9,0x1fbb906e,0x12f8b6b7,0x1639ab00,0x087efb05,0x0cbfe6b2,0x01fcc06b,0x053ddddc,
         0x3d726a61,0x39b377d6,0x34f0510f,0x30314cb8,0x2e761cbd,0x2ab7010a,0x27f427d3,0x23353a64
     };
-    
+
     uint32_t crc = 0;
     for (size_t i = 0; i < size; i++) {
         crc = (crc << 8) ^ crc_lookup[((crc >> 24) & 0xFF) ^ data[i]];
@@ -303,11 +310,11 @@ bool WwiseVorbisDecoder::ParseWEM(const uint8_t* data, size_t size) {
     // Parse chunks
     size_t offset = 12;
     bool foundFmt = false, foundData = false;
-    
+
     while (offset + 8 <= size) {
         uint32_t chunkId = ReadU32BE(data + offset);
         uint32_t chunkSize = ReadU32LE(data + offset + 4);
-        
+
         if (chunkId == 0x666D7420) { // "fmt "
             if (!ParseFmtChunk(data + offset + 8, chunkSize)) return false;
             foundFmt = true;
@@ -317,7 +324,7 @@ bool WwiseVorbisDecoder::ParseWEM(const uint8_t* data, size_t size) {
             m_config.dataSize = chunkSize;
             foundData = true;
         }
-        
+
         offset += 8 + chunkSize;
         if (chunkSize & 1) offset++; // Pad to even
     }
@@ -344,32 +351,32 @@ bool WwiseVorbisDecoder::ParseFmtChunk(const uint8_t* data, size_t size) {
 
     m_config.channels = ReadU16LE(data + 2);
     m_config.sampleRate = ReadU32LE(data + 4);
-    
+
     uint16_t cbSize = ReadU16LE(data + 16);
-    
+
     if (cbSize >= 6 && size >= 24) {
         const uint8_t* extra = data + 18;
-        
+
         // Detect setup type from extra[2]
         if (cbSize >= 3) {
             uint8_t setupIndicator = extra[2];
-            m_config.setupType = (setupIndicator == 3) ? 
+            m_config.setupType = (setupIndicator == 3) ?
                 WwiseSetupType::AoTuV603Codebooks : WwiseSetupType::ExternalCodebooks;
         }
-        
+
         // Total samples
         if (cbSize >= 10) {
             m_config.totalSamples = ReadU32LE(extra + 6);
         }
-        
+
         // Blocksizes near end of extra data
         if (cbSize >= 4) {
             // Last 4 bytes of extra typically contain blocksize info
             m_config.blocksize0Exp = extra[cbSize - 4];
             m_config.blocksize1Exp = extra[cbSize - 3];
-            
+
             // Validate - typical values are 8-13
-            if (m_config.blocksize0Exp < 6 || m_config.blocksize0Exp > 13) 
+            if (m_config.blocksize0Exp < 6 || m_config.blocksize0Exp > 13)
                 m_config.blocksize0Exp = 8;
             if (m_config.blocksize1Exp < 6 || m_config.blocksize1Exp > 13)
                 m_config.blocksize1Exp = 11;
@@ -388,7 +395,7 @@ bool WwiseVorbisDecoder::ParseFmtChunk(const uint8_t* data, size_t size) {
 //=============================================================================
 std::vector<uint8_t> WwiseVorbisDecoder::BuildIdentificationHeader() {
     std::vector<uint8_t> h(30);
-    
+
     h[0] = 0x01;  // Packet type
     memcpy(&h[1], "vorbis", 6);
     // Version = 0 (bytes 7-10)
@@ -400,7 +407,7 @@ std::vector<uint8_t> WwiseVorbisDecoder::BuildIdentificationHeader() {
     // Bitrates = 0 (bytes 16-27)
     h[28] = (m_config.blocksize0Exp) | (m_config.blocksize1Exp << 4);
     h[29] = 1;  // Framing flag
-    
+
     return h;
 }
 
@@ -409,7 +416,7 @@ std::vector<uint8_t> WwiseVorbisDecoder::BuildCommentHeader() {
     h.push_back(0x03);  // Packet type
     const char* id = "vorbis";
     h.insert(h.end(), id, id + 6);
-    
+
     // Vendor string
     const char* vendor = "Converted from Wwise";
     uint32_t vendorLen = strlen(vendor);
@@ -418,11 +425,11 @@ std::vector<uint8_t> WwiseVorbisDecoder::BuildCommentHeader() {
     h.push_back((vendorLen >> 16) & 0xFF);
     h.push_back((vendorLen >> 24) & 0xFF);
     h.insert(h.end(), vendor, vendor + vendorLen);
-    
+
     // No comments
     h.push_back(0); h.push_back(0); h.push_back(0); h.push_back(0);
     h.push_back(1);  // Framing flag
-    
+
     return h;
 }
 
@@ -431,67 +438,70 @@ std::vector<uint8_t> WwiseVorbisDecoder::BuildSetupHeader() {
     uint16_t packetSize = 0;
     int32_t granule = 0;
     size_t headerSize = GetPacketHeader(m_config.dataOffset, packetSize, granule);
-    
+
     if (headerSize == 0 || m_config.dataOffset + headerSize + packetSize > m_size) {
         m_lastError = "Invalid setup packet header";
         return {};
     }
-    
+
     const uint8_t* setupData = m_data + m_config.dataOffset + headerSize;
-    
+
     BitReader iw(setupData, packetSize);
     BitWriter ow;
-    
+
     // Write Vorbis setup header prefix
     ow.Write(0x05, 8);  // Packet type
     const char* vorbisId = "vorbis";
     for (int i = 0; i < 6; i++) ow.Write(vorbisId[i], 8);
-    
+
     // Codebook count
     uint32_t codebookCountMinus1 = iw.Read(8);
     ow.Write(codebookCountMinus1, 8);
     int codebookCount = codebookCountMinus1 + 1;
-    
+
     // Process codebooks
-    bool useAoTuV = (m_config.setupType == WwiseSetupType::AoTuV603Codebooks);
-    
+    // Bit 9 of the 10-bit value is a flag: 0=aoTuV603, 1=standard
     for (int i = 0; i < codebookCount; i++) {
         uint32_t raw10 = iw.Read(10);
-        uint32_t codebookId = raw10 & 0x1FF;
-        
+        uint32_t codebookId = raw10 & 0x1FF;  // Lower 9 bits = ID
+        bool useStandard = (raw10 >> 9) & 1;   // Bit 9 = list selector
+        bool useAoTuV = !useStandard;
+
         if (!GetRebuiltCodebook(codebookId, useAoTuV, ow)) {
-            m_lastError = "Failed to rebuild codebook ID " + std::to_string(codebookId);
+            m_lastError = "Failed to rebuild codebook ID " + std::to_string(codebookId) +
+                          (useStandard ? " (standard)" : " (aoTuV)");
             return {};
         }
     }
-    
+
     // Time domain transforms (always 1 dummy)
     ow.Write(0, 6);   // time_count - 1
     ow.Write(0, 16);  // dummy value
-    
+
     // Floors
     uint32_t floorCountMinus1 = iw.Read(6);
     ow.Write(floorCountMinus1, 6);
-    
+
     for (uint32_t i = 0; i <= floorCountMinus1; i++) {
         ow.Write(1, 16);  // Floor type 1
-        
+
         uint32_t partitions = iw.Read(5);
         ow.Write(partitions, 5);
-        
+
         uint32_t partitionClassList[32] = {0};
-        uint32_t maxClass = 0;
-        
+        int maxClass = -1;  // -1 means no classes
+
         for (uint32_t j = 0; j < partitions; j++) {
             uint32_t partClass = iw.Read(4);
             ow.Write(partClass, 4);
             partitionClassList[j] = partClass;
-            if (partClass > maxClass) maxClass = partClass;
+            if ((int)partClass > maxClass) maxClass = (int)partClass;
         }
-        
+
         uint32_t classDimensions[17] = {0};
-        
-        for (uint32_t j = 0; j <= maxClass; j++) {
+
+        // Only read class configs if we have partitions
+        for (int j = 0; j <= maxClass; j++) {
             uint32_t dimMinus1 = iw.Read(3);
             ow.Write(dimMinus1, 3);
             classDimensions[j] = dimMinus1 + 1;

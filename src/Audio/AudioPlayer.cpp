@@ -1,6 +1,6 @@
 #include "AudioPlayer.h"
 #include "wwise/WwiseVorbisDecoder.h"
-#include "wwise/Wwisecodebooks.h"
+#include "wwise/WwiseCodebooks.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -75,7 +75,7 @@ bool AudioPlayer::Initialize()
 
     for (const auto& path : codebookPaths)
     {
-        if (Audio::WwiseCodebooks::Get().LoadFromFile(path))
+        if (WwiseCodebooks::Get().LoadFromFile(path))
             break;
     }
 
@@ -311,15 +311,39 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size)
             return false;
         }
 
+        // Always dump OGG for debugging
+        FILE* dbgFile = fopen("debug_output.ogg", "wb");
+        if (dbgFile) { fwrite(oggData.data(), 1, oggData.size(), dbgFile); fclose(dbgFile); }
+
         int decChannels = 0, decSampleRate = 0;
         short* output = nullptr;
-        int samples = stb_vorbis_decode_memory(
-            oggData.data(), (int)oggData.size(),
-            &decChannels, &decSampleRate, &output);
+        int stbError = 0;
+        stb_vorbis* vorbis = stb_vorbis_open_memory(oggData.data(), (int)oggData.size(), &stbError, nullptr);
 
-        if (samples <= 0 || !output)
+        if (!vorbis)
         {
-            m_lastError = "Vorbis decode failed";
+            const char* errNames[] = {"none","need_more_data","invalid_api_mixing","outofmem","feature_not_supported",
+                "too_many_channels","file_open_failure","seek_without_length","unexpected_eof","seek_invalid",
+                "invalid_setup","invalid_stream","missing_capture_pattern","invalid_stream_structure_version",
+                "continued_packet_flag_invalid","incorrect_stream_serial","invalid_first_page","bad_packet_type",
+                "cant_find_last_page","seek_failed","ogg_skeleton_not_supported"};
+            const char* errName = (stbError >= 0 && stbError <= 20) ? errNames[stbError] : "unknown";
+            m_lastError = "Vorbis decode failed: " + std::string(errName) + " (code " + std::to_string(stbError) + "), OGG size: " + std::to_string(oggData.size());
+            return false;
+        }
+
+        stb_vorbis_info info = stb_vorbis_get_info(vorbis);
+        decChannels = info.channels;
+        decSampleRate = info.sample_rate;
+
+        int totalSamples = stb_vorbis_stream_length_in_samples(vorbis);
+        std::vector<short> pcmData(totalSamples * decChannels);
+        int decoded = stb_vorbis_get_samples_short_interleaved(vorbis, decChannels, pcmData.data(), (int)pcmData.size());
+        stb_vorbis_close(vorbis);
+
+        if (decoded <= 0)
+        {
+            m_lastError = "Vorbis decode failed: no samples";
             return false;
         }
 
@@ -328,11 +352,10 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size)
         m_format.sampleRate = decSampleRate;
         m_format.bitsPerSample = 16;
         m_format.blockAlign = decChannels * 2;
-        m_format.totalSamples = samples;
+        m_format.totalSamples = decoded;
 
-        m_audioData.resize(samples * decChannels * 2);
-        memcpy(m_audioData.data(), output, m_audioData.size());
-        free(output);
+        m_audioData.resize(decoded * decChannels * 2);
+        memcpy(m_audioData.data(), pcmData.data(), m_audioData.size());
     }
     else
     {
