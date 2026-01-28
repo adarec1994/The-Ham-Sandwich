@@ -153,10 +153,11 @@ set(HAM_SANDWICH_SOURCES
         src/Audio/BNKReader.h
         src/Audio/WEMExtractor.cpp
         src/Audio/WEMExtractor.h
-        src/Audio/wwise/WwiseCodebooks.cpp
-        src/Audio/wwise/WwiseCodebooks.h
-        src/Audio/wwise/WwiseVorbisDecoder.cpp
-        src/Audio/wwise/WwiseVorbisDecoder.h
+        src/Audio/Wwise/WwiseCodeBooks.cpp
+        src/Audio/Wwise/WwiseCodeBooks.h
+        src/Audio/Wwise/WwiseVorbisDecoder.cpp
+        src/Audio/Wwise/WwiseVorbisDecoder.h
+        src/Audio/Wwise/WwiseCodebookData.h
 
         src/Database/Tbl.cpp
         src/Database/Tbl.h
@@ -332,7 +333,6 @@ set(HAM_SANDWICH_SOURCES
         src/Utils/ParallelAreaLoader.h
 
         ${ImGuiFileDialog_SOURCE_DIR}/ImGuiFileDialog.cpp
-        src/Audio/Wwise/WwiseCodebookData.h
 )
 
 if(WIN32)

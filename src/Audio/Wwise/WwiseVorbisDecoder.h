@@ -7,24 +7,24 @@ namespace Audio {
 
 // Matches vgmstream's wwise_setup_t
 enum class WwiseSetupType {
-    HeaderTriad,        // WWV_HEADER_TRIAD
-    FullSetup,          // WWV_FULL_SETUP
-    InlineCodebooks,    // WWV_INLINE_CODEBOOKS
-    ExternalCodebooks,  // WWV_EXTERNAL_CODEBOOKS
-    AoTuV603Codebooks   // WWV_AOTUV603_CODEBOOKS
+    HeaderTriad,        // WWV_HEADER_TRIAD - v34
+    FullSetup,          // WWV_FULL_SETUP - v38
+    InlineCodebooks,    // WWV_INLINE_CODEBOOKS - v44
+    ExternalCodebooks,  // WWV_EXTERNAL_CODEBOOKS - v48/v52/v53/v56
+    AoTuV603Codebooks   // WWV_AOTUV603_CODEBOOKS - v62+
 };
 
 // Matches vgmstream's wwise_header_t
 enum class WwiseHeaderType {
-    Type8,  // 4+4 bytes (size + granule)
-    Type6,  // 2+4 bytes
-    Type2   // 2 bytes (size only)
+    Type8,  // 4+4 bytes (size + granule) - v34
+    Type6,  // 2+4 bytes - v38/v44/v48/v52
+    Type2   // 2 bytes (size only) - v53+
 };
 
 // Matches vgmstream's wwise_packet_t
 enum class WwisePacketType {
-    Standard,
-    Modified
+    Standard,   // Packets are unmodified vorbis
+    Modified    // Packets have window bits stripped
 };
 
 struct WwiseConfig {
@@ -62,7 +62,7 @@ private:
     std::vector<uint8_t> BuildSetupHeader();
 
     size_t GetPacketHeader(size_t offset, uint16_t& packetSize, int32_t& granule);
-    std::vector<uint8_t> RebuildAudioPacket(size_t offset, size_t dataEnd);
+    std::vector<uint8_t> RebuildAudioPacket(size_t offset, size_t dataEnd, bool& hasNext, uint8_t& nextFirstByte);
 
     const uint8_t* m_data = nullptr;
     size_t m_size = 0;
