@@ -335,6 +335,8 @@ set(HAM_SANDWICH_SOURCES
         src/Audio/AudioPlayerWidget.h
         src/Audio/Wwise/WwiseCodebookData.cpp
         src/Audio/Wwise/WwiseCodebookData.h
+        src/UI/FileOps.cpp
+        src/UI/FileOps.h
 )
 
 if(WIN32)

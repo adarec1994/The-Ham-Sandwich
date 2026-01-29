@@ -1,5 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "UI_ContentBrowser.h"
+#include "FileOps.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 #include "UI_Tables.h"
@@ -40,703 +41,6 @@ extern ID3D11Device* gDevice;
 extern ID3D11DeviceContext* gContext;
 
 namespace UI_ContentBrowser {
-    static bool sIsOpen = true;
-    static bool sIsDocked = true;
-    static float sCurrentHeight = 300.0f;
-    static float sTargetHeight = 300.0f;
-    static float sAnimSpeed = 1500.0f;
-    static float sTreeWidth = 200.0f;
-    static ImTextureID sFolderIcon = 0;
-    static ImTextureID sContentBrowserIcon = 0;
-    static ImTextureID sTblIcon = 0;
-    static ImTextureID sAreaIcon = 0;
-    static ImTextureID sAudioIcon = 0;
-
-    static IFileSystemEntryPtr sSelectedFolder = nullptr;
-    static ArchivePtr sSelectedArchive = nullptr;
-    static std::string sSelectedPath;
-
-    static char sSearchFilter[256] = "";
-
-    struct FileInfo
-    {
-        std::string name;
-        std::string extension;
-        IFileSystemEntryPtr entry;
-        ArchivePtr archive;
-        bool isDirectory;
-        ImTextureID textureID = 0;
-        int texWidth = 0;
-        int texHeight = 0;
-        bool attemptedLoad = false;
-    };
-
-    static std::vector<FileInfo> sCachedFiles;
-    static bool sNeedsRefresh = true;
-    static int sSelectedFileIndex = -1;
-
-    static bool sRequestTreeSync = false;
-    static std::unordered_set<const void*> sNodesToExpand;
-
-    static std::vector<IFileSystemEntryPtr> sBreadcrumbPath;
-
-
-    static ArchivePtr sExportArchive = nullptr;
-    static std::shared_ptr<FileEntry> sExportFileEntry = nullptr;
-    static std::string sExportDefaultName;
-    static std::atomic<bool> sExportInProgress{false};
-    static std::atomic<int> sExportProgress{0};
-    static std::atomic<int> sExportTotal{100};
-    static std::string sExportStatus;
-    static std::mutex sExportMutex;
-    static M3Export::ExportResult sExportResult;
-    static bool sShowExportResult = false;
-    static float sNotificationTimer = 0.0f;
-    static std::string sNotificationMessage;
-    static bool sNotificationSuccess = true;
-
-    static std::vector<uint8_t> sAudioExportData;
-    static std::string sAudioExportName;
-
-    // BNK export state
-    static std::vector<uint8_t> sBnkExportData;
-    static std::string sBnkExportName;
-
-    // BNK virtual folder view state
-    struct BnkWemEntry {
-        uint32_t id;
-        uint32_t offset;
-        uint32_t size;
-        std::string displayName; // Name from SoundEvent.tbl or fallback to ID
-    };
-    static bool sBnkViewActive = false;
-    static std::vector<uint8_t> sBnkViewData;
-    static std::string sBnkViewName;
-    static ArchivePtr sBnkViewArchive;
-    static std::vector<BnkWemEntry> sBnkWemEntries;
-
-    // TBL export state
-    static std::vector<uint8_t> sTblExportData;
-    static std::string sTblExportName;
-
-    // WEM display name - just return numeric ID for now
-    static void LoadWemNameLookup(const std::vector<ArchivePtr>& archives)
-    {
-        // No-op
-        (void)archives;
-    }
-
-    static std::string GetWemDisplayName(uint32_t id)
-    {
-        return std::to_string(id);
-    }
-
-    struct ThumbnailRequest {
-        ArchivePtr archive;
-        std::shared_ptr<FileEntry> entry;
-        std::string extension;
-        int fileIndex;
-        uint64_t generation;
-    };
-
-    struct ThumbnailResult {
-        int width;
-        int height;
-        std::vector<uint8_t> data;
-        int fileIndex;
-        uint64_t generation;
-        bool success;
-    };
-
-    static std::deque<ThumbnailRequest> sLoadQueue;
-    static std::deque<ThumbnailResult> sResultQueue;
-    static std::mutex sQueueMutex;
-    static std::atomic<bool> sWorkerRunning{ false };
-    static std::thread sWorkerThread;
-    static uint64_t sCurrentGeneration = 0;
-    static std::condition_variable sQueueCV;
-
-    static bool BuildPathToNode(const IFileSystemEntryPtr& current, const IFileSystemEntryPtr& target, std::vector<IFileSystemEntryPtr>& outPath)
-    {
-        if (current.get() == target.get())
-        {
-            outPath.push_back(current);
-            return true;
-        }
-
-        if (!current->isDirectory()) return false;
-
-        for (const auto& child : current->getChildren())
-        {
-            if (child && child->isDirectory())
-            {
-                if (BuildPathToNode(child, target, outPath))
-                {
-                    outPath.insert(outPath.begin(), current);
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    static void ThumbnailWorker()
-    {
-        while (sWorkerRunning)
-        {
-            ThumbnailRequest req;
-            bool hasJob = false;
-
-            {
-                std::unique_lock<std::mutex> lock(sQueueMutex);
-                sQueueCV.wait(lock, [] { return !sLoadQueue.empty() || !sWorkerRunning; });
-
-                if (!sWorkerRunning) break;
-
-                if (!sLoadQueue.empty())
-                {
-                    req = sLoadQueue.front();
-                    sLoadQueue.pop_front();
-                    hasJob = true;
-                }
-            }
-
-            if (hasJob)
-            {
-                ThumbnailResult res;
-                res.fileIndex = req.fileIndex;
-                res.generation = req.generation;
-                res.success = false;
-
-                if (req.archive && req.entry)
-                {
-                    if (req.extension == ".area")
-                    {
-                        auto parsed = AreaFile::parseAreaFile(req.archive, req.entry);
-                        if (parsed.valid)
-                        {
-                            int w = 256;
-                            int h = 256;
-                            std::vector<uint8_t> pixels(w * h * 4, 0);
-
-                            float minH = parsed.minBounds.y;
-                            float maxH = parsed.maxHeight;
-                            float range = maxH - minH;
-                            if (range < 1.0f) range = 1.0f;
-
-                            for (int cz = 0; cz < 16; cz++)
-                            {
-                                for (int cx = 0; cx < 16; cx++)
-                                {
-                                    int chunkIdx = cz * 16 + cx;
-                                    if (chunkIdx >= (int)parsed.chunks.size()) continue;
-
-                                    const auto& chunk = parsed.chunks[chunkIdx];
-                                    if (!chunk.valid || chunk.vertices.empty()) continue;
-
-                                    for (int lz = 0; lz < 16; lz++)
-                                    {
-                                        for (int lx = 0; lx < 16; lx++)
-                                        {
-                                            int vIdx = lz * 17 + lx;
-                                            if (vIdx >= (int)chunk.vertices.size()) continue;
-
-                                            float height = chunk.vertices[vIdx].y;
-                                            float norm = (height - minH) / range;
-                                            uint8_t val = (uint8_t)(std::clamp(norm, 0.0f, 1.0f) * 255.0f);
-
-                                            int px = cx * 16 + lx;
-                                            int py = cz * 16 + lz;
-
-                                            int pIdx = (py * w + px) * 4;
-
-                                            pixels[pIdx + 0] = val;
-                                            pixels[pIdx + 1] = val;
-                                            pixels[pIdx + 2] = val;
-                                            pixels[pIdx + 3] = 255;
-                                        }
-                                    }
-                                }
-                            }
-                            res.width = w;
-                            res.height = h;
-                            res.data = std::move(pixels);
-                            res.success = true;
-                        }
-                    }
-                    else
-                    {
-                        std::vector<uint8_t> bytes;
-                        if (req.archive->getFileData(req.entry, bytes) && !bytes.empty())
-                        {
-                            Tex::File tf;
-                            if (tf.readFromMemory(bytes.data(), bytes.size()))
-                            {
-                                Tex::ImageRGBA img;
-                                if (tf.decodeLargestMipToRGBA(img))
-                                {
-                                    res.width = img.width;
-                                    res.height = img.height;
-                                    res.data = std::move(img.rgba);
-                                    res.success = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(sQueueMutex);
-                    sResultQueue.push_back(std::move(res));
-                }
-            }
-        }
-    }
-
-    static void EnsureWorkerStarted()
-    {
-        if (!sWorkerRunning)
-        {
-            sWorkerRunning = true;
-            sWorkerThread = std::thread(ThumbnailWorker);
-            sWorkerThread.detach();
-        }
-    }
-
-    static ID3D11ShaderResourceView* CreateTextureFromRGBA(const uint8_t* data, int width, int height)
-    {
-        if (!gDevice || !data || width <= 0 || height <= 0) return nullptr;
-
-        D3D11_TEXTURE2D_DESC texDesc = {};
-        texDesc.Width = width;
-        texDesc.Height = height;
-        texDesc.MipLevels = 1;
-        texDesc.ArraySize = 1;
-        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        texDesc.SampleDesc.Count = 1;
-        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
-        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        D3D11_SUBRESOURCE_DATA initData = {};
-        initData.pSysMem = data;
-        initData.SysMemPitch = width * 4;
-
-        ID3D11Texture2D* texture = nullptr;
-        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
-        if (FAILED(hr)) return nullptr;
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MostDetailedMip = 0;
-        srvDesc.Texture2D.MipLevels = 1;
-
-        ID3D11ShaderResourceView* srv = nullptr;
-        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &srv);
-        texture->Release();
-
-        if (FAILED(hr)) return nullptr;
-        return srv;
-    }
-
-    static void ProcessThumbnailResults()
-    {
-        std::lock_guard<std::mutex> lock(sQueueMutex);
-        while (!sResultQueue.empty())
-        {
-            auto res = sResultQueue.front();
-            sResultQueue.pop_front();
-
-            if (res.generation != sCurrentGeneration) continue;
-            if (res.fileIndex < 0 || res.fileIndex >= (int)sCachedFiles.size()) continue;
-
-            auto& file = sCachedFiles[res.fileIndex];
-            if (res.success && !file.textureID)
-            {
-                ID3D11ShaderResourceView* srv = CreateTextureFromRGBA(res.data.data(), res.width, res.height);
-                file.textureID = reinterpret_cast<ImTextureID>(srv);
-                file.texWidth = res.width;
-                file.texHeight = res.height;
-            }
-        }
-    }
-
-    static std::string GetExtension(const std::string& filename)
-    {
-        size_t dot = filename.rfind('.');
-        if (dot != std::string::npos)
-            return ToLowerCopy(filename.substr(dot));
-        return "";
-    }
-
-    static bool FindPathToNode(const IFileSystemEntryPtr& current, const IFileSystemEntryPtr& target)
-    {
-        if (current.get() == target.get())
-        {
-            sNodesToExpand.insert(current.get());
-            return true;
-        }
-        if (!current->isDirectory()) return false;
-
-        for (const auto& child : current->getChildren())
-        {
-            if (child && child->isDirectory())
-            {
-                if (FindPathToNode(child, target))
-                {
-                    sNodesToExpand.insert(current.get());
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    static void CollectRecursive(const ArchivePtr& archive, const IFileSystemEntryPtr& folder, const std::string& filterLower, std::vector<FileInfo>& outList)
-    {
-        if (!folder || !folder->isDirectory()) return;
-
-        for (const auto& child : folder->getChildren())
-        {
-            if (!child) continue;
-
-            if (child->isDirectory())
-            {
-                CollectRecursive(archive, child, filterLower, outList);
-            }
-            else
-            {
-                std::string name = wstring_to_utf8(child->getEntryName());
-
-                auto searchIt = std::search(
-                    name.begin(), name.end(),
-                    filterLower.begin(), filterLower.end(),
-                    [](char c1, char c2) {
-                        return std::tolower(static_cast<unsigned char>(c1)) == c2;
-                    }
-                );
-
-                if (searchIt != name.end())
-                {
-                    FileInfo info;
-                    info.name = std::move(name);
-                    info.extension = GetExtension(info.name);
-                    info.entry = child;
-                    info.archive = archive;
-                    info.isDirectory = false;
-                    outList.push_back(std::move(info));
-                }
-            }
-        }
-    }
-
-    static void RefreshFileList(AppState& state)
-    {
-        {
-            std::lock_guard<std::mutex> lock(sQueueMutex);
-            sCurrentGeneration++;
-            sLoadQueue.clear();
-            sResultQueue.clear();
-        }
-
-        for (const auto& file : sCachedFiles)
-        {
-            if (file.textureID)
-            {
-                ID3D11ShaderResourceView* srv = reinterpret_cast<ID3D11ShaderResourceView*>(file.textureID);
-                if (srv) srv->Release();
-            }
-        }
-        sCachedFiles.clear();
-
-        sBreadcrumbPath.clear();
-        if (sSelectedFolder && sSelectedArchive)
-        {
-            auto root = sSelectedArchive->getRoot();
-            if (root)
-            {
-                BuildPathToNode(root, sSelectedFolder, sBreadcrumbPath);
-            }
-        }
-
-        bool isFiltering = (sSearchFilter[0] != '\0');
-        std::string filterLower;
-        if (isFiltering) {
-            filterLower = sSearchFilter;
-            std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
-        }
-
-        // BNK virtual folder view
-        if (sBnkViewActive && !sBnkWemEntries.empty())
-        {
-            for (const auto& wemEntry : sBnkWemEntries)
-            {
-                FileInfo info;
-                info.name = wemEntry.displayName + ".wem";
-                info.extension = ".wem";
-                info.entry = nullptr; // Virtual entry
-                info.archive = sBnkViewArchive;
-                info.isDirectory = false;
-
-                if (isFiltering) {
-                    std::string nameLower = info.name;
-                    std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
-                    if (nameLower.find(filterLower) == std::string::npos) continue;
-                }
-
-                sCachedFiles.push_back(info);
-            }
-        }
-        else if (!sSelectedFolder)
-        {
-            for (const auto& archive : state.archives)
-            {
-                if (!archive) continue;
-                auto root = archive->getRoot();
-                if (!root) continue;
-
-                if (isFiltering)
-                {
-                    CollectRecursive(archive, root, filterLower, sCachedFiles);
-                }
-                else
-                {
-                    FileInfo info;
-                    std::filesystem::path p(archive->getPath());
-                    info.name = p.filename().string();
-                    info.extension = "";
-                    info.entry = root;
-                    info.archive = archive;
-                    info.isDirectory = true;
-                    sCachedFiles.push_back(info);
-                }
-            }
-        }
-        else if (sSelectedArchive)
-        {
-            if (isFiltering)
-            {
-                CollectRecursive(sSelectedArchive, sSelectedFolder, filterLower, sCachedFiles);
-            }
-            else
-            {
-                for (const auto& child : sSelectedFolder->getChildren())
-                {
-                    if (!child) continue;
-
-                    FileInfo info;
-                    info.name = wstring_to_utf8(child->getEntryName());
-                    info.extension = GetExtension(info.name);
-                    info.entry = child;
-                    info.archive = sSelectedArchive;
-                    info.isDirectory = child->isDirectory();
-
-                    sCachedFiles.push_back(info);
-                }
-            }
-        }
-
-        std::sort(sCachedFiles.begin(), sCachedFiles.end(), [](const FileInfo& a, const FileInfo& b) {
-            if (a.isDirectory != b.isDirectory)
-                return a.isDirectory > b.isDirectory;
-            return a.name < b.name;
-        });
-
-        sNeedsRefresh = false;
-    }
-
-    static void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
-    {
-        if (!arc || !fileEntry) return;
-
-        ResetAreaReferencePosition();
-
-        gLoadedAreas.clear();
-        gSelectedChunk = nullptr;
-        gSelectedChunkIndex = -1;
-        gSelectedAreaIndex = -1;
-        gSelectedAreaName.clear();
-        gLoadedModel = nullptr;
-
-        auto af = std::make_shared<AreaFile>(arc, fileEntry);
-        if (af->load())
-        {
-            gLoadedAreas.push_back(af);
-            state.currentArea = af;
-            SnapCameraToLoaded(state);
-
-            af->loadAllPropsAsync();
-            gShowProps = true;
-        }
-        else
-        {
-            state.currentArea.reset();
-        }
-    }
-
-    static void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
-    {
-        if (!arc || !fileEntry) return;
-
-        state.currentArea.reset();
-        state.m3Render = nullptr;
-        state.show_models_window = false;
-
-        gPendingModelArchive = arc;
-
-        std::string name = wstring_to_utf8(fileEntry->getEntryName());
-        StartLoadingModel(arc, fileEntry, name);
-    }
-
-    static void HandleFileOpen(AppState& state, const FileInfo& file)
-    {
-        if (file.isDirectory)
-        {
-            sSelectedFolder = file.entry;
-            sSelectedArchive = file.archive;
-            sSearchFilter[0] = '\0';
-
-            sRequestTreeSync = true;
-            sNeedsRefresh = true;
-            return;
-        }
-
-        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
-
-        // Allow virtual BNK WEM entries (file.entry is null for these)
-        if (!fileEntry && !(sBnkViewActive && file.extension == ".wem")) return;
-
-        if (file.extension == ".area")
-        {
-            LoadSingleArea(state, file.archive, fileEntry);
-        }
-        else if (file.extension == ".m3")
-        {
-            LoadSingleM3(state, file.archive, fileEntry);
-        }
-        else if (file.extension == ".tex")
-        {
-
-            if (file.textureID && file.texWidth > 0 && file.texHeight > 0)
-            {
-                Tex::OpenTexPreviewFromSRV(state,
-                    reinterpret_cast<ID3D11ShaderResourceView*>(file.textureID),
-                    file.texWidth, file.texHeight, "Texture Preview");
-            }
-            else
-            {
-
-                Tex::OpenTexPreviewFromEntry(state, file.archive, fileEntry);
-            }
-        }
-        else if (file.extension == ".tbl")
-        {
-            UI_Tables::OpenTblFile(state, file.archive, fileEntry);
-        }
-        else if (file.extension == ".wem")
-        {
-            std::vector<uint8_t> wemData;
-
-            if (fileEntry) {
-                // Regular WEM file
-                file.archive->getFileData(fileEntry, wemData);
-            } else if (sBnkViewActive && !sBnkViewData.empty()) {
-                // Virtual WEM from BNK
-                std::string baseName = file.name;
-                size_t dotPos = baseName.rfind('.');
-                if (dotPos != std::string::npos)
-                    baseName = baseName.substr(0, dotPos);
-
-                // Find entry by displayName
-                const BnkWemEntry* foundEntry = nullptr;
-                for (const auto& entry : sBnkWemEntries) {
-                    if (entry.displayName == baseName) {
-                        foundEntry = &entry;
-                        break;
-                    }
-                }
-
-                if (foundEntry) {
-                    // Find DATA section
-                    const uint8_t* data = sBnkViewData.data();
-                    size_t size = sBnkViewData.size();
-                    size_t pos = 0;
-                    const uint8_t* dataSection = nullptr;
-
-                    while (pos + 8 <= size) {
-                        char sectionId[5] = {0};
-                        memcpy(sectionId, data + pos, 4);
-                        uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
-
-                        if (memcmp(sectionId, "DATA", 4) == 0) {
-                            dataSection = data + pos + 8;
-                            break;
-                        }
-                        pos += 8 + sectionSize;
-                    }
-
-                    if (dataSection) {
-                        wemData.assign(dataSection + foundEntry->offset,
-                                       dataSection + foundEntry->offset + foundEntry->size);
-                    }
-                }
-            }
-
-            if (!wemData.empty())
-            {
-                Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
-            }
-        }
-        else if (file.extension == ".bnk")
-        {
-            // Parse BNK and enter virtual folder view
-            std::vector<uint8_t> bnkData;
-            if (file.archive->getFileData(fileEntry, bnkData) && !bnkData.empty())
-            {
-                // Try to load sound event lookup (non-blocking, failures are OK)
-                LoadWemNameLookup(state.archives);
-
-                sBnkWemEntries.clear();
-
-                const uint8_t* data = bnkData.data();
-                size_t size = bnkData.size();
-                size_t pos = 0;
-
-                const uint8_t* dataSection = nullptr;
-
-                while (pos + 8 <= size) {
-                    char sectionId[5] = {0};
-                    memcpy(sectionId, data + pos, 4);
-                    uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
-
-                    if (memcmp(sectionId, "DIDX", 4) == 0) {
-                        const uint8_t* didx = data + pos + 8;
-                        size_t numEntries = sectionSize / 12;
-                        for (size_t i = 0; i < numEntries; i++) {
-                            BnkWemEntry entry;
-                            entry.id = *(uint32_t*)(didx + i * 12);
-                            entry.offset = *(uint32_t*)(didx + i * 12 + 4);
-                            entry.size = *(uint32_t*)(didx + i * 12 + 8);
-                            entry.displayName = GetWemDisplayName(entry.id);
-                            sBnkWemEntries.push_back(entry);
-                        }
-                    } else if (memcmp(sectionId, "DATA", 4) == 0) {
-                        dataSection = data + pos + 8;
-                    }
-
-                    pos += 8 + sectionSize;
-                }
-
-                if (!sBnkWemEntries.empty() && dataSection) {
-                    sBnkViewActive = true;
-                    sBnkViewData = std::move(bnkData);
-                    sBnkViewName = file.name;
-                    sBnkViewArchive = file.archive;
-                    sNeedsRefresh = true;
-                }
-            }
-        }
-    }
 
     static void RenderTreeNode(AppState& state, const IFileSystemEntryPtr& entry, const ArchivePtr& archive, int depth = 0)
     {
@@ -1004,7 +308,6 @@ namespace UI_ContentBrowser {
                     }
                 }
 
-                // Show BNK name in breadcrumb when viewing BNK contents
                 if (sBnkViewActive)
                 {
                     ImGui::SameLine();
@@ -1308,15 +611,12 @@ namespace UI_ContentBrowser {
                                 if (dotPos != std::string::npos)
                                     baseName = baseName.substr(0, dotPos);
 
-                                // Helper lambda to get WEM data (handles both regular and BNK virtual entries)
                                 auto getWemData = [&](std::vector<uint8_t>& outData) -> bool {
                                     if (file.entry) {
-                                        // Regular WEM file
                                         auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                                         if (fe && file.archive->getFileData(fe, outData) && !outData.empty())
                                             return true;
                                     } else if (sBnkViewActive && !sBnkViewData.empty()) {
-                                        // Virtual WEM from BNK - find by displayName
                                         const BnkWemEntry* foundEntry = nullptr;
                                         for (const auto& entry : sBnkWemEntries) {
                                             if (entry.displayName == baseName) {
@@ -1327,7 +627,6 @@ namespace UI_ContentBrowser {
 
                                         if (!foundEntry) return false;
 
-                                        // Find DATA section offset
                                         const uint8_t* data = sBnkViewData.data();
                                         size_t size = sBnkViewData.size();
                                         size_t pos = 0;
@@ -1405,7 +704,6 @@ namespace UI_ContentBrowser {
                             ImGui::PopStyleVar(2);
                         }
 
-                        // BNK context menu
                         if (file.extension == ".bnk" && !file.isDirectory)
                         {
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
@@ -1423,7 +721,6 @@ namespace UI_ContentBrowser {
                                     auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                                     if (fe && file.archive->getFileData(fe, sBnkExportData) && !sBnkExportData.empty())
                                     {
-                                        // Load sound event lookup for naming files
                                         LoadWemNameLookup(state.archives);
 
                                         sBnkExportName = baseName;
@@ -1455,7 +752,6 @@ namespace UI_ContentBrowser {
                             ImGui::PopStyleVar(2);
                         }
 
-                        // TBL context menu
                         if (file.extension == ".tbl" && !file.isDirectory)
                         {
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
@@ -2222,7 +1518,6 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Extract WEM from BNK dialog
         if (ImGuiFileDialog::Instance()->Display("ExtractBnkWemRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && !sAudioExportData.empty())
@@ -2274,14 +1569,12 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // BNK extraction dialog (folder selection)
         if (ImGuiFileDialog::Instance()->Display("ExtractBnkDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && !sBnkExportData.empty())
             {
                 std::string folderPath = ImGuiFileDialog::Instance()->GetCurrentPath();
 
-                // Parse BNK and extract WEMs
                 int extractedCount = 0;
                 std::string errorMsg;
 
@@ -2289,8 +1582,7 @@ namespace UI_ContentBrowser {
                 size_t size = sBnkExportData.size();
                 size_t pos = 0;
 
-                // Find DIDX and DATA sections
-                std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> wemEntries; // id, offset, size
+                std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> wemEntries;
                 const uint8_t* dataSection = nullptr;
                 size_t dataSectionSize = 0;
 
@@ -2300,7 +1592,6 @@ namespace UI_ContentBrowser {
                     uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
 
                     if (memcmp(sectionId, "DIDX", 4) == 0) {
-                        // Data Index section - contains WEM IDs and offsets
                         const uint8_t* didx = data + pos + 8;
                         size_t numEntries = sectionSize / 12;
                         for (size_t i = 0; i < numEntries; i++) {
@@ -2320,7 +1611,6 @@ namespace UI_ContentBrowser {
                 if (dataSection && !wemEntries.empty()) {
                     for (const auto& [wemId, wemOffset, wemSize] : wemEntries) {
                         if (wemOffset + wemSize <= dataSectionSize) {
-                            // Get display name from lookup
                             std::string displayName = GetWemDisplayName(wemId);
                             std::string wemPath = folderPath + "/" + displayName + ".wem";
                             std::ofstream outFile(wemPath, std::ios::binary);
@@ -2345,7 +1635,6 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // BNK raw extraction dialog
         if (ImGuiFileDialog::Instance()->Display("ExtractBnkRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportFileEntry && sExportArchive)
@@ -2380,7 +1669,6 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // TBL CSV export dialog
         if (ImGuiFileDialog::Instance()->Display("ExportTblCsvDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && !sTblExportData.empty())
@@ -2393,7 +1681,6 @@ namespace UI_ContentBrowser {
                     std::wofstream out(filePath);
                     if (out.is_open())
                     {
-                        // Write header
                         const auto& cols = tblFile.getColumns();
                         for (size_t i = 0; i < cols.size(); ++i)
                         {
@@ -2402,7 +1689,6 @@ namespace UI_ContentBrowser {
                         }
                         out << std::endl;
 
-                        // Write data rows
                         for (uint32_t row = 0; row < tblFile.getRecordCount(); ++row)
                         {
                             for (size_t col = 0; col < cols.size(); ++col)
@@ -2424,7 +1710,6 @@ namespace UI_ContentBrowser {
                                 case Tbl::DataType::String:
                                 {
                                     std::wstring str = tblFile.getString(row, col);
-                                    // Escape quotes
                                     std::wstring escaped;
                                     for (wchar_t c : str)
                                     {
@@ -2462,7 +1747,6 @@ namespace UI_ContentBrowser {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // TBL raw extraction dialog
         if (ImGuiFileDialog::Instance()->Display("ExtractTblRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportFileEntry && sExportArchive)
@@ -2565,74 +1849,6 @@ namespace UI_ContentBrowser {
             }
             ImGui::End();
         }
-    }
-
-    static IFileSystemEntryPtr FindFolderByPath(const IFileSystemEntryPtr& root, const std::vector<std::string>& pathParts, size_t startIndex = 0)
-    {
-        if (!root || !root->isDirectory()) return nullptr;
-        if (startIndex >= pathParts.size()) return root;
-
-        const std::string& targetName = pathParts[startIndex];
-
-        for (const auto& child : root->getChildren())
-        {
-            if (!child || !child->isDirectory()) continue;
-
-            std::string childName = wstring_to_utf8(child->getEntryName());
-
-            bool match = (childName.size() == targetName.size());
-            if (match)
-            {
-                for (size_t i = 0; i < childName.size() && match; ++i)
-                {
-                    if (std::tolower(static_cast<unsigned char>(childName[i])) !=
-                        std::tolower(static_cast<unsigned char>(targetName[i])))
-                        match = false;
-                }
-            }
-
-            if (match)
-            {
-                if (startIndex + 1 >= pathParts.size())
-                    return child;
-                return FindFolderByPath(child, pathParts, startIndex + 1);
-            }
-        }
-        return nullptr;
-    }
-
-    static std::vector<std::string> SplitPath(const std::string& path)
-    {
-        std::vector<std::string> parts;
-        std::string current;
-
-        for (char c : path)
-        {
-            if (c == '/' || c == '\\')
-            {
-                if (!current.empty())
-                {
-                    parts.push_back(current);
-                    current.clear();
-                }
-            }
-            else
-            {
-                current += c;
-            }
-        }
-        if (!current.empty())
-            parts.push_back(current);
-
-        return parts;
-    }
-
-    static std::string ExtractFolderPath(const std::string& filePath)
-    {
-        size_t lastSlash = filePath.find_last_of("/\\");
-        if (lastSlash != std::string::npos)
-            return filePath.substr(0, lastSlash);
-        return "";
     }
 
     void NavigateToPath(AppState& state, const std::string& folderPath)

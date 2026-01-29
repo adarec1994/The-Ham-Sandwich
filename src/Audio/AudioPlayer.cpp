@@ -9,7 +9,26 @@
 #include <cstring>
 #include <algorithm>
 
-#pragma comment(lib, "xaudio2.lib")
+
+typedef HRESULT (WINAPI *PFN_XAudio2Create)(IXAudio2**, UINT32, XAUDIO2_PROCESSOR);
+static HMODULE g_xaudio2Module = nullptr;
+static PFN_XAudio2Create g_XAudio2Create = nullptr;
+
+static bool LoadXAudio2() {
+    if (g_XAudio2Create) return true;
+
+
+    const char* dllNames[] = { "XAudio2_9.dll", "XAudio2_8.dll", "XAudio2_7.dll" };
+    for (const char* dll : dllNames) {
+        g_xaudio2Module = LoadLibraryA(dll);
+        if (g_xaudio2Module) break;
+    }
+
+    if (!g_xaudio2Module) return false;
+
+    g_XAudio2Create = (PFN_XAudio2Create)GetProcAddress(g_xaudio2Module, "XAudio2Create");
+    return g_XAudio2Create != nullptr;
+}
 
 #define STB_VORBIS_NO_STDIO
 #define STB_VORBIS_IMPLEMENTATION
@@ -63,7 +82,10 @@ void AudioPlayer::Shutdown() {
 bool AudioPlayer::InitXAudio2() {
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) { m_lastError = "Failed to initialize COM"; return false; }
-    hr = XAudio2Create(&m_xaudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
+
+    if (!LoadXAudio2()) { m_lastError = "Failed to load XAudio2 DLL"; return false; }
+
+    hr = g_XAudio2Create(&m_xaudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
     if (FAILED(hr)) { m_lastError = "Failed to create XAudio2"; return false; }
     hr = m_xaudio2->CreateMasteringVoice(&m_masterVoice);
     if (FAILED(hr)) { m_lastError = "Failed to create mastering voice"; m_xaudio2->Release(); m_xaudio2 = nullptr; return false; }
@@ -181,7 +203,7 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
             return false;
         }
     } else if (formatTag == 0x0002 && bitsPerSample == 4) {
-        // Wwise ADPCM (format 0x0002 with 4-bit) - uses IMA ADPCM algorithm
+
         static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
         static const int IMA_StepTable[89] = {
             7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -209,8 +231,8 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
 
         if (blockAlign == 0 || channels == 0) { m_lastError = "Invalid Wwise ADPCM params"; return false; }
 
-        // Wwise ADPCM: block is split by channel, NOT interleaved
-        // For stereo: [Left header 4B][Left data][Right header 4B][Right data]
+
+
         size_t bytesPerChannel = blockAlign / channels;
         size_t numBlocks = audioSize / blockAlign;
 
@@ -225,15 +247,15 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
             for (int ch = 0; ch < channels; ch++) {
                 const uint8_t* chData = blockStart + ch * bytesPerChannel;
 
-                // 4-byte header: predictor (2), step index (1), reserved (1)
+
                 int predictor = (int16_t)(chData[0] | (chData[1] << 8));
                 int stepIndex = chData[2];
                 if (stepIndex > 88) stepIndex = 88;
 
-                // First sample is the predictor
+
                 channelSamples[ch].push_back((int16_t)predictor);
 
-                // Decode data bytes
+
                 size_t dataBytes = bytesPerChannel - 4;
                 for (size_t i = 0; i < dataBytes; i++) {
                     uint8_t byte = chData[4 + i];
@@ -242,7 +264,7 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
                 }
             }
 
-            // Interleave channels
+
             size_t samplesPerChannel = channelSamples[0].size();
             for (size_t s = 0; s < samplesPerChannel; s++) {
                 for (int ch = 0; ch < channels; ch++) {
@@ -314,7 +336,7 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
         m_audioData.resize(out.size() * 2);
         memcpy(m_audioData.data(), out.data(), m_audioData.size());
     } else if (formatTag == 0x0069 || formatTag == 0x0011) {
-        // Wwise IMA ADPCM
+
         static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
         static const int IMA_StepTable[89] = {
             7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -351,7 +373,7 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
 
             std::vector<int> predictor(channels), stepIndex(channels);
 
-            // Read headers (4 bytes per channel)
+
             for (int ch = 0; ch < channels; ch++) {
                 size_t headerOff = ch * 4;
                 predictor[ch] = (int16_t)(bd[headerOff] | (bd[headerOff + 1] << 8));
@@ -359,7 +381,7 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
                 if (stepIndex[ch] > 88) stepIndex[ch] = 88;
             }
 
-            // Output initial samples
+
             if (channels == 1) {
                 out.push_back((int16_t)predictor[0]);
             } else {
@@ -377,27 +399,27 @@ bool AudioPlayer::DecodeWEM(const uint8_t* data, size_t size) {
                     out.push_back(decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]));
                 }
             } else {
-                // Stereo: data comes in 4-byte chunks per channel, interleaved
-                // Decode 8 samples from each channel, then interleave output
+
+
                 size_t pos = 0;
                 while (pos + 8 <= dataSize) {
                     int16_t left[8], right[8];
 
-                    // Decode 4 bytes (8 samples) from left channel
+
                     for (int i = 0; i < 4; i++) {
                         uint8_t byte = data[pos + i];
                         left[i * 2] = decodeNibble(byte & 0x0F, predictor[0], stepIndex[0]);
                         left[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]);
                     }
 
-                    // Decode 4 bytes (8 samples) from right channel
+
                     for (int i = 0; i < 4; i++) {
                         uint8_t byte = data[pos + 4 + i];
                         right[i * 2] = decodeNibble(byte & 0x0F, predictor[1], stepIndex[1]);
                         right[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[1], stepIndex[1]);
                     }
 
-                    // Interleave L R L R
+
                     for (int i = 0; i < 8; i++) {
                         out.push_back(left[i]);
                         out.push_back(right[i]);
