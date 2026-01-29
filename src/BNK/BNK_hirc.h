@@ -26,6 +26,7 @@ struct SoundObject {
     uint32_t id;
     uint32_t sourceId;
     uint32_t fileId;
+    uint32_t parentId;
     uint8_t streamType;
 };
 
@@ -71,6 +72,7 @@ private:
 class WemNameResolver {
 public:
     bool loadSoundEventTable(const uint8_t* data, size_t size);
+    bool loadSoundEventCsv(const uint8_t* data, size_t size);
     bool loadEventsBnk(const uint8_t* data, size_t size);
     bool loadAudioBnk(const uint8_t* data, size_t size);
     void finalize();
