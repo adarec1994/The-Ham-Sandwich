@@ -12,7 +12,8 @@
 #include "../tex/tex.h"
 #include "../audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
-#include "../Export/AudioExport.h"
+#include "../export/AudioExport.h"
+#include "../Database/Tbl.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <ImGuiFileDialog.h>
@@ -21,6 +22,8 @@
 #include <string>
 #include <algorithm>
 #include <unordered_map>
+#include <functional>
+#include <tuple>
 #include <unordered_set>
 #include <d3d11.h>
 #include <thread>
@@ -29,6 +32,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <fstream>
+#include <cstring>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
@@ -93,6 +97,39 @@ namespace UI_ContentBrowser {
 
     static std::vector<uint8_t> sAudioExportData;
     static std::string sAudioExportName;
+
+    // BNK export state
+    static std::vector<uint8_t> sBnkExportData;
+    static std::string sBnkExportName;
+
+    // BNK virtual folder view state
+    struct BnkWemEntry {
+        uint32_t id;
+        uint32_t offset;
+        uint32_t size;
+        std::string displayName; // Name from SoundEvent.tbl or fallback to ID
+    };
+    static bool sBnkViewActive = false;
+    static std::vector<uint8_t> sBnkViewData;
+    static std::string sBnkViewName;
+    static ArchivePtr sBnkViewArchive;
+    static std::vector<BnkWemEntry> sBnkWemEntries;
+
+    // TBL export state
+    static std::vector<uint8_t> sTblExportData;
+    static std::string sTblExportName;
+
+    // WEM display name - just return numeric ID for now
+    static void LoadWemNameLookup(const std::vector<ArchivePtr>& archives)
+    {
+        // No-op
+        (void)archives;
+    }
+
+    static std::string GetWemDisplayName(uint32_t id)
+    {
+        return std::to_string(id);
+    }
 
     struct ThumbnailRequest {
         ArchivePtr archive;
@@ -429,7 +466,28 @@ namespace UI_ContentBrowser {
             std::transform(filterLower.begin(), filterLower.end(), filterLower.begin(), ::tolower);
         }
 
-        if (!sSelectedFolder)
+        // BNK virtual folder view
+        if (sBnkViewActive && !sBnkWemEntries.empty())
+        {
+            for (const auto& wemEntry : sBnkWemEntries)
+            {
+                FileInfo info;
+                info.name = wemEntry.displayName + ".wem";
+                info.extension = ".wem";
+                info.entry = nullptr; // Virtual entry
+                info.archive = sBnkViewArchive;
+                info.isDirectory = false;
+
+                if (isFiltering) {
+                    std::string nameLower = info.name;
+                    std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+                    if (nameLower.find(filterLower) == std::string::npos) continue;
+                }
+
+                sCachedFiles.push_back(info);
+            }
+        }
+        else if (!sSelectedFolder)
         {
             for (const auto& archive : state.archives)
             {
@@ -544,7 +602,9 @@ namespace UI_ContentBrowser {
         }
 
         auto fileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
-        if (!fileEntry) return;
+
+        // Allow virtual BNK WEM entries (file.entry is null for these)
+        if (!fileEntry && !(sBnkViewActive && file.extension == ".wem")) return;
 
         if (file.extension == ".area")
         {
@@ -576,9 +636,113 @@ namespace UI_ContentBrowser {
         else if (file.extension == ".wem")
         {
             std::vector<uint8_t> wemData;
-            if (file.archive->getFileData(fileEntry, wemData) && !wemData.empty())
+
+            if (fileEntry) {
+                // Regular WEM file
+                file.archive->getFileData(fileEntry, wemData);
+            } else if (sBnkViewActive && !sBnkViewData.empty()) {
+                // Virtual WEM from BNK
+                std::string baseName = file.name;
+                size_t dotPos = baseName.rfind('.');
+                if (dotPos != std::string::npos)
+                    baseName = baseName.substr(0, dotPos);
+
+                // Find entry by displayName
+                const BnkWemEntry* foundEntry = nullptr;
+                for (const auto& entry : sBnkWemEntries) {
+                    if (entry.displayName == baseName) {
+                        foundEntry = &entry;
+                        break;
+                    }
+                }
+
+                if (foundEntry) {
+                    // Find DATA section
+                    const uint8_t* data = sBnkViewData.data();
+                    size_t size = sBnkViewData.size();
+                    size_t pos = 0;
+                    const uint8_t* dataSection = nullptr;
+
+                    while (pos + 8 <= size) {
+                        char sectionId[5] = {0};
+                        memcpy(sectionId, data + pos, 4);
+                        uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
+
+                        if (memcmp(sectionId, "DATA", 4) == 0) {
+                            dataSection = data + pos + 8;
+                            break;
+                        }
+                        pos += 8 + sectionSize;
+                    }
+
+                    if (dataSection) {
+                        wemData.assign(dataSection + foundEntry->offset,
+                                       dataSection + foundEntry->offset + foundEntry->size);
+                    }
+                }
+            }
+
+            if (!wemData.empty())
             {
-    Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
+                Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
+            }
+        }
+        else if (file.extension == ".bnk")
+        {
+            // Parse BNK and enter virtual folder view
+            std::vector<uint8_t> bnkData;
+            if (file.archive->getFileData(fileEntry, bnkData) && !bnkData.empty())
+            {
+                // Try to load sound event lookup (non-blocking, failures are OK)
+                LoadWemNameLookup(state.archives);
+
+                sBnkWemEntries.clear();
+
+                const uint8_t* data = bnkData.data();
+                size_t size = bnkData.size();
+                size_t pos = 0;
+
+                const uint8_t* dataSection = nullptr;
+
+                while (pos + 8 <= size) {
+                    char sectionId[5] = {0};
+                    memcpy(sectionId, data + pos, 4);
+                    uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
+
+                    // Sanity check
+                    if (sectionSize > size - pos - 8) break;
+
+                    if (memcmp(sectionId, "DIDX", 4) == 0) {
+                        const uint8_t* didx = data + pos + 8;
+                        size_t numEntries = sectionSize / 12;
+                        for (size_t i = 0; i < numEntries; i++) {
+                            BnkWemEntry entry;
+                            entry.id = *(uint32_t*)(didx + i * 12);
+                            entry.offset = *(uint32_t*)(didx + i * 12 + 4);
+                            entry.size = *(uint32_t*)(didx + i * 12 + 8);
+                            entry.displayName = GetWemDisplayName(entry.id);
+                            sBnkWemEntries.push_back(entry);
+                        }
+                    } else if (memcmp(sectionId, "DATA", 4) == 0) {
+                        dataSection = data + pos + 8;
+                    }
+
+                    pos += 8 + sectionSize;
+                }
+
+                if (!sBnkWemEntries.empty() && dataSection) {
+                    sBnkViewActive = true;
+                    sBnkViewData = std::move(bnkData);
+                    sBnkViewName = file.name;
+                    sBnkViewArchive = file.archive;
+                    sNeedsRefresh = true;
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "BNK contains no embedded audio";
+                    sNotificationTimer = 3.0f;
+                }
             }
         }
     }
@@ -792,6 +956,9 @@ namespace UI_ContentBrowser {
                 sSelectedArchive = nullptr;
                 sSelectedPath.clear();
                 sSearchFilter[0] = '\0';
+                sBnkViewActive = false;
+                sBnkViewData.clear();
+                sBnkWemEntries.clear();
                 sNeedsRefresh = true;
                 sRequestTreeSync = true;
             }
@@ -808,6 +975,9 @@ namespace UI_ContentBrowser {
                 {
                     sSelectedFolder = sSelectedArchive->getRoot();
                     sSearchFilter[0] = '\0';
+                    sBnkViewActive = false;
+                    sBnkViewData.clear();
+                    sBnkWemEntries.clear();
                     sNeedsRefresh = true;
                     sRequestTreeSync = true;
                 }
@@ -822,7 +992,9 @@ namespace UI_ContentBrowser {
                     std::string name = wstring_to_utf8(entry->getEntryName());
                     if (name.empty()) name = "???";
 
-                    if (i == sBreadcrumbPath.size() - 1)
+                    bool isLast = (i == sBreadcrumbPath.size() - 1) && !sBnkViewActive;
+
+                    if (isLast)
                     {
                         ImGui::TextDisabled("%s", name.c_str());
                     }
@@ -832,10 +1004,22 @@ namespace UI_ContentBrowser {
                         {
                             sSelectedFolder = entry;
                             sSearchFilter[0] = '\0';
+                            sBnkViewActive = false;
+                            sBnkViewData.clear();
+                            sBnkWemEntries.clear();
                             sNeedsRefresh = true;
                             sRequestTreeSync = true;
                         }
                     }
+                }
+
+                // Show BNK name in breadcrumb when viewing BNK contents
+                if (sBnkViewActive)
+                {
+                    ImGui::SameLine();
+                    ImGui::Text("/");
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%s", sBnkViewName.c_str());
                 }
             }
             ImGui::PopStyleColor(3);
@@ -1133,16 +1317,58 @@ namespace UI_ContentBrowser {
                                 if (dotPos != std::string::npos)
                                     baseName = baseName.substr(0, dotPos);
 
+                                // Helper lambda to get WEM data (handles both regular and BNK virtual entries)
+                                auto getWemData = [&](std::vector<uint8_t>& outData) -> bool {
+                                    if (file.entry) {
+                                        // Regular WEM file
+                                        auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                        if (fe && file.archive->getFileData(fe, outData) && !outData.empty())
+                                            return true;
+                                    } else if (sBnkViewActive && !sBnkViewData.empty()) {
+                                        // Virtual WEM from BNK - find by displayName
+                                        const BnkWemEntry* foundEntry = nullptr;
+                                        for (const auto& entry : sBnkWemEntries) {
+                                            if (entry.displayName == baseName) {
+                                                foundEntry = &entry;
+                                                break;
+                                            }
+                                        }
+
+                                        if (!foundEntry) return false;
+
+                                        // Find DATA section offset
+                                        const uint8_t* data = sBnkViewData.data();
+                                        size_t size = sBnkViewData.size();
+                                        size_t pos = 0;
+                                        const uint8_t* dataSection = nullptr;
+
+                                        while (pos + 8 <= size) {
+                                            char sectionId[5] = {0};
+                                            memcpy(sectionId, data + pos, 4);
+                                            uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
+
+                                            if (memcmp(sectionId, "DATA", 4) == 0) {
+                                                dataSection = data + pos + 8;
+                                                break;
+                                            }
+                                            pos += 8 + sectionSize;
+                                        }
+
+                                        if (dataSection) {
+                                            outData.assign(dataSection + foundEntry->offset,
+                                                           dataSection + foundEntry->offset + foundEntry->size);
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                };
+
                                 if (ImGui::MenuItem("Play"))
                                 {
-                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
-                                    if (fe)
+                                    std::vector<uint8_t> wemData;
+                                    if (getWemData(wemData))
                                     {
-                                        std::vector<uint8_t> wemData;
-                                        if (file.archive->getFileData(fe, wemData) && !wemData.empty())
-                                        {
-Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
-                                        }
+                                        Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.name);
                                     }
                                 }
 
@@ -1155,21 +1381,23 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
 
                                 if (ImGui::MenuItem("Extract Raw (.wem)"))
                                 {
-                                    sExportDefaultName = baseName;
-                                    sExportArchive = file.archive;
-                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    std::vector<uint8_t> wemData;
+                                    if (getWemData(wemData))
+                                    {
+                                        sAudioExportData = std::move(wemData);
+                                        sAudioExportName = baseName;
 
-                                    IGFD::FileDialogConfig config;
-                                    config.path = ".";
-                                    config.fileName = baseName + ".wem";
-                                    config.flags = ImGuiFileDialogFlags_Modal;
-                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractWemRawDlg", "Extract Raw WEM", ".wem", config);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + ".wem";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkWemRawDlg", "Extract Raw WEM", ".wem", config);
+                                    }
                                 }
 
                                 if (ImGui::MenuItem("Convert to WAV"))
                                 {
-                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
-                                    if (fe && file.archive->getFileData(fe, sAudioExportData) && !sAudioExportData.empty())
+                                    if (getWemData(sAudioExportData))
                                     {
                                         sAudioExportName = baseName;
                                         IGFD::FileDialogConfig config;
@@ -1178,6 +1406,104 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportAudioDlg", "Save WAV", ".wav", config);
                                     }
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
+                        // BNK context menu
+                        if (file.extension == ".bnk" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##bnkcontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                if (ImGui::MenuItem("Extract WEMs..."))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (fe && file.archive->getFileData(fe, sBnkExportData) && !sBnkExportData.empty())
+                                    {
+                                        // Load sound event lookup for naming files
+                                        LoadWemNameLookup(state.archives);
+
+                                        sBnkExportName = baseName;
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkDlg", "Select Output Folder", nullptr, config);
+                                    }
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Extract Raw (.bnk)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".bnk";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkRawDlg", "Extract Raw BNK", ".bnk", config);
+                                }
+
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+
+                        // TBL context menu
+                        if (file.extension == ".tbl" && !file.isDirectory)
+                        {
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##tblcontext"))
+                            {
+                                std::string baseName = file.name;
+                                size_t dotPos = baseName.rfind('.');
+                                if (dotPos != std::string::npos)
+                                    baseName = baseName.substr(0, dotPos);
+
+                                if (ImGui::MenuItem("Export as CSV"))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (fe && file.archive->getFileData(fe, sTblExportData) && !sTblExportData.empty())
+                                    {
+                                        sTblExportName = baseName;
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + ".csv";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportTblCsvDlg", "Export CSV", ".csv", config);
+                                    }
+                                }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Extract Raw (.tbl)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.fileName = baseName + ".tbl";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExtractTblRawDlg", "Extract Raw TBL", ".tbl", config);
                                 }
 
                                 ImGui::EndPopup();
@@ -1243,6 +1569,10 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
                         {
                             drawList->AddImage(sAudioIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
+                        else if (file.extension == ".bnk" && sAudioIcon)
+                        {
+                            drawList->AddImage(sAudioIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                        }
                         else
                         {
                             ImU32 bgColor = IM_COL32(51, 51, 51, 255);
@@ -1252,6 +1582,7 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
                             else if (file.extension == ".tex")  bgColor = IM_COL32(76, 38, 76, 255);
                             else if (file.extension == ".tbl")  bgColor = IM_COL32(76, 76, 38, 255);
                             else if (file.extension == ".wem")  bgColor = IM_COL32(76, 76, 76, 255);
+                            else if (file.extension == ".bnk")  bgColor = IM_COL32(90, 70, 90, 255);
 
                             drawList->AddRectFilled(contentMin + ImVec2(10, 10), contentMin + ImVec2(iconSize - 10, iconSize - 10), bgColor, 4.0f);
                         }
@@ -1900,6 +2231,32 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
             ImGuiFileDialog::Instance()->Close();
         }
 
+        // Extract WEM from BNK dialog
+        if (ImGuiFileDialog::Instance()->Display("ExtractBnkWemRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && !sAudioExportData.empty())
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::ofstream out(filePath, std::ios::binary);
+                if (out.is_open())
+                {
+                    out.write(reinterpret_cast<const char*>(sAudioExportData.data()), sAudioExportData.size());
+                    out.close();
+                    sNotificationSuccess = true;
+                    sNotificationMessage = "WEM extracted successfully!";
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to write file";
+                }
+                sNotificationTimer = 3.0f;
+                sAudioExportData.clear();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
         if (ImGuiFileDialog::Instance()->Display("ExportAudioDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && !sAudioExportData.empty())
@@ -1922,6 +2279,229 @@ Audio::AudioPlayerWidget::Get().PlayFile(wemData.data(), wemData.size(), file.na
                 }
                 sNotificationTimer = 3.0f;
                 sAudioExportData.clear();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // BNK extraction dialog (folder selection)
+        if (ImGuiFileDialog::Instance()->Display("ExtractBnkDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && !sBnkExportData.empty())
+            {
+                std::string folderPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                // Parse BNK and extract WEMs
+                int extractedCount = 0;
+                std::string errorMsg;
+
+                const uint8_t* data = sBnkExportData.data();
+                size_t size = sBnkExportData.size();
+                size_t pos = 0;
+
+                // Find DIDX and DATA sections
+                std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> wemEntries; // id, offset, size
+                const uint8_t* dataSection = nullptr;
+                size_t dataSectionSize = 0;
+
+                while (pos + 8 <= size) {
+                    char sectionId[5] = {0};
+                    memcpy(sectionId, data + pos, 4);
+                    uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
+
+                    if (memcmp(sectionId, "DIDX", 4) == 0) {
+                        // Data Index section - contains WEM IDs and offsets
+                        const uint8_t* didx = data + pos + 8;
+                        size_t numEntries = sectionSize / 12;
+                        for (size_t i = 0; i < numEntries; i++) {
+                            uint32_t wemId = *(uint32_t*)(didx + i * 12);
+                            uint32_t wemOffset = *(uint32_t*)(didx + i * 12 + 4);
+                            uint32_t wemSize = *(uint32_t*)(didx + i * 12 + 8);
+                            wemEntries.push_back({wemId, wemOffset, wemSize});
+                        }
+                    } else if (memcmp(sectionId, "DATA", 4) == 0) {
+                        dataSection = data + pos + 8;
+                        dataSectionSize = sectionSize;
+                    }
+
+                    pos += 8 + sectionSize;
+                }
+
+                if (dataSection && !wemEntries.empty()) {
+                    for (const auto& [wemId, wemOffset, wemSize] : wemEntries) {
+                        if (wemOffset + wemSize <= dataSectionSize) {
+                            // Get display name from lookup
+                            std::string displayName = GetWemDisplayName(wemId);
+                            std::string wemPath = folderPath + "/" + displayName + ".wem";
+                            std::ofstream outFile(wemPath, std::ios::binary);
+                            if (outFile.is_open()) {
+                                outFile.write((const char*)(dataSection + wemOffset), wemSize);
+                                outFile.close();
+                                extractedCount++;
+                            }
+                        }
+                    }
+
+                    sNotificationSuccess = true;
+                    sNotificationMessage = "Extracted " + std::to_string(extractedCount) + " WEM files";
+                } else {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "No WEM data found in BNK";
+                }
+
+                sNotificationTimer = 3.0f;
+                sBnkExportData.clear();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // BNK raw extraction dialog
+        if (ImGuiFileDialog::Instance()->Display("ExtractBnkRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportFileEntry && sExportArchive)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                std::vector<uint8_t> data;
+                if (sExportArchive->getFileData(sExportFileEntry, data) && !data.empty())
+                {
+                    std::ofstream outFile(filePath, std::ios::binary);
+                    if (outFile.is_open())
+                    {
+                        outFile.write((const char*)data.data(), data.size());
+                        outFile.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "BNK extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to create output file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read BNK data";
+                }
+                sNotificationTimer = 3.0f;
+                sExportFileEntry = nullptr;
+                sExportArchive = nullptr;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // TBL CSV export dialog
+        if (ImGuiFileDialog::Instance()->Display("ExportTblCsvDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && !sTblExportData.empty())
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+
+                Tbl::File tblFile;
+                if (tblFile.load(sTblExportData.data(), sTblExportData.size()))
+                {
+                    std::wofstream out(filePath);
+                    if (out.is_open())
+                    {
+                        // Write header
+                        const auto& cols = tblFile.getColumns();
+                        for (size_t i = 0; i < cols.size(); ++i)
+                        {
+                            if (i > 0) out << L";";
+                            out << L"\"" << cols[i].name << L"\"";
+                        }
+                        out << std::endl;
+
+                        // Write data rows
+                        for (uint32_t row = 0; row < tblFile.getRecordCount(); ++row)
+                        {
+                            for (size_t col = 0; col < cols.size(); ++col)
+                            {
+                                if (col > 0) out << L";";
+
+                                switch (cols[col].dataType)
+                                {
+                                case Tbl::DataType::Uint:
+                                case Tbl::DataType::Flags:
+                                    out << tblFile.getUint(row, col);
+                                    break;
+                                case Tbl::DataType::Float:
+                                    out << tblFile.getFloat(row, col);
+                                    break;
+                                case Tbl::DataType::Ulong:
+                                    out << tblFile.getInt64(row, col);
+                                    break;
+                                case Tbl::DataType::String:
+                                {
+                                    std::wstring str = tblFile.getString(row, col);
+                                    // Escape quotes
+                                    std::wstring escaped;
+                                    for (wchar_t c : str)
+                                    {
+                                        if (c == L'"') escaped += L"\"\"";
+                                        else escaped += c;
+                                    }
+                                    out << L"\"" << escaped << L"\"";
+                                    break;
+                                }
+                                default:
+                                    out << tblFile.getUint(row, col);
+                                    break;
+                                }
+                            }
+                            out << std::endl;
+                        }
+                        out.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "CSV exported successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to create output file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to parse TBL file";
+                }
+                sNotificationTimer = 3.0f;
+                sTblExportData.clear();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // TBL raw extraction dialog
+        if (ImGuiFileDialog::Instance()->Display("ExtractTblRawDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportFileEntry && sExportArchive)
+            {
+                std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+                std::vector<uint8_t> data;
+                if (sExportArchive->getFileData(sExportFileEntry, data) && !data.empty())
+                {
+                    std::ofstream outFile(filePath, std::ios::binary);
+                    if (outFile.is_open())
+                    {
+                        outFile.write((const char*)data.data(), data.size());
+                        outFile.close();
+                        sNotificationSuccess = true;
+                        sNotificationMessage = "TBL extracted successfully!";
+                    }
+                    else
+                    {
+                        sNotificationSuccess = false;
+                        sNotificationMessage = "Failed to create output file";
+                    }
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to read TBL data";
+                }
+                sNotificationTimer = 3.0f;
+                sExportFileEntry = nullptr;
+                sExportArchive = nullptr;
             }
             ImGuiFileDialog::Instance()->Close();
         }

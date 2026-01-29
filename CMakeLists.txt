@@ -109,6 +109,8 @@ set(IMGUI_SOURCES
         ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        src/BNK/BNK_hirc.cpp
+        src/BNK/BNK_hirc.h
 )
 if(WIN32)
     list(APPEND IMGUI_SOURCES
