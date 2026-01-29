@@ -112,43 +112,64 @@ static void StartArchiveLoading(AppState& state, const std::string& pathStr, boo
     gArchiveLoadState.loadPath = pathStr;
     gArchiveLoadState.savePathOnComplete = savePath;
     gArchiveLoadState.currentArchiveName = "Scanning...";
+    gArchiveLoadState.phase = LoadPhase::ScanningArchives;
+    gArchiveLoadState.audioStatusText.clear();
     state.currentDialogPath = pathStr;
     ScanForArchives(pathStr);
+    gArchiveLoadState.phase = LoadPhase::LoadingArchives;
 }
 
 static void ProcessArchiveLoading(AppState& state) {
     if (!gArchiveLoadState.isLoading) return;
-    if (!gArchiveLoadState.scanComplete) return;
 
-    if (gArchiveLoadState.loadedArchives >= gArchiveLoadState.totalArchives) {
-        gArchiveLoadState.isLoading = false;
+    if (gArchiveLoadState.phase == LoadPhase::LoadingArchives) {
+        if (!gArchiveLoadState.scanComplete) return;
 
-        if (!state.archives.empty()) {
+        if (gArchiveLoadState.loadedArchives >= gArchiveLoadState.totalArchives) {
+            if (!state.archives.empty()) {
+                gArchiveLoadState.phase = LoadPhase::InitializingAudio;
+                gArchiveLoadState.audioStatusText = "Initializing audio database...";
+                state.audioInitRequested = true;
+            } else {
+                gArchiveLoadState.isLoading = false;
+                gArchiveLoadState.phase = LoadPhase::Idle;
+            }
+            return;
+        }
+
+        const auto& archivePath = gArchiveLoadState.pendingArchives[gArchiveLoadState.loadedArchives];
+        gArchiveLoadState.currentArchiveName = archivePath.filename().string();
+
+        try {
+            std::wstring wpath = archivePath.wstring();
+
+            auto archive = std::make_shared<Archive>(wpath);
+            archive->loadIndexInfo();
+            archive->loadArchiveInfo();
+            archive->asyncLoad();
+
+            state.archives.push_back(archive);
+        }
+        catch (const std::exception&) {
+        }
+
+        gArchiveLoadState.loadedArchives++;
+    }
+    else if (gArchiveLoadState.phase == LoadPhase::InitializingAudio) {
+        if (state.audioInitComplete) {
+            gArchiveLoadState.phase = LoadPhase::Complete;
+            gArchiveLoadState.isLoading = false;
             state.archivesLoaded = true;
+
             if (gArchiveLoadState.savePathOnComplete) {
                 SaveLastUsedPath(gArchiveLoadState.loadPath);
             }
+        } else {
+            if (!state.audioInitStatus.empty()) {
+                gArchiveLoadState.audioStatusText = state.audioInitStatus;
+            }
         }
-        return;
     }
-
-    const auto& archivePath = gArchiveLoadState.pendingArchives[gArchiveLoadState.loadedArchives];
-    gArchiveLoadState.currentArchiveName = archivePath.filename().string();
-
-    try {
-        std::wstring wpath = archivePath.wstring();
-
-        auto archive = std::make_shared<Archive>(wpath);
-        archive->loadIndexInfo();
-        archive->loadArchiveInfo();
-        archive->asyncLoad();
-
-        state.archives.push_back(archive);
-    }
-    catch (const std::exception&) {
-    }
-
-    gArchiveLoadState.loadedArchives++;
 }
 
 bool TryAutoLoadArchives(AppState& state) {
@@ -205,24 +226,40 @@ static void RenderLoadingBar() {
                                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
 
     if (ImGui::Begin("##ArchiveLoadWindow", nullptr, loadingFlags)) {
-        ImGui::Text("Loading Archives...");
-        ImGui::Spacing();
+        if (gArchiveLoadState.phase == LoadPhase::LoadingArchives ||
+            gArchiveLoadState.phase == LoadPhase::ScanningArchives) {
+            ImGui::Text("Loading Archives...");
+            ImGui::Spacing();
 
-        float progress = gArchiveLoadState.totalArchives > 0
-            ? static_cast<float>(gArchiveLoadState.loadedArchives) / static_cast<float>(gArchiveLoadState.totalArchives)
-            : 0.0f;
+            float progress = gArchiveLoadState.totalArchives > 0
+                ? static_cast<float>(gArchiveLoadState.loadedArchives) / static_cast<float>(gArchiveLoadState.totalArchives)
+                : 0.0f;
 
-        ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20));
+            ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20));
 
-        ImGui::Spacing();
+            ImGui::Spacing();
 
-        char countText[64];
-        snprintf(countText, sizeof(countText), "%d / %d",
-                 gArchiveLoadState.loadedArchives, gArchiveLoadState.totalArchives);
-        ImGui::Text("%s", countText);
+            char countText[64];
+            snprintf(countText, sizeof(countText), "%d / %d",
+                     gArchiveLoadState.loadedArchives, gArchiveLoadState.totalArchives);
+            ImGui::Text("%s", countText);
 
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s",
-                          gArchiveLoadState.currentArchiveName.c_str());
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s",
+                              gArchiveLoadState.currentArchiveName.c_str());
+        }
+        else if (gArchiveLoadState.phase == LoadPhase::InitializingAudio) {
+            ImGui::Text("Initializing Audio...");
+            ImGui::Spacing();
+
+            float time = static_cast<float>(ImGui::GetTime());
+            float progress = (sinf(time * 2.0f) + 1.0f) * 0.5f;
+            ImGui::ProgressBar(progress, ImVec2(windowWidth - 40.0f, 20), "");
+
+            ImGui::Spacing();
+
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "%s",
+                              gArchiveLoadState.audioStatusText.c_str());
+        }
     }
     ImGui::End();
 

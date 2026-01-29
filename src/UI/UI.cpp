@@ -11,6 +11,7 @@
 #include "AddonManager.h"
 
 #include "splashscreen.h"
+#include "FileOps.h"
 #include "../tex/tex.h"
 #include "../Audio/AudioPlayerWidget.h"
 
@@ -255,6 +256,11 @@ void RenderUI(AppState& state)
     ProcessModelLoading(state);
     ProcessAreaLoading(state);
     ProcessDumping();
+
+    if (state.audioInitRequested && !state.audioInitComplete)
+    {
+        UI_ContentBrowser::InitializeAudioDatabase(state);
+    }
 
     if (!state.archivesLoaded)
     {

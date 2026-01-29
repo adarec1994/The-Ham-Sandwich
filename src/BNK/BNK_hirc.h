@@ -20,6 +20,7 @@ enum class HircType : uint8_t {
     MusicTrack = 11,
     MusicSwitchContainer = 12,
     MusicPlaylistContainer = 13,
+    AudioDevice = 14,  // Also ActorMixer in some versions
 };
 
 struct SoundObject {
@@ -73,8 +74,11 @@ class WemNameResolver {
 public:
     bool loadSoundEventTable(const uint8_t* data, size_t size);
     bool loadSoundEventCsv(const uint8_t* data, size_t size);
+    bool loadSoundBankTable(const uint8_t* data, size_t size);
     bool loadEventsBnk(const uint8_t* data, size_t size);
+    bool loadStructureBnk(const uint8_t* data, size_t size);  // Load Structure_SFX.bnk or Structure_Music.bnk
     bool loadAudioBnk(const uint8_t* data, size_t size);
+    bool loadAudioBnk(const uint8_t* data, size_t size, const std::string& bankName);
     void finalize();
     void clear();
 
@@ -83,6 +87,8 @@ public:
     bool isLoaded() const { return mLoaded; }
     size_t getEventCount() const { return mEventIdToName.size(); }
     size_t getSoundCount() const { return mSourceIdToSoundId.size(); }
+
+    static uint32_t fnv1Hash(const std::string& name);
 
 private:
     bool mLoaded = false;
@@ -93,6 +99,11 @@ private:
     std::unordered_map<uint32_t, uint32_t> mActionToTarget;
     std::unordered_map<uint32_t, std::vector<uint32_t>> mEventToActions;
     HircParser mEventsParser;
+    HircParser mStructureParser;  // Parser for Structure_SFX.bnk
+    std::unordered_map<uint32_t, uint32_t> mChildToParent;  // child -> parent container
+
+    std::unordered_map<uint32_t, uint32_t> mWemIdToBankId;
+    std::unordered_map<uint32_t, std::string> mBankIdToName;
 };
 
 }

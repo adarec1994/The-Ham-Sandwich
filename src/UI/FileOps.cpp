@@ -1,4 +1,5 @@
 #include "FileOps.h"
+#include "UI.h"
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 #include "UI_Tables.h"
@@ -121,6 +122,126 @@ namespace UI_ContentBrowser {
 
         for (const auto& child : entry->getChildren())
             FindAllBnkFiles(child, results);
+    }
+
+    enum class AudioInitPhase {
+        NotStarted,
+        LoadingSoundEventTable,
+        LoadingEventsBnk,
+        ScanningBanks,
+        ProcessingBanks,
+        Finalizing,
+        Complete
+    };
+
+    static AudioInitPhase sAudioInitPhase = AudioInitPhase::NotStarted;
+    static std::vector<std::pair<ArchivePtr, std::pair<std::shared_ptr<FileEntry>, std::string>>> sPendingBnkFiles;
+    static size_t sBnkProcessIndex = 0;
+
+    void InitializeAudioDatabase(AppState& state)
+    {
+        if (sWemResolver.isLoaded()) {
+            state.audioInitComplete = true;
+            sAudioInitPhase = AudioInitPhase::Complete;
+            return;
+        }
+
+        switch (sAudioInitPhase) {
+        case AudioInitPhase::NotStarted:
+            sWemResolver.clear();
+            sPendingBnkFiles.clear();
+            sBnkProcessIndex = 0;
+            sAudioInitPhase = AudioInitPhase::LoadingSoundEventTable;
+            state.audioInitStatus = "Loading SoundEvent.tbl...";
+            break;
+
+        case AudioInitPhase::LoadingSoundEventTable:
+            for (const auto& archive : state.archives) {
+                if (!archive) continue;
+                auto tblFile = FindFileRecursive(archive->getRoot(), "soundevent.tbl");
+                if (tblFile) {
+                    std::vector<uint8_t> tblData;
+                    if (archive->getFileData(tblFile, tblData) && !tblData.empty()) {
+                        sWemResolver.loadSoundEventTable(tblData.data(), tblData.size());
+                    }
+                    break;
+                }
+            }
+            sAudioInitPhase = AudioInitPhase::LoadingEventsBnk;
+            state.audioInitStatus = "Loading Events.bnk...";
+            break;
+
+        case AudioInitPhase::LoadingEventsBnk:
+            for (const auto& archive : state.archives) {
+                if (!archive) continue;
+                auto bnkFile = FindFileRecursive(archive->getRoot(), "events.bnk");
+                if (bnkFile) {
+                    std::vector<uint8_t> bnkData;
+                    if (archive->getFileData(bnkFile, bnkData) && !bnkData.empty()) {
+                        sWemResolver.loadEventsBnk(bnkData.data(), bnkData.size());
+                    }
+                    break;
+                }
+            }
+            sAudioInitPhase = AudioInitPhase::ScanningBanks;
+            state.audioInitStatus = "Scanning audio banks...";
+            break;
+
+        case AudioInitPhase::ScanningBanks:
+            sPendingBnkFiles.clear();
+            for (const auto& archive : state.archives) {
+                if (!archive) continue;
+                std::vector<std::pair<std::shared_ptr<FileEntry>, std::string>> bnkFiles;
+                FindAllBnkFiles(archive->getRoot(), bnkFiles);
+                for (auto& bf : bnkFiles) {
+                    if (bf.second != "events.bnk" && bf.second != "init.bnk") {
+                        sPendingBnkFiles.push_back({archive, std::move(bf)});
+                    }
+                }
+            }
+            sBnkProcessIndex = 0;
+            sAudioInitPhase = AudioInitPhase::ProcessingBanks;
+            break;
+
+        case AudioInitPhase::ProcessingBanks:
+        {
+            const int banksPerFrame = 5;
+            int processed = 0;
+            while (sBnkProcessIndex < sPendingBnkFiles.size() && processed < banksPerFrame) {
+                const auto& [archive, bnkInfo] = sPendingBnkFiles[sBnkProcessIndex];
+                const auto& [bnkFile, lowerName] = bnkInfo;
+
+                state.audioInitStatus = "Processing " + lowerName + " (" +
+                    std::to_string(sBnkProcessIndex + 1) + "/" +
+                    std::to_string(sPendingBnkFiles.size()) + ")";
+
+                std::vector<uint8_t> bnkData;
+                if (archive->getFileData(bnkFile, bnkData) && !bnkData.empty()) {
+                    sWemResolver.loadAudioBnk(bnkData.data(), bnkData.size());
+                }
+
+                sBnkProcessIndex++;
+                processed++;
+            }
+
+            if (sBnkProcessIndex >= sPendingBnkFiles.size()) {
+                sAudioInitPhase = AudioInitPhase::Finalizing;
+                state.audioInitStatus = "Finalizing audio database...";
+            }
+            break;
+        }
+
+        case AudioInitPhase::Finalizing:
+            sWemResolver.finalize();
+            sPendingBnkFiles.clear();
+            sAudioInitPhase = AudioInitPhase::Complete;
+            state.audioInitComplete = true;
+            break;
+
+        case AudioInitPhase::Complete:
+            state.audioInitComplete = true;
+            break;
+        }
     }
 
     void LoadWemNameLookup(const std::vector<ArchivePtr>& archives)

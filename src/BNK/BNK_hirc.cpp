@@ -5,33 +5,20 @@
 #include <algorithm>
 #include <functional>
 #include <sstream>
-#include <fstream>
-
 namespace Bnk {
-
-static std::ofstream& getDebugLog() {
-    static std::ofstream log("wem_resolver_debug.txt", std::ios::out | std::ios::trunc);
-    return log;
-}
-
-#define WEM_DEBUG(x) do { getDebugLog() << x << std::endl; getDebugLog().flush(); } while(0)
-
 static inline uint8_t rd_u8(const uint8_t* p) { return *p; }
 static inline uint32_t rd_u32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
-
 bool HircParser::parse(const uint8_t* data, size_t size)
 {
     mSounds.clear();
     mActions.clear();
     mEvents.clear();
     mContainers.clear();
-
     size_t pos = 0;
     const uint8_t* hircData = nullptr;
     size_t hircSize = 0;
     const uint8_t* didxData = nullptr;
     size_t didxSize = 0;
-
     while (pos + 8 <= size) {
         uint32_t sectionSize = rd_u32(data + pos + 4);
         if (std::memcmp(data + pos, "HIRC", 4) == 0) {
@@ -43,7 +30,6 @@ bool HircParser::parse(const uint8_t* data, size_t size)
         }
         pos += 8 + sectionSize;
     }
-
     if (didxData && didxSize >= 12 && !hircData) {
         size_t numEntries = didxSize / 12;
         for (size_t i = 0; i < numEntries; i++) {
@@ -53,26 +39,24 @@ bool HircParser::parse(const uint8_t* data, size_t size)
             sound.sourceId = mediaId;
             sound.fileId = mediaId;
             sound.streamType = 0;
+            sound.parentId = 0;
             mSounds[mediaId] = sound;
         }
         return true;
     }
-
     if (!hircData || hircSize < 4) return false;
-
     uint32_t objectCount = rd_u32(hircData);
     size_t offset = 4;
-
+    std::unordered_set<uint32_t> allObjectIds;
+    std::vector<std::tuple<uint8_t, uint32_t, const uint8_t*, size_t>> containerData;
     for (uint32_t i = 0; i < objectCount && offset + 9 <= hircSize; ++i) {
         uint8_t type = rd_u8(hircData + offset);
         uint32_t objSize = rd_u32(hircData + offset + 1);
         uint32_t objId = rd_u32(hircData + offset + 5);
-
         if (offset + 5 + objSize > hircSize) break;
-
+        allObjectIds.insert(objId);
         const uint8_t* objData = hircData + offset + 9;
         size_t objDataSize = objSize > 4 ? objSize - 4 : 0;
-
         switch (static_cast<HircType>(type)) {
         case HircType::Sound:
             if (objDataSize >= 12) {
@@ -82,18 +66,18 @@ bool HircParser::parse(const uint8_t* data, size_t size)
                 sound.fileId = 0;
                 sound.parentId = 0;
                 sound.streamType = 0;
-
                 uint32_t srcId = rd_u32(objData + 8);
                 if (srcId == 0 && objDataSize >= 9) {
                     srcId = rd_u32(objData + 5);
                 }
                 sound.sourceId = srcId;
                 sound.fileId = srcId;
-
+                if (objDataSize >= 27) {
+                    sound.parentId = rd_u32(objData + 23);
+                }
                 mSounds[objId] = sound;
             }
             break;
-
         case HircType::Action:
             if (objDataSize >= 6) {
                 ActionObject action;
@@ -104,7 +88,6 @@ bool HircParser::parse(const uint8_t* data, size_t size)
                 mActions[objId] = action;
             }
             break;
-
         case HircType::Event:
             if (objDataSize >= 4) {
                 EventObject event;
@@ -116,58 +99,73 @@ bool HircParser::parse(const uint8_t* data, size_t size)
                 mEvents[objId] = event;
             }
             break;
-
+        case HircType::MusicTrack:
+            if (objDataSize >= 16) {
+                SoundObject sound;
+                sound.id = objId;
+                sound.sourceId = 0;
+                sound.fileId = 0;
+                sound.parentId = 0;
+                sound.streamType = 0;
+                uint32_t srcId = rd_u32(objData + 12);
+                if (srcId != 0) {
+                    sound.sourceId = srcId;
+                    sound.fileId = srcId;
+                    mSounds[objId] = sound;
+                }
+            }
+            containerData.push_back({type, objId, objData, objDataSize});
+            break;
         case HircType::RandomContainer:
         case HircType::SwitchContainer:
         case HircType::ActorMixer:
         case HircType::BlendContainer:
         case HircType::MusicSegment:
-        case HircType::MusicTrack:
         case HircType::MusicSwitchContainer:
         case HircType::MusicPlaylistContainer:
-            if (objDataSize >= 20) {
-                ContainerObject container;
-                container.id = objId;
-
-                for (size_t scanPos = 4; scanPos + 4 < objDataSize; ++scanPos) {
-                    uint32_t maybeCount = rd_u32(objData + scanPos);
-                    if (maybeCount > 0 && maybeCount < 1000 &&
-                        scanPos + 4 + maybeCount * 4 <= objDataSize) {
-                        bool validIds = true;
-                        std::vector<uint32_t> children;
-                        for (uint32_t k = 0; k < maybeCount && validIds; ++k) {
-                            uint32_t childId = rd_u32(objData + scanPos + 4 + k * 4);
-                            if (childId == 0) validIds = false;
-                            else children.push_back(childId);
-                        }
-                        if (validIds && !children.empty()) {
-                            container.childIds = std::move(children);
-                            break;
-                        }
-                    }
-                }
-                if (!container.childIds.empty()) {
-                    mContainers[objId] = container;
-                }
-            }
+            containerData.push_back({type, objId, objData, objDataSize});
             break;
-
         default:
             break;
         }
-
         offset += 5 + objSize;
     }
-
+    for (const auto& [type, objId, objData, objDataSize] : containerData) {
+        if (objDataSize >= 8) {
+            ContainerObject container;
+            container.id = objId;
+            for (size_t scanPos = 0; scanPos + 4 <= objDataSize; ++scanPos) {
+                uint32_t maybeCount = rd_u32(objData + scanPos);
+                if (maybeCount > 0 && maybeCount <= 500 &&
+                    scanPos + 4 + maybeCount * 4 <= objDataSize) {
+                    std::vector<uint32_t> children;
+                    bool allValid = true;
+                    for (uint32_t k = 0; k < maybeCount; ++k) {
+                        uint32_t childId = rd_u32(objData + scanPos + 4 + k * 4);
+                        if (allObjectIds.count(childId) == 0) {
+                            allValid = false;
+                            break;
+                        }
+                        children.push_back(childId);
+                    }
+                    if (allValid && children.size() == maybeCount) {
+                        container.childIds = std::move(children);
+                        break;
+                    }
+                }
+            }
+            if (!container.childIds.empty()) {
+                mContainers[objId] = container;
+            }
+        }
+    }
     return true;
 }
-
 void HircParser::collectSourceIds(uint32_t objectId, std::unordered_set<uint32_t>& sourceIds,
                                    std::unordered_set<uint32_t>& visited) const
 {
     if (visited.count(objectId)) return;
     visited.insert(objectId);
-
     auto soundIt = mSounds.find(objectId);
     if (soundIt != mSounds.end()) {
         if (soundIt->second.sourceId != 0) {
@@ -175,7 +173,6 @@ void HircParser::collectSourceIds(uint32_t objectId, std::unordered_set<uint32_t
         }
         return;
     }
-
     auto containerIt = mContainers.find(objectId);
     if (containerIt != mContainers.end()) {
         for (uint32_t childId : containerIt->second.childIds) {
@@ -183,39 +180,31 @@ void HircParser::collectSourceIds(uint32_t objectId, std::unordered_set<uint32_t
         }
     }
 }
-
 std::unordered_set<uint32_t> HircParser::getSourceIdsForEvent(uint32_t eventId) const
 {
     std::unordered_set<uint32_t> sourceIds;
     std::unordered_set<uint32_t> visited;
-
     auto eventIt = mEvents.find(eventId);
     if (eventIt == mEvents.end()) return sourceIds;
-
     for (uint32_t actionId : eventIt->second.actionIds) {
         auto actionIt = mActions.find(actionId);
         if (actionIt != mActions.end()) {
             collectSourceIds(actionIt->second.targetId, sourceIds, visited);
         }
     }
-
     return sourceIds;
 }
-
 std::unordered_map<uint32_t, std::unordered_set<uint32_t>> HircParser::buildSourceToEventMap() const
 {
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> result;
-
     for (const auto& [eventId, event] : mEvents) {
         auto sourceIds = getSourceIdsForEvent(eventId);
         for (uint32_t sourceId : sourceIds) {
             result[sourceId].insert(eventId);
         }
     }
-
     return result;
 }
-
 static std::string wstring_to_utf8_local(const std::wstring& wstr)
 {
     if (wstr.empty()) return "";
@@ -235,7 +224,6 @@ static std::string wstring_to_utf8_local(const std::wstring& wstr)
     }
     return result;
 }
-
 static std::wstring utf8_to_wstring_local(const std::string& str)
 {
     std::wstring result;
@@ -261,13 +249,20 @@ static std::wstring utf8_to_wstring_local(const std::string& str)
     }
     return result;
 }
-
+uint32_t WemNameResolver::fnv1Hash(const std::string& name)
+{
+    uint32_t hash = 2166136261u;
+    for (char c : name) {
+        char lower = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+        hash = (hash * 16777619u) ^ static_cast<uint8_t>(lower);
+    }
+    return hash;
+}
 static std::vector<std::string> parseCsvLine(const std::string& line, char delimiter)
 {
     std::vector<std::string> fields;
     std::string field;
     bool inQuotes = false;
-
     for (size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
         if (c == '"') {
@@ -287,100 +282,62 @@ static std::vector<std::string> parseCsvLine(const std::string& line, char delim
     fields.push_back(field);
     return fields;
 }
-
 bool WemNameResolver::loadSoundEventCsv(const uint8_t* data, size_t size)
 {
-    WEM_DEBUG("=== loadSoundEventCsv called, size=" << size);
-
     std::string content(reinterpret_cast<const char*>(data), size);
     std::istringstream stream(content);
     std::string line;
-
     if (!std::getline(stream, line)) {
-        WEM_DEBUG("  Failed to read header line");
         return false;
     }
-
     while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
         line.pop_back();
     }
-
-    WEM_DEBUG("  Header line: " << line.substr(0, 200));
-
     char delimiter = ';';
     if (line.find(';') == std::string::npos && line.find(',') != std::string::npos) {
         delimiter = ',';
     }
-    WEM_DEBUG("  Using delimiter: '" << delimiter << "'");
-
     std::vector<std::string> headers = parseCsvLine(line, delimiter);
-    WEM_DEBUG("  Found " << headers.size() << " columns");
-
     int nameCol = -1, hashCol = -1;
     for (size_t i = 0; i < headers.size(); ++i) {
         std::string h = headers[i];
         std::string hLower = h;
         std::transform(hLower.begin(), hLower.end(), hLower.begin(), ::tolower);
-        WEM_DEBUG("    Col " << i << ": '" << h << "' (lower: '" << hLower << "')");
         if (hLower == "name" || hLower == "eventname" || hLower == "event_name") {
             nameCol = static_cast<int>(i);
         } else if (hLower == "hash" || hLower == "eventhash" || hLower == "event_hash" || hLower == "wwiseid" || hLower == "wwise_id") {
             hashCol = static_cast<int>(i);
         }
     }
-
-    WEM_DEBUG("  nameCol=" << nameCol << " hashCol=" << hashCol);
-
     if (nameCol < 0 || hashCol < 0) {
-        WEM_DEBUG("  FAILED: Missing required columns");
         return false;
     }
-
-    int rowCount = 0;
-    int loadedCount = 0;
     while (std::getline(stream, line)) {
         while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
             line.pop_back();
         }
         if (line.empty()) continue;
-
-        rowCount++;
         std::vector<std::string> fields = parseCsvLine(line, delimiter);
         if (fields.size() <= static_cast<size_t>(std::max(nameCol, hashCol))) {
             continue;
         }
-
         std::string nameStr = fields[nameCol];
         std::string hashStr = fields[hashCol];
-
         if (nameStr.empty() || hashStr.empty()) continue;
-
         uint32_t hash = 0;
         try {
             hash = static_cast<uint32_t>(std::stoul(hashStr));
         } catch (...) {
             continue;
         }
-
         if (hash != 0) {
             mEventIdToName[hash] = utf8_to_wstring_local(nameStr);
-            loadedCount++;
-            if (loadedCount <= 10) {
-                WEM_DEBUG("  Sample: hash=" << hash << " name=" << nameStr);
-            }
         }
     }
-
-    WEM_DEBUG("  Processed " << rowCount << " rows, loaded " << loadedCount << " event names");
-    WEM_DEBUG("  mEventIdToName.size() = " << mEventIdToName.size());
-
     return !mEventIdToName.empty();
 }
-
 bool WemNameResolver::loadSoundEventTable(const uint8_t* data, size_t size)
 {
-    WEM_DEBUG("=== loadSoundEventTable called, size=" << size);
-
     if (size >= 4) {
         bool looksLikeCsv = false;
         for (size_t i = 0; i < std::min(size, static_cast<size_t>(256)); ++i) {
@@ -390,45 +347,29 @@ bool WemNameResolver::loadSoundEventTable(const uint8_t* data, size_t size)
             }
         }
         if (looksLikeCsv) {
-            WEM_DEBUG("  Detected CSV format, delegating to loadSoundEventCsv");
             return loadSoundEventCsv(data, size);
         }
     }
-
-    WEM_DEBUG("  Attempting to parse as Tbl format");
     Tbl::File tblFile;
     if (!tblFile.load(data, size)) {
-        WEM_DEBUG("  FAILED: Tbl::File::load() returned false");
         return false;
     }
-
     const auto& cols = tblFile.getColumns();
-    WEM_DEBUG("  Tbl loaded, " << cols.size() << " columns, " << tblFile.getRecordCount() << " records");
-
     int hashCol = -1, nameCol = -1;
     for (size_t i = 0; i < cols.size(); ++i) {
         std::string colNameUtf8 = wstring_to_utf8_local(cols[i].name);
         std::string lower = colNameUtf8;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        WEM_DEBUG("    Col " << i << ": '" << colNameUtf8 << "' type=" << static_cast<int>(cols[i].dataType));
         if (lower == "hash" || lower == "eventhash" || lower == "event_hash" || lower == "wwiseid" || lower == "wwise_id")
             hashCol = static_cast<int>(i);
         else if (lower == "name" || lower == "eventname" || lower == "event_name")
             nameCol = static_cast<int>(i);
     }
-
-    WEM_DEBUG("  hashCol=" << hashCol << " nameCol=" << nameCol);
-
     if (hashCol < 0 || nameCol < 0) {
-        WEM_DEBUG("  FAILED: Missing required columns (hash or name)");
         return false;
     }
-
     bool hashIsUlong = (hashCol < static_cast<int>(cols.size()) &&
                         cols[hashCol].dataType == Tbl::DataType::Ulong);
-    WEM_DEBUG("  hashIsUlong=" << hashIsUlong);
-
-    int loadedCount = 0;
     for (uint32_t row = 0; row < tblFile.getRecordCount(); ++row) {
         uint32_t hash;
         if (hashIsUlong) {
@@ -440,37 +381,152 @@ bool WemNameResolver::loadSoundEventTable(const uint8_t* data, size_t size)
         std::wstring name = tblFile.getString(row, nameCol);
         if (hash != 0 && !name.empty()) {
             mEventIdToName[hash] = name;
-            loadedCount++;
-            if (loadedCount <= 10) {
-                WEM_DEBUG("  Sample: hash=" << hash << " name=" << wstring_to_utf8_local(name));
+        }
+    }
+    return !mEventIdToName.empty();
+}
+bool WemNameResolver::loadEventsBnk(const uint8_t* data, size_t size)
+{
+    if (!mEventsParser.parse(data, size)) {
+        return false;
+    }
+    return true;
+}
+bool WemNameResolver::loadStructureBnk(const uint8_t* data, size_t size)
+{
+    if (!mStructureParser.parse(data, size)) {
+        return false;
+    }
+    std::unordered_set<uint32_t> allObjIds;
+    for (const auto& [id, _] : mStructureParser.getSounds()) {
+        allObjIds.insert(id);
+    }
+    for (const auto& [id, _] : mStructureParser.getContainers()) {
+        allObjIds.insert(id);
+    }
+    for (const auto& [containerId, container] : mStructureParser.getContainers()) {
+        for (uint32_t childId : container.childIds) {
+            if (allObjIds.count(childId)) {
+                mChildToParent[childId] = containerId;
             }
         }
     }
-
-    WEM_DEBUG("  Loaded " << loadedCount << " event names from Tbl");
-    WEM_DEBUG("  mEventIdToName.size() = " << mEventIdToName.size());
-
-    return !mEventIdToName.empty();
-}
-
-bool WemNameResolver::loadEventsBnk(const uint8_t* data, size_t size)
-{
-    WEM_DEBUG("=== loadEventsBnk called, size=" << size);
-    if (!mEventsParser.parse(data, size)) {
-        WEM_DEBUG("  FAILED: mEventsParser.parse() returned false");
-        return false;
-    }
-    WEM_DEBUG("  Parsed Events.bnk: " << mEventsParser.getEvents().size() << " events, "
-              << mEventsParser.getActions().size() << " actions, "
-              << mEventsParser.getSounds().size() << " sounds, "
-              << mEventsParser.getContainers().size() << " containers");
     return true;
 }
-
+bool WemNameResolver::loadSoundBankTable(const uint8_t* data, size_t size)
+{
+    if (size < 4 || std::memcmp(data, "LBTD", 4) != 0) {
+        return false;
+    }
+    std::vector<std::string> bankNames;
+    size_t pos = 0;
+    while (pos + 2 < size) {
+        if (data[pos] >= 'A' && data[pos] <= 'z' && data[pos+1] == 0) {
+            size_t end = pos;
+            while (end + 1 < size && end - pos < 200) {
+                if (data[end] == 0 && data[end+1] == 0) break;
+                end += 2;
+            }
+            if (end > pos + 4) {
+                std::wstring ws;
+                for (size_t i = pos; i < end; i += 2) {
+                    wchar_t wc = data[i] | (data[i+1] << 8);
+                    ws.push_back(wc);
+                }
+                std::string name = wstring_to_utf8_local(ws);
+                if (name.length() >= 3 && name[0] >= 'A' && name[0] <= 'Z') {
+                    bool isDuplicate = false;
+                    for (const auto& existing : bankNames) {
+                        if (existing.find(name) != std::string::npos || name.find(existing) != std::string::npos) {
+                            if (existing != name) isDuplicate = true;
+                        }
+                    }
+                    if (!isDuplicate) {
+                        bankNames.push_back(name);
+                    }
+                }
+                pos = end;
+            }
+        }
+        pos++;
+    }
+    int mapped = 0;
+    for (const auto& name : bankNames) {
+        uint32_t hash = fnv1Hash(name);
+        if (mBankIdToName.find(hash) == mBankIdToName.end()) {
+            mBankIdToName[hash] = name;
+            mapped++;
+        }
+    }
+    return mapped > 0;
+}
 bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size)
 {
-    WEM_DEBUG("=== loadAudioBnk called, size=" << size);
-
+    return loadAudioBnk(data, size, "");
+}
+bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size, const std::string& bankName)
+{
+    bool hasHirc = false;
+    bool hasDidx = false;
+    size_t checkPos = 0;
+    while (checkPos + 8 <= size) {
+        uint32_t secSize = rd_u32(data + checkPos + 4);
+        if (std::memcmp(data + checkPos, "HIRC", 4) == 0) hasHirc = true;
+        if (std::memcmp(data + checkPos, "DIDX", 4) == 0) hasDidx = true;
+        checkPos += 8 + secSize;
+    }
+    if (hasHirc && !hasDidx) {
+        HircParser testParser;
+        if (testParser.parse(data, size) &&
+            (testParser.getSounds().size() > 500 || testParser.getContainers().size() > 500)) {
+            for (const auto& [id, sound] : testParser.getSounds()) {
+                if (sound.sourceId != 0) {
+                    mSourceIdToSoundId[sound.sourceId] = id;
+                }
+            }
+            for (const auto& [containerId, container] : testParser.getContainers()) {
+                for (uint32_t childId : container.childIds) {
+                    mContainerToChildren[containerId].push_back(childId);
+                }
+            }
+            std::unordered_set<uint32_t> allObjIds;
+            for (const auto& [id, _] : testParser.getSounds()) {
+                allObjIds.insert(id);
+            }
+            for (const auto& [id, _] : testParser.getContainers()) {
+                allObjIds.insert(id);
+            }
+            for (const auto& [containerId, container] : testParser.getContainers()) {
+                for (uint32_t childId : container.childIds) {
+                    if (allObjIds.count(childId)) {
+                        mChildToParent[childId] = containerId;
+                    }
+                }
+            }
+            for (const auto& [soundId, sound] : testParser.getSounds()) {
+                if (sound.parentId != 0 && allObjIds.count(sound.parentId)) {
+                    if (mChildToParent.find(soundId) == mChildToParent.end()) {
+                        mChildToParent[soundId] = sound.parentId;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+    uint32_t bankId = 0;
+    std::string resolvedBankName = bankName;
+    if (size >= 16 && std::memcmp(data, "BKHD", 4) == 0) {
+        bankId = rd_u32(data + 12);
+        if (resolvedBankName.empty()) {
+            auto it = mBankIdToName.find(bankId);
+            if (it != mBankIdToName.end()) {
+                resolvedBankName = it->second;
+            }
+        }
+        if (!resolvedBankName.empty() && mBankIdToName.find(bankId) == mBankIdToName.end()) {
+            mBankIdToName[bankId] = resolvedBankName;
+        }
+    }
     size_t pos = 0;
     while (pos + 8 <= size) {
         uint32_t sectionSize = rd_u32(data + pos + 4);
@@ -478,7 +534,6 @@ bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size)
             const uint8_t* stid = data + pos + 8;
             uint32_t stringType = rd_u32(stid);
             uint32_t numStrings = rd_u32(stid + 4);
-            WEM_DEBUG("  Found STID section: " << numStrings << " strings");
             size_t strOffset = 8;
             for (uint32_t i = 0; i < numStrings && strOffset + 5 <= sectionSize; i++) {
                 uint32_t id = rd_u32(stid + strOffset);
@@ -487,9 +542,7 @@ bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size)
                     std::string name(reinterpret_cast<const char*>(stid + strOffset + 5), strLen);
                     if (!name.empty() && id != 0) {
                         mEventIdToName[id] = utf8_to_wstring_local(name);
-                        if (i < 5) {
-                            WEM_DEBUG("    STID: id=" << id << " name=" << name);
-                        }
+                        mBankIdToName[id] = name;
                     }
                 }
                 strOffset += 5 + strLen;
@@ -497,28 +550,8 @@ bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size)
         }
         pos += 8 + sectionSize;
     }
-
-    HircParser parser;
-    if (!parser.parse(data, size)) {
-        WEM_DEBUG("  FAILED: parser.parse() returned false");
-        return false;
-    }
-
-    WEM_DEBUG("  Parsed audio BNK: " << parser.getSounds().size() << " sounds, "
-              << parser.getActions().size() << " actions, "
-              << parser.getEvents().size() << " events, "
-              << parser.getContainers().size() << " containers");
-
-    std::unordered_set<uint32_t> soundSourceIds;
-    for (const auto& [id, sound] : parser.getSounds()) {
-        if (sound.sourceId != 0) {
-            soundSourceIds.insert(sound.sourceId);
-        }
-    }
-    WEM_DEBUG("  Unique sourceIds from Sound objects: " << soundSourceIds.size());
-
     pos = 0;
-    std::unordered_set<uint32_t> didxIds;
+    std::vector<uint32_t> didxIds;
     while (pos + 8 <= size) {
         uint32_t sectionSize = rd_u32(data + pos + 4);
         if (std::memcmp(data + pos, "DIDX", 4) == 0) {
@@ -526,80 +559,68 @@ bool WemNameResolver::loadAudioBnk(const uint8_t* data, size_t size)
             size_t numEntries = sectionSize / 12;
             for (size_t i = 0; i < numEntries; i++) {
                 uint32_t mediaId = rd_u32(didx + i * 12);
-                didxIds.insert(mediaId);
+                didxIds.push_back(mediaId);
+                if (bankId != 0) {
+                    mWemIdToBankId[mediaId] = bankId;
+                }
             }
         }
         pos += 8 + sectionSize;
     }
-
-    if (!didxIds.empty()) {
-        WEM_DEBUG("  DIDX entries (embedded wems): " << didxIds.size());
+    HircParser parser;
+    if (!parser.parse(data, size)) {
+        return !didxIds.empty();
     }
-
-    int newSources = 0;
     for (const auto& [id, sound] : parser.getSounds()) {
         if (sound.sourceId != 0) {
-            if (mSourceIdToSoundId.find(sound.sourceId) == mSourceIdToSoundId.end()) {
-                newSources++;
+            auto existing = mSourceIdToSoundId.find(sound.sourceId);
+            if (existing == mSourceIdToSoundId.end()) {
+                mSourceIdToSoundId[sound.sourceId] = id;
+            } else if (existing->second == sound.sourceId) {
+                mSourceIdToSoundId[sound.sourceId] = id;
             }
-            mSourceIdToSoundId[sound.sourceId] = id;
+            if (bankId != 0) {
+                mWemIdToBankId[sound.sourceId] = bankId;
+            }
         }
     }
-    WEM_DEBUG("  Added " << newSources << " new source->sound mappings, total=" << mSourceIdToSoundId.size());
-
     for (const auto& [id, container] : parser.getContainers()) {
         for (uint32_t childId : container.childIds) {
             mContainerToChildren[id].push_back(childId);
         }
     }
-
     for (const auto& [id, action] : parser.getActions()) {
         mActionToTarget[id] = action.targetId;
     }
-
     for (const auto& [id, event] : parser.getEvents()) {
         mEventToActions[id] = event.actionIds;
     }
-
     return true;
 }
-
 void WemNameResolver::finalize()
 {
-    WEM_DEBUG("=== finalize called");
-    WEM_DEBUG("  Before finalize:");
-    WEM_DEBUG("    mEventIdToName.size() = " << mEventIdToName.size());
-    WEM_DEBUG("    mSourceIdToSoundId.size() = " << mSourceIdToSoundId.size());
-    WEM_DEBUG("    mSoundIdToEventId.size() = " << mSoundIdToEventId.size());
-    WEM_DEBUG("    mContainerToChildren.size() = " << mContainerToChildren.size());
-    WEM_DEBUG("    mActionToTarget.size() = " << mActionToTarget.size());
-    WEM_DEBUG("    mEventToActions.size() = " << mEventToActions.size());
-
     for (const auto& [id, action] : mEventsParser.getActions()) {
         mActionToTarget[id] = action.targetId;
     }
-
     for (const auto& [id, event] : mEventsParser.getEvents()) {
         mEventToActions[id] = event.actionIds;
     }
-
     for (const auto& [id, container] : mEventsParser.getContainers()) {
         for (uint32_t childId : container.childIds) {
             mContainerToChildren[id].push_back(childId);
         }
     }
-
-    WEM_DEBUG("  After merging Events.bnk data:");
-    WEM_DEBUG("    mContainerToChildren.size() = " << mContainerToChildren.size());
-
     std::unordered_map<uint32_t, uint32_t> childToParent;
     for (const auto& [parentId, children] : mContainerToChildren) {
         for (uint32_t childId : children) {
             childToParent[childId] = parentId;
         }
     }
-    WEM_DEBUG("  childToParent.size() = " << childToParent.size());
-
+    for (const auto& [child, parent] : mChildToParent) {
+        if (childToParent.find(child) == childToParent.end()) {
+            childToParent[child] = parent;
+        }
+    }
     std::unordered_set<uint32_t> allActionTargets;
     for (const auto& [eventId, actionIds] : mEventToActions) {
         for (uint32_t actionId : actionIds) {
@@ -610,8 +631,10 @@ void WemNameResolver::finalize()
             }
         }
     }
-    WEM_DEBUG("  Direct action targets: " << allActionTargets.size());
-
+    std::unordered_set<uint32_t> soundObjIds;
+    for (const auto& [sourceId, soundId] : mSourceIdToSoundId) {
+        soundObjIds.insert(soundId);
+    }
     std::function<void(uint32_t, uint32_t, std::unordered_set<uint32_t>&)> collectAllDescendants;
     collectAllDescendants = [&](uint32_t nodeId, uint32_t eventId, std::unordered_set<uint32_t>& visited) {
         if (visited.count(nodeId)) return;
@@ -624,14 +647,11 @@ void WemNameResolver::finalize()
             }
         }
     };
-
     for (uint32_t target : allActionTargets) {
         uint32_t eventId = mSoundIdToEventId[target];
         std::unordered_set<uint32_t> visited;
         collectAllDescendants(target, eventId, visited);
     }
-    WEM_DEBUG("  After propagateDown: mSoundIdToEventId.size() = " << mSoundIdToEventId.size());
-
     std::function<uint32_t(uint32_t, std::unordered_set<uint32_t>&)> findEventViaAncestors;
     findEventViaAncestors = [&](uint32_t nodeId, std::unordered_set<uint32_t>& visited) -> uint32_t {
         if (visited.count(nodeId)) return 0;
@@ -644,109 +664,46 @@ void WemNameResolver::finalize()
         }
         return 0;
     };
-
-    int parentMappings = 0;
-    int noParentFound = 0;
-    int hasParentNoEvent = 0;
     for (const auto& [sourceId, soundId] : mSourceIdToSoundId) {
         if (mSoundIdToEventId.find(soundId) == mSoundIdToEventId.end()) {
             std::unordered_set<uint32_t> visited;
             uint32_t eventId = findEventViaAncestors(soundId, visited);
             if (eventId != 0) {
                 mSoundIdToEventId[soundId] = eventId;
-                parentMappings++;
-            } else {
-                auto parentIt = childToParent.find(soundId);
-                if (parentIt == childToParent.end()) {
-                    noParentFound++;
-                } else {
-                    hasParentNoEvent++;
-                }
             }
         }
     }
-    WEM_DEBUG("  Found " << parentMappings << " via parent traversal");
-    WEM_DEBUG("  No parent in hierarchy: " << noParentFound);
-    WEM_DEBUG("  Has parent but no event found: " << hasParentNoEvent);
-    WEM_DEBUG("  Final mSoundIdToEventId.size() = " << mSoundIdToEventId.size());
-
-    int resolvable = 0;
-    int noEventMapping = 0;
-    int noNameMapping = 0;
-    for (const auto& [sourceId, soundId] : mSourceIdToSoundId) {
-        auto evtIt = mSoundIdToEventId.find(soundId);
-        if (evtIt != mSoundIdToEventId.end()) {
-            auto nameIt = mEventIdToName.find(evtIt->second);
-            if (nameIt != mEventIdToName.end()) {
-                resolvable++;
-            } else {
-                noNameMapping++;
-            }
-        } else {
-            noEventMapping++;
-        }
-    }
-    WEM_DEBUG("  Resolution breakdown:");
-    WEM_DEBUG("    Fully resolvable: " << resolvable);
-    WEM_DEBUG("    Has event but no name: " << noNameMapping);
-    WEM_DEBUG("    No event mapping: " << noEventMapping);
-
     mLoaded = !mEventIdToName.empty() || !mSourceIdToSoundId.empty();
-    WEM_DEBUG("  mLoaded = " << mLoaded);
 }
-
 std::string WemNameResolver::resolve(uint32_t sourceMediaId) const
 {
-    static int resolveCallCount = 0;
-    static int resolvedCount = 0;
-    static int unresolvedCount = 0;
-    resolveCallCount++;
-
     auto srcIt = mSourceIdToSoundId.find(sourceMediaId);
     if (srcIt != mSourceIdToSoundId.end()) {
         uint32_t soundId = srcIt->second;
-
         auto evtIt = mSoundIdToEventId.find(soundId);
         if (evtIt != mSoundIdToEventId.end()) {
             uint32_t eventId = evtIt->second;
-
             auto nameIt = mEventIdToName.find(eventId);
             if (nameIt != mEventIdToName.end()) {
-                resolvedCount++;
                 return wstring_to_utf8_local(nameIt->second);
             }
         }
     }
-
     auto evtDirectIt = mSoundIdToEventId.find(sourceMediaId);
     if (evtDirectIt != mSoundIdToEventId.end()) {
         auto nameIt = mEventIdToName.find(evtDirectIt->second);
         if (nameIt != mEventIdToName.end()) {
-            resolvedCount++;
             return wstring_to_utf8_local(nameIt->second);
         }
     }
-
     auto directNameIt = mEventIdToName.find(sourceMediaId);
     if (directNameIt != mEventIdToName.end()) {
-        resolvedCount++;
         return wstring_to_utf8_local(directNameIt->second);
     }
-
-    unresolvedCount++;
-    if (unresolvedCount <= 50) {
-        WEM_DEBUG("resolve(" << sourceMediaId << "): UNRESOLVED");
-    }
-    if (resolveCallCount % 1000 == 0) {
-        WEM_DEBUG("resolve stats: calls=" << resolveCallCount << " resolved=" << resolvedCount << " unresolved=" << unresolvedCount);
-    }
-
     return std::to_string(sourceMediaId);
 }
-
 void WemNameResolver::clear()
 {
-    WEM_DEBUG("=== clear() called");
     mLoaded = false;
     mEventIdToName.clear();
     mSourceIdToSoundId.clear();
@@ -754,7 +711,10 @@ void WemNameResolver::clear()
     mContainerToChildren.clear();
     mActionToTarget.clear();
     mEventToActions.clear();
+    mWemIdToBankId.clear();
+    mBankIdToName.clear();
+    mChildToParent.clear();
     mEventsParser = HircParser();
+    mStructureParser = HircParser();
 }
-
 }

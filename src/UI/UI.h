@@ -70,6 +70,10 @@ struct AppState {
 
     ID3D11Device* device = nullptr;
     ID3D11DeviceContext* context = nullptr;
+
+    bool audioInitRequested = false;
+    bool audioInitComplete = false;
+    std::string audioInitStatus;
 };
 
 void InitUI(AppState& state);

@@ -120,6 +120,7 @@ namespace UI_ContentBrowser {
     extern uint64_t sCurrentGeneration;
     extern std::condition_variable sQueueCV;
 
+    void InitializeAudioDatabase(AppState& state);
     void LoadWemNameLookup(const std::vector<ArchivePtr>& archives);
     std::string GetWemDisplayName(uint32_t id);
 
