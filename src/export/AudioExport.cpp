@@ -1,8 +1,11 @@
 #include "AudioExport.h"
+#include "../UI/FileOps.h"
 #include "Wwise/WwiseVorbisDecoder.h"
 #include <fstream>
 #include <cstring>
 #include <vector>
+#include <algorithm>
+#include <filesystem>
 
 struct stb_vorbis;
 struct stb_vorbis_info {
@@ -432,6 +435,55 @@ bool AudioExport::ExportWEMToWAV(const uint8_t* wemData, size_t wemSize, const s
     file.write((const char*)header, 44);
     file.write((const char*)pcm.data(), dataSize);
 
+    s_lastError.clear();
+    return true;
+}
+
+std::string AudioExport::SanitizeFilename(const std::string& name)
+{
+    std::string result;
+    result.reserve(name.size());
+    for (char c : name) {
+        if (c == '<' || c == '>' || c == ':' || c == '"' ||
+            c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') {
+            result += '_';
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+std::string AudioExport::GetExportFilename(uint32_t wemId, const std::string& extension)
+{
+    std::string resolved = UI_ContentBrowser::GetWemDisplayName(wemId);
+    if (resolved.empty() || resolved == std::to_string(wemId)) {
+        return std::to_string(wemId) + extension;
+    }
+    return SanitizeFilename(resolved) + "_" + std::to_string(wemId) + extension;
+}
+
+bool AudioExport::ExportWEMToWAV(const uint8_t* wemData, size_t wemSize, uint32_t wemId,
+                                  const std::string& outputDir, std::string& outFilepath)
+{
+    std::string filename = GetExportFilename(wemId, ".wav");
+    outFilepath = (std::filesystem::path(outputDir) / filename).string();
+    return ExportWEMToWAV(wemData, wemSize, outFilepath);
+}
+
+bool AudioExport::ExportWEMRaw(const uint8_t* wemData, size_t wemSize, uint32_t wemId,
+                                const std::string& outputDir, std::string& outFilepath)
+{
+    std::string filename = GetExportFilename(wemId, ".wem");
+    outFilepath = (std::filesystem::path(outputDir) / filename).string();
+
+    std::ofstream file(outFilepath, std::ios::binary);
+    if (!file.is_open()) {
+        s_lastError = "Failed to create file: " + outFilepath;
+        return false;
+    }
+
+    file.write(reinterpret_cast<const char*>(wemData), wemSize);
     s_lastError.clear();
     return true;
 }

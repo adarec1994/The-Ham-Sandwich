@@ -396,7 +396,11 @@ namespace UI_ContentBrowser {
 
                         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                         {
-                            ImGui::SetTooltip("%s", file.name.c_str());
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+                            ImGui::BeginTooltip();
+                            ImGui::TextUnformatted(file.name.c_str());
+                            ImGui::EndTooltip();
+                            ImGui::PopStyleVar();
                         }
 
                         if (file.extension == ".m3" && !file.isDirectory)
