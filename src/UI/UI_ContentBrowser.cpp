@@ -10,7 +10,7 @@
 #include "../export/M3Export.h"
 #include "../export/TerrainExport.h"
 #include "../tex/tex.h"
-#include "../audio/AudioPlayer.h"
+#include "../Audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
 #include "../export/AudioExport.h"
 #include "../Database/Tbl.h"
@@ -709,9 +709,6 @@ namespace UI_ContentBrowser {
                     memcpy(sectionId, data + pos, 4);
                     uint32_t sectionSize = *(uint32_t*)(data + pos + 4);
 
-                    // Sanity check
-                    if (sectionSize > size - pos - 8) break;
-
                     if (memcmp(sectionId, "DIDX", 4) == 0) {
                         const uint8_t* didx = data + pos + 8;
                         size_t numEntries = sectionSize / 12;
@@ -736,12 +733,6 @@ namespace UI_ContentBrowser {
                     sBnkViewName = file.name;
                     sBnkViewArchive = file.archive;
                     sNeedsRefresh = true;
-                }
-                else
-                {
-                    sNotificationSuccess = false;
-                    sNotificationMessage = "BNK contains no embedded audio";
-                    sNotificationTimer = 3.0f;
                 }
             }
         }

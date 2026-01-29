@@ -1,9 +1,9 @@
 #include "AudioPlayer.h"
-#include "wwise/WwiseVorbisDecoder.h"
+#include "Wwise/WwiseVorbisDecoder.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <Windows.h>
+#include <windows.h>
 #include <xaudio2.h>
 #include <fstream>
 #include <cstring>

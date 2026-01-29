@@ -1,4 +1,4 @@
-#include "BNK_Hirc.h"
+#include "BNK_hirc.h"
 #include "../Database/Tbl.h"
 #include <cstring>
 #include <algorithm>

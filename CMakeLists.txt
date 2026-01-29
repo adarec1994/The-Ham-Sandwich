@@ -151,10 +151,7 @@ set(HAM_SANDWICH_SOURCES
 
         src/Audio/AudioPlayer.cpp
         src/Audio/AudioPlayer.h
-        src/Audio/BNKReader.cpp
-        src/Audio/BNKReader.h
-        src/Audio/WEMExtractor.cpp
-        src/Audio/WEMExtractor.h
+
         src/Audio/Wwise/WwiseVorbisDecoder.cpp
         src/Audio/Wwise/WwiseVorbisDecoder.h
 
@@ -386,7 +383,7 @@ if(WIN32)
             d3dcompiler
             dxgi
             dwmapi
-            xaudio2
+            ole32
     )
 else()
     find_package(OpenGL REQUIRED)

@@ -1,5 +1,5 @@
 #include "AudioExport.h"
-#include "wwise/WwiseVorbisDecoder.h"
+#include "Wwise/WwiseVorbisDecoder.h"
 #include <fstream>
 #include <cstring>
 #include <vector>
