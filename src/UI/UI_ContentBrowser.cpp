@@ -4,6 +4,7 @@
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 #include "UI_Tables.h"
+#include "../resource.h"
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
 #include "../models/M3Loader.h"
@@ -231,13 +232,13 @@ namespace UI_ContentBrowser {
         ProcessThumbnailResults();
 
         if (!sFolderIcon)
-            sFolderIcon = UI_Utils::LoadTexture("Assets/Icons/Folder.png");
+            sFolderIcon = UI_Utils::LoadTextureFromResource(IDR_ICON_FOLDER);
         if (!sTblIcon)
-            sTblIcon = UI_Utils::LoadTexture("Assets/Icons/Tbl.png");
+            sTblIcon = UI_Utils::LoadTextureFromResource(IDR_ICON_TBL);
         if (!sAreaIcon)
-            sAreaIcon = UI_Utils::LoadTexture("Assets/Icons/Area.png");
+            sAreaIcon = UI_Utils::LoadTextureFromResource(IDR_ICON_AREA);
         if (!sAudioIcon)
-            sAudioIcon = UI_Utils::LoadTexture("Assets/Icons/Audio.png");
+            sAudioIcon = UI_Utils::LoadTextureFromResource(IDR_ICON_AUDIO);
 
         if (ImGui::BeginChild("FileBrowser", ImVec2(0, 0), true))
         {
@@ -1005,7 +1006,7 @@ namespace UI_ContentBrowser {
         }
 
         if (!sContentBrowserIcon)
-            sContentBrowserIcon = UI_Utils::LoadTexture("Assets/Icons/ContentBrowser.png");
+            sContentBrowserIcon = UI_Utils::LoadTextureFromResource(IDR_ICON_CONTENTBROWSER);
 
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         float dt = ImGui::GetIO().DeltaTime;

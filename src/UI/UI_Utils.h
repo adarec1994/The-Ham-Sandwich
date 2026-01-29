@@ -10,4 +10,5 @@ bool ContainsLowerFast(const std::string& hayLower, const std::string& needleLow
 
 namespace UI_Utils {
     ImTextureID LoadTexture(const char* filename);
+    ImTextureID LoadTextureFromResource(int resourceId);
 }

@@ -111,4 +111,69 @@ namespace UI_Utils {
 
         return reinterpret_cast<ImTextureID>(srv);
     }
+
+    ImTextureID LoadTextureFromResource(int resourceId)
+    {
+#ifdef _WIN32
+        if (!gDevice) return (ImTextureID)0;
+
+        HRSRC hRes = FindResource(nullptr, MAKEINTRESOURCE(resourceId), RT_RCDATA);
+        if (!hRes) return (ImTextureID)0;
+
+        HGLOBAL hMem = LoadResource(nullptr, hRes);
+        if (!hMem) return (ImTextureID)0;
+
+        DWORD dataSize = SizeofResource(nullptr, hRes);
+        const void* data = LockResource(hMem);
+        if (!data) return (ImTextureID)0;
+
+        int width, height;
+        unsigned char* imageData = stbi_load_from_memory(
+            static_cast<const unsigned char*>(data),
+            static_cast<int>(dataSize),
+            &width, &height, nullptr, 4);
+
+        if (!imageData)
+            return (ImTextureID)0;
+
+        D3D11_TEXTURE2D_DESC texDesc = {};
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = 1;
+        texDesc.ArraySize = 1;
+        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        texDesc.SampleDesc.Count = 1;
+        texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = imageData;
+        initData.SysMemPitch = width * 4;
+
+        ID3D11Texture2D* texture = nullptr;
+        HRESULT hr = gDevice->CreateTexture2D(&texDesc, &initData, &texture);
+        stbi_image_free(imageData);
+
+        if (FAILED(hr) || !texture)
+            return (ImTextureID)0;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        ID3D11ShaderResourceView* srv = nullptr;
+        hr = gDevice->CreateShaderResourceView(texture, &srvDesc, &srv);
+        texture->Release();
+
+        if (FAILED(hr))
+            return (ImTextureID)0;
+
+        return reinterpret_cast<ImTextureID>(srv);
+#else
+        (void)resourceId;
+        return (ImTextureID)0;
+#endif
+    }
 }
