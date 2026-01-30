@@ -1,4 +1,5 @@
 #include "TerrainShader.h"
+#include "Settings.h"
 
 namespace TerrainShader
 {
@@ -38,14 +39,13 @@ PSInput main(VSInput input)
 {
     PSInput output;
 
-    // Model from DirectXMath: row-vector convention (v * M)
     float4 worldPos = mul(float4(input.position, 1.0), model);
     output.fragPos = worldPos.xyz;
 
     float3x3 normalMatrix = (float3x3)model;
-    output.normal = normalize(mul(input.normal, normalMatrix));
+    output.normal = normalize(mul(normalMatrix, input.normal));
 
-    float3 T = normalize(mul(input.tangent.xyz, normalMatrix));
+    float3 T = normalize(mul(normalMatrix, input.tangent.xyz));
     float3 N = output.normal;
     float3 B = cross(N, T) * input.tangent.w;
 
@@ -55,7 +55,6 @@ PSInput main(VSInput input)
     output.texCoord = input.texCoord;
     output.blendCoord = input.texCoord;
 
-    // View/Proj from GLM: column-vector convention (M * v)
     float4 viewPos = mul(view, worldPos);
     output.position = mul(projection, viewPos);
 
@@ -89,6 +88,7 @@ Texture2D layer3Normal : register(t9);
 
 SamplerState samplerWrap : register(s0);
 SamplerState samplerClamp : register(s1);
+SamplerState samplerNormal : register(s2);
 
 struct PSInput
 {
@@ -136,8 +136,13 @@ float4 main(PSInput input) : SV_TARGET
 
     float3 blendedNormal = normalize(n0 * blend.r + n1 * blend.g + n2 * blend.b + n3 * blend.a);
 
-    float3x3 TBN = float3x3(input.tangent, input.bitangent, input.normal);
-    float3 worldNormal = normalize(mul(blendedNormal, TBN));
+    float3 N = normalize(input.normal);
+
+    float3 worldNormal = normalize(float3(
+        N.x + blendedNormal.x * 0.15,
+        N.y,
+        N.z + blendedNormal.y * 0.15
+    ));
 
     if (hasColorMap > 0)
     {
@@ -199,9 +204,8 @@ float4 main(PSInput input) : SV_TARGET
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
 
-        hr = device->CreateInputLayout(layout, _countof(layout),
-                                       vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
-                                       &out.inputLayout);
+        hr = device->CreateInputLayout(layout, 4, vsBlob->GetBufferPointer(),
+                                       vsBlob->GetBufferSize(), &out.inputLayout);
         if (FAILED(hr)) return false;
 
         D3D11_BUFFER_DESC cbDesc = {};
@@ -213,23 +217,49 @@ float4 main(PSInput input) : SV_TARGET
         hr = device->CreateBuffer(&cbDesc, nullptr, &out.constantBuffer);
         if (FAILED(hr)) return false;
 
+        const GraphicsSettings& gfxSettings = GetGraphicsSettings();
+
         D3D11_SAMPLER_DESC sampDesc = {};
+
+        if (gfxSettings.anisotropicFiltering)
+        {
+            sampDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+            sampDesc.MaxAnisotropy = gfxSettings.anisotropicLevel;
+        }
+        else
+        {
+            sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            sampDesc.MaxAnisotropy = 1;
+        }
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampDesc.MinLOD = 0;
+        sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+        sampDesc.MipLODBias = 0.0f;
+
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerWrap);
+        if (FAILED(hr)) return false;
+
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.MaxAnisotropy = 1;
+        sampDesc.MipLODBias = 0.0f;
+
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerClamp);
+        if (FAILED(hr)) return false;
+
         sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
         sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
         sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
         sampDesc.MaxAnisotropy = 1;
-        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-        sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+        sampDesc.MipLODBias = 0.0f;
 
-        hr = device->CreateSamplerState(&sampDesc, &out.samplerWrap);
-        if (FAILED(hr)) return false;
-
-        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-
-        hr = device->CreateSamplerState(&sampDesc, &out.samplerClamp);
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerNormal);
         if (FAILED(hr)) return false;
 
         return true;

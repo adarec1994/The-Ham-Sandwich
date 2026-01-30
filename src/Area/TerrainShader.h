@@ -30,6 +30,7 @@ namespace TerrainShader
         ComPtr<ID3D11Buffer> constantBuffer;
         ComPtr<ID3D11SamplerState> samplerWrap;
         ComPtr<ID3D11SamplerState> samplerClamp;
+        ComPtr<ID3D11SamplerState> samplerNormal;
     };
 
     bool CreateShaders(ID3D11Device* device, ShaderResources& out);

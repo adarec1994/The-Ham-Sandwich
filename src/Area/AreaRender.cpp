@@ -24,7 +24,7 @@ void AreaRender::init(ID3D11Device* device)
     rasterDesc.DepthBias = 0;
     rasterDesc.DepthBiasClamp = 0.0f;
     rasterDesc.SlopeScaledDepthBias = 0.0f;
-    rasterDesc.DepthClipEnable = FALSE;
+    rasterDesc.DepthClipEnable = TRUE;
     rasterDesc.ScissorEnable = FALSE;
     rasterDesc.MultisampleEnable = FALSE;
     rasterDesc.AntialiasedLineEnable = FALSE;
@@ -73,8 +73,8 @@ void AreaRender::bind(ID3D11DeviceContext* context)
     context->VSSetConstantBuffers(0, 1, mResources.constantBuffer.GetAddressOf());
     context->PSSetConstantBuffers(0, 1, mResources.constantBuffer.GetAddressOf());
 
-    ID3D11SamplerState* samplers[] = {mResources.samplerWrap.Get(), mResources.samplerClamp.Get()};
-    context->PSSetSamplers(0, 2, samplers);
+    ID3D11SamplerState* samplers[] = {mResources.samplerWrap.Get(), mResources.samplerClamp.Get(), mResources.samplerNormal.Get()};
+    context->PSSetSamplers(0, 3, samplers);
 
     context->RSSetState(mRasterState.Get());
     context->OMSetDepthStencilState(mDepthState.Get(), 0);
