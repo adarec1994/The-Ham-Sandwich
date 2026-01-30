@@ -337,6 +337,8 @@ set(HAM_SANDWICH_SOURCES
         src/Audio/Wwise/WwiseCodebookData.h
         src/UI/FileOps.cpp
         src/UI/FileOps.h
+        src/Area/Heightmap.cpp
+        src/Area/Heightmap.h
 )
 
 if(WIN32)

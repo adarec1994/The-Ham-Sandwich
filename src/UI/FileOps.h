@@ -138,17 +138,6 @@ namespace UI_ContentBrowser {
     void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry);
     void LoadAllAreasInFolder(AppState& state);
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry);
-    void SetPendingSingleHeightmapExport(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name);
-    void SetPendingAllHeightmapExport(const std::string& folderName);
-    void GenerateSingleAreaHeightmap(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name);
-    void GenerateAllAreasHeightmap(const std::string& folderName);
-    bool IsCompositeHeightmapGenerating();
-    float GetCompositeHeightmapProgress();
-    bool IsCompositeHeightmapReady();
-    void ViewSingleAreaHeightmap(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name);
-    void ViewAllAreasHeightmap(AppState& state, const std::string& folderName);
-    void DrawHeightmapViewer();
-    void ExportHeightmapToFile(const std::string& path, const std::string& format);
     void HandleFileOpen(AppState& state, const FileInfo& file);
     IFileSystemEntryPtr FindFolderByPath(const IFileSystemEntryPtr& root, const std::vector<std::string>& pathParts, size_t startIndex = 0);
     std::vector<std::string> SplitPath(const std::string& path);

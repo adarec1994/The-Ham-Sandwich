@@ -7,6 +7,7 @@
 #include "../resource.h"
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
+#include "../Area/Heightmap.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../export/M3Export.h"
@@ -579,7 +580,7 @@ namespace UI_ContentBrowser {
                                 {
                                     auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                                     if (fe)
-                                        ViewSingleAreaHeightmap(state, file.archive, fe, baseName);
+                                        Heightmap::ViewSingleAreaHeightmap(state, file.archive, fe, baseName);
                                 }
 
                                 if (ImGui::BeginMenu("Extract Heightmap"))
@@ -587,7 +588,7 @@ namespace UI_ContentBrowser {
                                     auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                                     if (ImGui::MenuItem("PNG"))
                                     {
-                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = baseName + "_heightmap.png";
@@ -596,7 +597,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("JPEG"))
                                     {
-                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = baseName + "_heightmap.jpg";
@@ -605,7 +606,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("BMP"))
                                     {
-                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = baseName + "_heightmap.bmp";
@@ -614,7 +615,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("TGA"))
                                     {
-                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = baseName + "_heightmap.tga";
@@ -962,14 +963,14 @@ namespace UI_ContentBrowser {
 
                                 if (ImGui::MenuItem("View Heightmap"))
                                 {
-                                    ViewAllAreasHeightmap(state, folderName);
+                                    Heightmap::ViewAllAreasHeightmap(state, folderName, sCurrentGeneration);
                                 }
 
                                 if (ImGui::BeginMenu("Extract Heightmap"))
                                 {
                                     if (ImGui::MenuItem("PNG"))
                                     {
-                                        SetPendingAllHeightmapExport(folderName);
+                                        Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = folderName + "_heightmap.png";
@@ -978,7 +979,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("JPEG"))
                                     {
-                                        SetPendingAllHeightmapExport(folderName);
+                                        Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = folderName + "_heightmap.jpg";
@@ -987,7 +988,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("BMP"))
                                     {
-                                        SetPendingAllHeightmapExport(folderName);
+                                        Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = folderName + "_heightmap.bmp";
@@ -996,7 +997,7 @@ namespace UI_ContentBrowser {
                                     }
                                     if (ImGui::MenuItem("TGA"))
                                     {
-                                        SetPendingAllHeightmapExport(folderName);
+                                        Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
                                         config.path = ".";
                                         config.fileName = folderName + "_heightmap.tga";
@@ -2026,7 +2027,7 @@ namespace UI_ContentBrowser {
             ImGui::End();
         }
 
-        DrawHeightmapViewer();
+        Heightmap::DrawHeightmapViewer(sCurrentGeneration);
     }
 
     void NavigateToPath(AppState& state, const std::string& folderPath)
