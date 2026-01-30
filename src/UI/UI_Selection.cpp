@@ -133,6 +133,8 @@ void CheckAreaSelection(AppState& state)
 
             for (size_t i = 0; i < skyCount; i++)
             {
+                if (!skyMgr.isSkyModelVisible(static_cast<int>(i))) continue;
+
                 M3Render* m3 = skyMgr.getSkyboxM3(i);
                 if (!m3 || m3->getSubmeshCount() == 0) continue;
 
@@ -337,6 +339,44 @@ bool IsSkyModelSelected(int index)
     return gSelectedSkyModelIndex >= 0 && gSelectedSkyModelIndex == index;
 }
 
+void HideSelectedSkyModel()
+{
+    if (gSelectedSkyModelIndex >= 0)
+    {
+        Sky::Manager::Instance().hideSkyModel(gSelectedSkyModelIndex);
+        ClearSkyModelSelection();
+    }
+}
+
+void ShowAllHiddenSkyModels()
+{
+    Sky::Manager::Instance().showAllHiddenSkyModels();
+}
+
+void DeleteSelectedSkyModel()
+{
+    if (gSelectedSkyModelIndex >= 0)
+    {
+        Sky::Manager::Instance().deleteSkyModel(gSelectedSkyModelIndex);
+        ClearSkyModelSelection();
+    }
+}
+
+bool IsSkyModelHidden(int index)
+{
+    return Sky::Manager::Instance().isSkyModelHidden(index);
+}
+
+bool IsSkyModelDeleted(int index)
+{
+    return Sky::Manager::Instance().isSkyModelDeleted(index);
+}
+
+bool IsSkyModelVisible(int index)
+{
+    return Sky::Manager::Instance().isSkyModelVisible(index);
+}
+
 void HandleGlobalKeys(AppState& state)
 {
     if (ImGui::IsKeyPressed(ImGuiKey_Escape))
@@ -365,16 +405,23 @@ void HandleGlobalKeys(AppState& state)
 
     if (ImGui::IsKeyPressed(ImGuiKey_H) && !ImGui::GetIO().KeyCtrl)
     {
-        HideSelectedProp();
+        if (gSelectedSkyModelIndex >= 0)
+            HideSelectedSkyModel();
+        else
+            HideSelectedProp();
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_H) && ImGui::GetIO().KeyCtrl)
     {
         ShowAllHiddenProps();
+        ShowAllHiddenSkyModels();
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Delete))
     {
-        DeleteSelectedProp();
+        if (gSelectedSkyModelIndex >= 0)
+            DeleteSelectedSkyModel();
+        else
+            DeleteSelectedProp();
     }
 }

@@ -343,6 +343,42 @@ M3Render* Manager::getSelectedSkyModel()
     return mSkyboxM3s[mSelectedSkyModelIndex].get();
 }
 
+void Manager::hideSkyModel(int index)
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    mHiddenSkyModels.insert(index);
+}
+
+void Manager::showAllHiddenSkyModels()
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    mHiddenSkyModels.clear();
+}
+
+void Manager::deleteSkyModel(int index)
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    mDeletedSkyModels.insert(index);
+}
+
+bool Manager::isSkyModelHidden(int index) const
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mHiddenSkyModels.count(index) > 0;
+}
+
+bool Manager::isSkyModelDeleted(int index) const
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mDeletedSkyModels.count(index) > 0;
+}
+
+bool Manager::isSkyModelVisible(int index) const
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    return mHiddenSkyModels.count(index) == 0 && mDeletedSkyModels.count(index) == 0;
+}
+
 size_t Manager::getSkyboxM3Count() const
 {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -387,6 +423,9 @@ void Manager::render(const glm::mat4& view, const glm::mat4& proj, const glm::ve
 
     for (size_t i = 0; i < mSkyboxM3s.size(); i++)
     {
+        if (mHiddenSkyModels.count(static_cast<int>(i)) > 0 || mDeletedSkyModels.count(static_cast<int>(i)) > 0)
+            continue;
+
         auto& m3 = mSkyboxM3s[i];
         if (!m3 || m3->getSubmeshCount() == 0) continue;
 

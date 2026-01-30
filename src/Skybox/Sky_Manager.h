@@ -64,6 +64,13 @@ public:
     void setSelectedSkyModelIndex(int idx) { mSelectedSkyModelIndex = idx; }
     M3Render* getSelectedSkyModel();
 
+    void hideSkyModel(int index);
+    void showAllHiddenSkyModels();
+    void deleteSkyModel(int index);
+    bool isSkyModelHidden(int index) const;
+    bool isSkyModelDeleted(int index) const;
+    bool isSkyModelVisible(int index) const;
+
     std::vector<std::wstring> getSkyModelPaths() const;
 
     bool isLoading() const { return mIsLoading; }
@@ -90,6 +97,8 @@ private:
     std::set<std::wstring> mLoadedModelPaths;
     std::vector<std::wstring> mSkyModelPathsOrdered;
     int mSelectedSkyModelIndex = -1;
+    std::set<int> mHiddenSkyModels;
+    std::set<int> mDeletedSkyModels;
     std::atomic<bool> mIsLoading{false};
 
     uint32_t mTimeOfDayMs = 12 * 3600000;
