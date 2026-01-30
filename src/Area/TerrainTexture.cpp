@@ -1,453 +1,248 @@
-#define NOMINMAX
-#include "TerrainTexture.h"
-#include "../Archive.h"
-#include "../tex/tex.h"
-#include "../Database/Tbl.h"
-#include "../Database/TblReader.h"
-#include "../Database/Definitions/WorldLayer.h"
-#include <cstring>
-#include <functional>
-#include <cwctype>
-#include <algorithm>
-#include <cctype>
+#include "TerrainShader.h"
 
-namespace TerrainTexture
+namespace TerrainShader
 {
-    Manager& Manager::Instance()
+    const char* VertexSource = R"(
+cbuffer TerrainCB : register(b0)
+{
+    row_major matrix view;
+    row_major matrix projection;
+    row_major matrix model;
+    float4 texScale;
+    float4 highlightColor;
+    float4 baseColor;
+    float3 camPosition;
+    int hasColorMap;
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+    float4 tangent : TANGENT;
+    float2 texCoord : TEXCOORD0;
+};
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 fragPos : TEXCOORD0;
+    float3 normal : TEXCOORD1;
+    float2 texCoord : TEXCOORD2;
+    float2 blendCoord : TEXCOORD3;
+    float3 tangent : TEXCOORD4;
+    float3 bitangent : TEXCOORD5;
+};
+
+PSInput main(VSInput input)
+{
+    PSInput output;
+
+    float4 worldPos = mul(float4(input.position, 1.0), model);
+    output.fragPos = worldPos.xyz;
+
+    float3x3 normalMatrix = (float3x3)model;
+    output.normal = normalize(mul(input.normal, normalMatrix));
+
+    float3 T = normalize(mul(input.tangent.xyz, normalMatrix));
+    float3 N = output.normal;
+    float3 B = cross(N, T) * input.tangent.w;
+
+    output.tangent = T;
+    output.bitangent = B;
+
+    output.texCoord = input.texCoord;
+    output.blendCoord = input.texCoord;
+
+    float4 viewPos = mul(view, worldPos);
+    output.position = mul(projection, viewPos);
+
+    return output;
+}
+)";
+
+    const char* FragmentSource = R"(
+cbuffer TerrainCB : register(b0)
+{
+    row_major matrix view;
+    row_major matrix projection;
+    row_major matrix model;
+    float4 texScale;
+    float4 highlightColor;
+    float4 baseColor;
+    float3 camPosition;
+    int hasColorMap;
+};
+
+Texture2D blendMap : register(t0);
+Texture2D colorMap : register(t1);
+Texture2D layer0 : register(t2);
+Texture2D layer1 : register(t3);
+Texture2D layer2 : register(t4);
+Texture2D layer3 : register(t5);
+Texture2D layer0Normal : register(t6);
+Texture2D layer1Normal : register(t7);
+Texture2D layer2Normal : register(t8);
+Texture2D layer3Normal : register(t9);
+
+SamplerState samplerWrap : register(s0);
+SamplerState samplerClamp : register(s1);
+
+struct PSInput
+{
+    float4 position : SV_POSITION;
+    float3 fragPos : TEXCOORD0;
+    float3 normal : TEXCOORD1;
+    float2 texCoord : TEXCOORD2;
+    float2 blendCoord : TEXCOORD3;
+    float3 tangent : TEXCOORD4;
+    float3 bitangent : TEXCOORD5;
+};
+
+float3 sampleNormal(Texture2D normalTex, float2 uv)
+{
+    float3 n = normalTex.Sample(samplerWrap, uv).rgb;
+    return normalize(n * 2.0 - 1.0);
+}
+
+float4 main(PSInput input) : SV_TARGET
+{
+    float4 blend = blendMap.Sample(samplerClamp, input.blendCoord);
+
+    float blendSum = blend.r + blend.g + blend.b + blend.a;
+    if (blendSum > 0.001)
+        blend /= blendSum;
+    else
+        blend = float4(1.0, 0.0, 0.0, 0.0);
+
+    float2 uv0 = input.texCoord * texScale.x;
+    float2 uv1 = input.texCoord * texScale.y;
+    float2 uv2 = input.texCoord * texScale.z;
+    float2 uv3 = input.texCoord * texScale.w;
+
+    float4 col0 = layer0.Sample(samplerWrap, uv0);
+    float4 col1 = layer1.Sample(samplerWrap, uv1);
+    float4 col2 = layer2.Sample(samplerWrap, uv2);
+    float4 col3 = layer3.Sample(samplerWrap, uv3);
+
+    float4 diffuse = col0 * blend.r + col1 * blend.g + col2 * blend.b + col3 * blend.a;
+
+    float3 n0 = sampleNormal(layer0Normal, uv0);
+    float3 n1 = sampleNormal(layer1Normal, uv1);
+    float3 n2 = sampleNormal(layer2Normal, uv2);
+    float3 n3 = sampleNormal(layer3Normal, uv3);
+
+    float3 blendedNormal = normalize(n0 * blend.r + n1 * blend.g + n2 * blend.b + n3 * blend.a);
+
+    float3x3 TBN = float3x3(input.tangent, input.bitangent, input.normal);
+    float3 worldNormal = normalize(mul(blendedNormal, TBN));
+
+    if (hasColorMap > 0)
     {
-        static Manager instance;
-        return instance;
+        float4 tint = colorMap.Sample(samplerClamp, input.blendCoord);
+        diffuse.rgb *= tint.rgb * 2.0;
     }
 
-    Manager::~Manager()
+    float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
+    float NdotL = max(dot(worldNormal, lightDir), 0.0);
+
+    float3 ambient = float3(0.3, 0.3, 0.3);
+    float3 lighting = ambient + float3(0.7, 0.7, 0.7) * NdotL;
+
+    float3 finalColor = diffuse.rgb * lighting * baseColor.rgb;
+
+    if (highlightColor.a > 0.0)
     {
-        ClearCache();
+        finalColor = lerp(finalColor, highlightColor.rgb, highlightColor.a * 0.3);
     }
 
-    void Manager::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context)
+    return float4(finalColor, 1.0);
+}
+)";
+
+    bool CreateShaders(ID3D11Device* device, ShaderResources& out)
     {
-        mDevice = device;
-        mContext = context;
-    }
+        if (!device) return false;
 
-    void Manager::ClearCache()
-    {
-        mPathTextureCache.clear();
-        mTextureCache.clear();
-        mFallbackWhite.Reset();
-        mFallbackNormal.Reset();
-    }
+        UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#ifdef _DEBUG
+        flags |= D3DCOMPILE_DEBUG;
+#endif
 
-    static std::wstring ToLowerW(const std::wstring& s)
-    {
-        std::wstring result;
-        result.reserve(s.size());
-        for (wchar_t c : s)
-            result += static_cast<wchar_t>(std::towlower(c));
-        return result;
-    }
+        ComPtr<ID3DBlob> vsBlob;
+        ComPtr<ID3DBlob> vsError;
+        HRESULT hr = D3DCompile(VertexSource, strlen(VertexSource), "TerrainVS", nullptr, nullptr,
+                                "main", "vs_5_0", flags, 0, &vsBlob, &vsError);
+        if (FAILED(hr)) return false;
 
-    static FileEntryPtr FindFileRecursive(const IFileSystemEntryPtr& entry, const std::wstring& targetLower)
-    {
-        if (!entry) return nullptr;
+        ComPtr<ID3DBlob> psBlob;
+        ComPtr<ID3DBlob> psError;
+        hr = D3DCompile(FragmentSource, strlen(FragmentSource), "TerrainPS", nullptr, nullptr,
+                        "main", "ps_5_0", flags, 0, &psBlob, &psError);
+        if (FAILED(hr)) return false;
 
-        if (!entry->isDirectory())
+        hr = device->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+                                        nullptr, &out.vertexShader);
+        if (FAILED(hr)) return false;
+
+        hr = device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(),
+                                       nullptr, &out.pixelShader);
+        if (FAILED(hr)) return false;
+
+        D3D11_INPUT_ELEMENT_DESC layout[] =
         {
-            std::wstring name = entry->getEntryName();
-            std::wstring nameLower = ToLowerW(name);
-            if (nameLower.find(targetLower) != std::wstring::npos)
-            {
-                return std::dynamic_pointer_cast<FileEntry>(entry);
-            }
-            return nullptr;
-        }
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        };
 
-        for (const auto& child : entry->getChildren())
-        {
-            auto result = FindFileRecursive(child, targetLower);
-            if (result) return result;
-        }
-        return nullptr;
-    }
+        hr = device->CreateInputLayout(layout, _countof(layout),
+                                       vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+                                       &out.inputLayout);
+        if (FAILED(hr)) return false;
 
-    static std::string WideToNarrow(const std::wstring& wide)
-    {
-        std::string result;
-        result.reserve(wide.size());
-        for (wchar_t c : wide)
-        {
-            if (c < 128)
-                result += static_cast<char>(c);
-            else
-                result += '?';
-        }
-        return result;
-    }
+        D3D11_BUFFER_DESC cbDesc = {};
+        cbDesc.ByteWidth = sizeof(TerrainCB);
+        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-    bool Manager::LoadWorldLayerTable(const ArchivePtr& archive)
-    {
-        if (mTableLoaded) return true;
-        if (!archive) return false;
+        hr = device->CreateBuffer(&cbDesc, nullptr, &out.constantBuffer);
+        if (FAILED(hr)) return false;
 
-        auto root = archive->getRoot();
-        if (!root) return false;
+        D3D11_SAMPLER_DESC sampDesc = {};
+        sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+        sampDesc.MaxAnisotropy = 1;
+        sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
 
-        auto fileEntry = FindFileRecursive(root, L"worldlayer.tbl");
-        if (!fileEntry)
-        {
-            mTableLoaded = true;
-            return false;
-        }
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerWrap);
+        if (FAILED(hr)) return false;
 
-        std::vector<uint8_t> data;
-        if (!archive->getFileData(fileEntry, data))
-        {
-            mTableLoaded = true;
-            return false;
-        }
+        sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
 
-        Tbl::Table<Database::Definitions::WorldLayer> tbl;
-        if (!tbl.load(data.data(), data.size()))
-        {
-            mTableLoaded = true;
-            return false;
-        }
+        hr = device->CreateSamplerState(&sampDesc, &out.samplerClamp);
+        if (FAILED(hr)) return false;
 
-        for (const auto& [id, tblEntry] : tbl.entries())
-        {
-            WorldLayerEntry entry;
-            entry.id = tblEntry.ID;
-            entry.diffusePath = WideToNarrow(tblEntry.ColorMapPath);
-            entry.normalPath = WideToNarrow(tblEntry.NormalMapPath);
-            entry.scaleU = tblEntry.MetersPerTextureTile;
-            entry.scaleV = tblEntry.MetersPerTextureTile;
-            mLayerTable[id] = entry;
-        }
-
-        mTableLoaded = true;
         return true;
     }
 
-    const WorldLayerEntry* Manager::GetLayerEntry(uint32_t layerId) const
+    void UpdateConstants(ID3D11DeviceContext* context, ID3D11Buffer* cb, const TerrainCB& data)
     {
-        auto it = mLayerTable.find(layerId);
-        if (it != mLayerTable.end())
-            return &it->second;
-        return nullptr;
-    }
+        if (!context || !cb) return;
 
-    static FileEntryPtr FindFileByPath(const IFileSystemEntryPtr& root, const std::wstring& wpath)
-    {
-        if (!root || wpath.empty()) return nullptr;
-
-        std::wstring remaining = wpath;
-        IFileSystemEntryPtr current = root;
-
-        while (!remaining.empty() && current && current->isDirectory())
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        HRESULT hr = context->Map(cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        if (SUCCEEDED(hr))
         {
-            size_t sep = remaining.find_first_of(L"\\/");
-            std::wstring component = (sep != std::wstring::npos) ? remaining.substr(0, sep) : remaining;
-            remaining = (sep != std::wstring::npos) ? remaining.substr(sep + 1) : L"";
-
-            std::wstring componentLower = ToLowerW(component);
-
-            IFileSystemEntryPtr found = nullptr;
-            for (const auto& child : current->getChildren())
-            {
-                if (!child) continue;
-                std::wstring childLower = ToLowerW(child->getEntryName());
-                if (childLower == componentLower)
-                {
-                    found = child;
-                    break;
-                }
-            }
-
-            if (!found) return nullptr;
-
-            if (remaining.empty())
-            {
-                return std::dynamic_pointer_cast<FileEntry>(found);
-            }
-
-            current = found;
+            memcpy(mapped.pData, &data, sizeof(TerrainCB));
+            context->Unmap(cb, 0);
         }
-
-        return nullptr;
-    }
-
-    bool Manager::LoadRawTextureFromPath(const ArchivePtr& archive, const std::string& path, RawTextureData& outData)
-    {
-        if (!archive || path.empty()) return false;
-
-        FileEntryPtr fileEntry = archive->findFileCached(path);
-
-        if (!fileEntry)
-        {
-            std::wstring wpath(path.begin(), path.end());
-            auto root = archive->getRoot();
-            if (root)
-            {
-                fileEntry = FindFileByPath(root, wpath);
-            }
-        }
-
-        if (!fileEntry)
-        {
-            auto root = archive->getRoot();
-            if (root)
-            {
-                size_t lastSlash = path.rfind('/');
-                if (lastSlash == std::string::npos) lastSlash = path.rfind('\\');
-                std::string filename = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
-                std::wstring wfn(filename.begin(), filename.end());
-                std::wstring wfnLower = ToLowerW(wfn);
-                fileEntry = FindFileRecursive(root, wfnLower);
-            }
-        }
-
-        if (!fileEntry) return false;
-
-        std::vector<uint8_t> bytes;
-        if (!archive->getFileData(fileEntry, bytes)) return false;
-        if (bytes.empty()) return false;
-
-        Tex::File tf;
-        if (!tf.readFromMemory(bytes.data(), bytes.size())) return false;
-
-        Tex::ImageRGBA img;
-        if (!tf.decodeLargestMipToRGBA(img)) return false;
-
-        outData.rgba = std::move(img.rgba);
-        outData.width = img.width;
-        outData.height = img.height;
-        outData.valid = true;
-
-        return true;
-    }
-
-    bool Manager::GetLayerTextureData(const ArchivePtr& archive, uint32_t layerId, RawTextureData& outData)
-    {
-        if (!archive || layerId == 0) return false;
-
-        if (!LoadWorldLayerTable(archive)) return false;
-
-        const WorldLayerEntry* entry = GetLayerEntry(layerId);
-        if (!entry || entry->diffusePath.empty()) return false;
-
-        return LoadRawTextureFromPath(archive, entry->diffusePath, outData);
-    }
-
-    bool Manager::LoadTextureFromPath(const ArchivePtr& archive, const std::string& path,
-                                      ComPtr<ID3D11ShaderResourceView>& outSRV, int& outW, int& outH)
-    {
-        if (!archive || path.empty() || !mDevice) return false;
-
-        auto cacheIt = mPathTextureCache.find(path);
-        if (cacheIt != mPathTextureCache.end())
-        {
-            outSRV = cacheIt->second.srv;
-            outW = cacheIt->second.width;
-            outH = cacheIt->second.height;
-            return outSRV != nullptr;
-        }
-
-        RawTextureData rawData;
-        if (!LoadRawTextureFromPath(archive, path, rawData))
-        {
-            mPathTextureCache[path] = {nullptr, 0, 0};
-            return false;
-        }
-
-        outSRV = UploadRGBATexture(mDevice, mContext, rawData.rgba.data(), rawData.width, rawData.height, true);
-        outW = rawData.width;
-        outH = rawData.height;
-
-        mPathTextureCache[path] = {outSRV, outW, outH};
-
-        return outSRV != nullptr;
-    }
-
-    void Manager::EnsureFallbackTextures()
-    {
-        if (!mDevice) return;
-
-        if (!mFallbackWhite)
-        {
-            uint8_t white[4] = {255, 255, 255, 255};
-            mFallbackWhite = UploadRGBATexture(mDevice, mContext, white, 1, 1, false);
-        }
-        if (!mFallbackNormal)
-        {
-            uint8_t normal[4] = {128, 128, 255, 255};
-            mFallbackNormal = UploadRGBATexture(mDevice, mContext, normal, 1, 1, false);
-        }
-    }
-
-    ID3D11ShaderResourceView* Manager::GetFallbackWhite()
-    {
-        EnsureFallbackTextures();
-        return mFallbackWhite.Get();
-    }
-
-    ID3D11ShaderResourceView* Manager::GetFallbackNormal()
-    {
-        EnsureFallbackTextures();
-        return mFallbackNormal.Get();
-    }
-
-    const CachedTexture* Manager::GetLayerTexture(const ArchivePtr& archive, uint32_t layerId)
-    {
-        auto cacheIt = mTextureCache.find(layerId);
-        if (cacheIt != mTextureCache.end() && cacheIt->second.loaded)
-            return &cacheIt->second;
-
-        EnsureFallbackTextures();
-
-        const WorldLayerEntry* entry = GetLayerEntry(layerId);
-        if (!entry)
-        {
-            CachedTexture tex;
-            tex.diffuse = mFallbackWhite;
-            tex.normal = mFallbackNormal;
-            tex.width = 1;
-            tex.height = 1;
-            tex.loaded = true;
-            mTextureCache[layerId] = tex;
-            return &mTextureCache[layerId];
-        }
-
-        CachedTexture tex;
-
-        int w = 0, h = 0;
-        if (!entry->diffusePath.empty())
-        {
-            if (LoadTextureFromPath(archive, entry->diffusePath, tex.diffuse, w, h))
-            {
-                tex.width = w;
-                tex.height = h;
-            }
-        }
-
-        if (!entry->normalPath.empty())
-        {
-            int nw = 0, nh = 0;
-            LoadTextureFromPath(archive, entry->normalPath, tex.normal, nw, nh);
-        }
-
-        if (!tex.diffuse)
-        {
-            tex.diffuse = mFallbackWhite;
-            tex.width = 1;
-            tex.height = 1;
-        }
-
-        if (!tex.normal)
-        {
-            tex.normal = mFallbackNormal;
-        }
-
-        tex.loaded = true;
-        mTextureCache[layerId] = tex;
-        return &mTextureCache[layerId];
-    }
-
-    ComPtr<ID3D11ShaderResourceView> Manager::CreateBlendMapTexture(const uint8_t* data, int width, int height)
-    {
-        if (!data || width <= 0 || height <= 0 || !mDevice) return nullptr;
-        return UploadRGBATexture(mDevice, mContext, data, width, height, false);
-    }
-
-    ComPtr<ID3D11ShaderResourceView> Manager::CreateBlendMapFromDXT1(const uint8_t* dxtData, size_t dataSize, int width, int height)
-    {
-        if (!dxtData || dataSize == 0 || !mDevice) return nullptr;
-
-        std::vector<uint8_t> rgba;
-        if (!Tex::File::decodeDXT1(dxtData, width, height, rgba))
-            return nullptr;
-
-        for (size_t i = 0; i < rgba.size(); i += 4)
-        {
-            int r = rgba[i];
-            int g = rgba[i + 1];
-            int b = rgba[i + 2];
-            int sum = r + g + b;
-            rgba[i + 3] = static_cast<uint8_t>(std::max(0, 255 - sum));
-        }
-
-        return UploadRGBATexture(mDevice, mContext, rgba.data(), width, height, false);
-    }
-
-    ComPtr<ID3D11ShaderResourceView> Manager::CreateColorMapTexture(const uint8_t* data, int width, int height)
-    {
-        if (!data || width <= 0 || height <= 0 || !mDevice) return nullptr;
-        return UploadRGBATexture(mDevice, mContext, data, width, height, false);
-    }
-
-    ComPtr<ID3D11ShaderResourceView> Manager::CreateColorMapFromDXT5(const uint8_t* dxtData, size_t dataSize, int width, int height)
-    {
-        if (!dxtData || dataSize == 0 || !mDevice) return nullptr;
-
-        std::vector<uint8_t> rgba;
-        if (!Tex::File::decodeDXT5(dxtData, width, height, rgba))
-            return nullptr;
-
-        return UploadRGBATexture(mDevice, mContext, rgba.data(), width, height, false);
-    }
-
-    ComPtr<ID3D11ShaderResourceView> UploadRGBATexture(ID3D11Device* device, ID3D11DeviceContext* context,
-                                                       const uint8_t* data, int width, int height, bool generateMips)
-    {
-        if (!device || !data || width <= 0 || height <= 0) return nullptr;
-
-        D3D11_TEXTURE2D_DESC texDesc = {};
-        texDesc.Width = width;
-        texDesc.Height = height;
-        texDesc.MipLevels = generateMips ? 0 : 1;
-        texDesc.ArraySize = 1;
-        texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        texDesc.SampleDesc.Count = 1;
-        texDesc.Usage = D3D11_USAGE_DEFAULT;
-        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (generateMips ? D3D11_BIND_RENDER_TARGET : 0);
-        texDesc.MiscFlags = generateMips ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
-
-        ComPtr<ID3D11Texture2D> texture;
-
-        if (generateMips)
-        {
-            HRESULT hr = device->CreateTexture2D(&texDesc, nullptr, &texture);
-            if (FAILED(hr)) return nullptr;
-
-            if (context)
-            {
-                context->UpdateSubresource(texture.Get(), 0, nullptr, data, width * 4, 0);
-            }
-        }
-        else
-        {
-            D3D11_SUBRESOURCE_DATA initData = {};
-            initData.pSysMem = data;
-            initData.SysMemPitch = width * 4;
-
-            HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &texture);
-            if (FAILED(hr)) return nullptr;
-        }
-
-        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Texture2D.MostDetailedMip = 0;
-        srvDesc.Texture2D.MipLevels = generateMips ? static_cast<UINT>(-1) : 1;
-
-        ComPtr<ID3D11ShaderResourceView> srv;
-        HRESULT hr = device->CreateShaderResourceView(texture.Get(), &srvDesc, &srv);
-        if (FAILED(hr)) return nullptr;
-
-        if (generateMips && context)
-        {
-            context->GenerateMips(srv.Get());
-        }
-
-        return srv;
     }
 }
