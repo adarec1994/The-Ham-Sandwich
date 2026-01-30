@@ -11,10 +11,13 @@
 #include "../Audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
 #include "../BNK/BNK_hirc.h"
+#include "../Skybox/Sky_Manager.h"
 #include <algorithm>
 #include <filesystem>
 #include <d3d11.h>
 #include <cstring>
+#include <cfloat>
+#include <climits>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -716,6 +719,34 @@ namespace UI_ContentBrowser {
             return a.name < b.name;
         });
 
+        // Add "Load All" entry if folder contains .area files
+        if (sSelectedFolder && !isFiltering)
+        {
+            bool hasAreaFiles = false;
+            for (const auto& f : sCachedFiles)
+            {
+                if (!f.isDirectory && f.extension == ".area")
+                {
+                    hasAreaFiles = true;
+                    break;
+                }
+            }
+
+            if (hasAreaFiles)
+            {
+                std::string folderName = wstring_to_utf8(sSelectedFolder->getEntryName());
+
+                FileInfo loadAllEntry;
+                loadAllEntry.name = "Load " + folderName;
+                loadAllEntry.extension = ".loadall";
+                loadAllEntry.entry = nullptr;
+                loadAllEntry.archive = sSelectedArchive;
+                loadAllEntry.isDirectory = false;
+                loadAllEntry.isLoadAllEntry = true;
+                sCachedFiles.insert(sCachedFiles.begin(), loadAllEntry);
+            }
+        }
+
         sNeedsRefresh = false;
     }
 
@@ -748,6 +779,56 @@ namespace UI_ContentBrowser {
         }
     }
 
+    void LoadAllAreasInFolder(AppState& state)
+    {
+        if (!sSelectedFolder || !sSelectedArchive) return;
+
+        std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
+        for (const auto& file : sCachedFiles)
+        {
+            if (!file.isDirectory && file.extension == ".area")
+            {
+                auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                if (fe)
+                    areaFiles.push_back({file.archive, fe});
+            }
+        }
+
+        if (areaFiles.empty()) return;
+
+        ResetAreaReferencePosition();
+        Sky::Manager::Instance().clear();
+
+        gLoadedAreas.clear();
+        gSelectedChunk = nullptr;
+        gSelectedChunkIndex = -1;
+        gSelectedAreaIndex = -1;
+        gSelectedAreaName.clear();
+        gLoadedModel = nullptr;
+        state.currentArea.reset();
+
+        for (const auto& [arc, fileEntry] : areaFiles)
+        {
+            auto af = std::make_shared<AreaFile>(arc, fileEntry);
+            if (af->load())
+            {
+                gLoadedAreas.push_back(af);
+                if (!state.currentArea)
+                    state.currentArea = af;
+            }
+        }
+
+        Sky::Manager::Instance().clear();
+
+        if (!gLoadedAreas.empty())
+        {
+            SnapCameraToLoaded(state);
+            for (auto& area : gLoadedAreas)
+                area->loadAllPropsAsync();
+            gShowProps = true;
+        }
+    }
+
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
     {
         if (!arc || !fileEntry) return;
@@ -764,6 +845,12 @@ namespace UI_ContentBrowser {
 
     void HandleFileOpen(AppState& state, const FileInfo& file)
     {
+        if (file.isLoadAllEntry)
+        {
+            LoadAllAreasInFolder(state);
+            return;
+        }
+
         if (file.isDirectory)
         {
             sSelectedFolder = file.entry;
@@ -972,6 +1059,275 @@ namespace UI_ContentBrowser {
         if (lastSlash != std::string::npos)
             return filePath.substr(0, lastSlash);
         return "";
+    }
+
+    // Heightmap viewer state
+    static bool sHeightmapViewerOpen = false;
+    static std::string sHeightmapTitle;
+    static ID3D11ShaderResourceView* sHeightmapSRV = nullptr;
+    static int sHeightmapWidth = 0;
+    static int sHeightmapHeight = 0;
+
+    static void CreateHeightmapTexture(const std::vector<float>& heights, int width, int height, float minH, float maxH)
+    {
+        if (sHeightmapSRV)
+        {
+            sHeightmapSRV->Release();
+            sHeightmapSRV = nullptr;
+        }
+
+        if (!gDevice || heights.empty()) return;
+
+        std::vector<uint8_t> pixels(width * height * 4);
+        float range = (maxH - minH);
+        if (range < 0.001f) range = 1.0f;
+
+        for (int i = 0; i < width * height; i++)
+        {
+            float normalized = (heights[i] - minH) / range;
+            uint8_t val = static_cast<uint8_t>(std::clamp(normalized * 255.0f, 0.0f, 255.0f));
+            pixels[i * 4 + 0] = val;
+            pixels[i * 4 + 1] = val;
+            pixels[i * 4 + 2] = val;
+            pixels[i * 4 + 3] = 255;
+        }
+
+        D3D11_TEXTURE2D_DESC desc = {};
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = pixels.data();
+        initData.SysMemPitch = width * 4;
+
+        ID3D11Texture2D* tex = nullptr;
+        if (SUCCEEDED(gDevice->CreateTexture2D(&desc, &initData, &tex)))
+        {
+            gDevice->CreateShaderResourceView(tex, nullptr, &sHeightmapSRV);
+            tex->Release();
+        }
+
+        sHeightmapWidth = width;
+        sHeightmapHeight = height;
+    }
+
+    void ViewSingleAreaHeightmap(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name)
+    {
+        if (!arc || !fileEntry) return;
+
+        auto parsed = AreaFile::parseAreaFile(arc, fileEntry);
+        if (!parsed.valid) return;
+
+        int w = 256;
+        int h = 256;
+        std::vector<float> heights(w * h, 0.0f);
+
+        float minH = parsed.minBounds.y;
+        float maxH = parsed.maxHeight;
+
+        for (int cz = 0; cz < 16; cz++)
+        {
+            for (int cx = 0; cx < 16; cx++)
+            {
+                int chunkIdx = cz * 16 + cx;
+                if (chunkIdx >= (int)parsed.chunks.size()) continue;
+
+                const auto& chunk = parsed.chunks[chunkIdx];
+                if (!chunk.valid || chunk.vertices.empty()) continue;
+
+                for (int lz = 0; lz < 16; lz++)
+                {
+                    for (int lx = 0; lx < 16; lx++)
+                    {
+                        int vIdx = lz * 17 + lx;
+                        if (vIdx >= (int)chunk.vertices.size()) continue;
+
+                        float height = chunk.vertices[vIdx].y;
+                        int px = cx * 16 + lx;
+                        int py = cz * 16 + lz;
+                        heights[py * w + px] = height;
+                    }
+                }
+            }
+        }
+
+        CreateHeightmapTexture(heights, w, h, minH, maxH);
+        sHeightmapTitle = "Heightmap: " + name;
+        sHeightmapViewerOpen = true;
+    }
+
+    void ViewAllAreasHeightmap(AppState& state, const std::string& folderName)
+    {
+        std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
+        for (const auto& file : sCachedFiles)
+        {
+            if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
+            {
+                auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                if (fe)
+                    areaFiles.push_back({file.archive, fe});
+            }
+        }
+
+        if (areaFiles.empty()) return;
+
+        // Parse all areas and find bounds
+        std::vector<ParsedArea> parsedAreas;
+        int minTX = INT_MAX, maxTX = INT_MIN;
+        int minTY = INT_MAX, maxTY = INT_MIN;
+        float globalMinH = FLT_MAX, globalMaxH = -FLT_MAX;
+
+        for (const auto& [arc, fe] : areaFiles)
+        {
+            auto parsed = AreaFile::parseAreaFile(arc, fe);
+            if (parsed.valid)
+            {
+                minTX = std::min(minTX, parsed.tileX);
+                maxTX = std::max(maxTX, parsed.tileX);
+                minTY = std::min(minTY, parsed.tileY);
+                maxTY = std::max(maxTY, parsed.tileY);
+                globalMinH = std::min(globalMinH, parsed.minBounds.y);
+                globalMaxH = std::max(globalMaxH, parsed.maxHeight);
+                parsedAreas.push_back(std::move(parsed));
+            }
+        }
+
+        if (parsedAreas.empty()) return;
+
+        int tilesX = maxTY - minTY + 1;
+        int tilesY = maxTX - minTX + 1;
+        int tilePixels = 256;  // Same as thumbnail size
+        int imgWidth = tilesX * tilePixels;
+        int imgHeight = tilesY * tilePixels;
+
+        std::vector<float> heights(imgWidth * imgHeight, globalMinH);
+
+        for (const auto& parsed : parsedAreas)
+        {
+            int tileOffX = (parsed.tileY - minTY) * tilePixels;
+            int tileOffY = (parsed.tileX - minTX) * tilePixels;
+
+            for (int cz = 0; cz < 16; cz++)
+            {
+                for (int cx = 0; cx < 16; cx++)
+                {
+                    int chunkIdx = cz * 16 + cx;
+                    if (chunkIdx >= (int)parsed.chunks.size()) continue;
+
+                    const auto& chunk = parsed.chunks[chunkIdx];
+                    if (!chunk.valid || chunk.vertices.empty()) continue;
+
+                    for (int lz = 0; lz < 16; lz++)
+                    {
+                        for (int lx = 0; lx < 16; lx++)
+                        {
+                            int vIdx = lz * 17 + lx;
+                            if (vIdx >= (int)chunk.vertices.size()) continue;
+
+                            float height = chunk.vertices[vIdx].y;
+                            int px = tileOffX + cx * 16 + lx;
+                            int py = tileOffY + cz * 16 + lz;
+                            if (px >= 0 && px < imgWidth && py >= 0 && py < imgHeight)
+                            {
+                                heights[py * imgWidth + px] = height;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Autocrop: find actual bounds of non-empty pixels
+        int minPX = imgWidth, maxPX = 0;
+        int minPY = imgHeight, maxPY = 0;
+        bool hasData = false;
+
+        for (int y = 0; y < imgHeight; y++)
+        {
+            for (int x = 0; x < imgWidth; x++)
+            {
+                if (heights[y * imgWidth + x] != globalMinH)
+                {
+                    minPX = std::min(minPX, x);
+                    maxPX = std::max(maxPX, x);
+                    minPY = std::min(minPY, y);
+                    maxPY = std::max(maxPY, y);
+                    hasData = true;
+                }
+            }
+        }
+
+        if (!hasData)
+        {
+            // No valid data found
+            return;
+        }
+
+        // Create cropped heights array
+        int croppedWidth = maxPX - minPX + 1;
+        int croppedHeight = maxPY - minPY + 1;
+        std::vector<float> croppedHeights(croppedWidth * croppedHeight);
+
+        for (int y = 0; y < croppedHeight; y++)
+        {
+            for (int x = 0; x < croppedWidth; x++)
+            {
+                croppedHeights[y * croppedWidth + x] = heights[(y + minPY) * imgWidth + (x + minPX)];
+            }
+        }
+
+        CreateHeightmapTexture(croppedHeights, croppedWidth, croppedHeight, globalMinH, globalMaxH);
+        sHeightmapTitle = "Heightmap: " + folderName + " (" + std::to_string(parsedAreas.size()) + " areas)";
+        sHeightmapViewerOpen = true;
+    }
+
+    void DrawHeightmapViewer()
+    {
+        if (!sHeightmapViewerOpen) return;
+
+        ImGui::SetNextWindowSize(ImVec2(600, 600), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin(sHeightmapTitle.c_str(), &sHeightmapViewerOpen))
+        {
+            if (sHeightmapSRV)
+            {
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+                float aspectImg = (float)sHeightmapWidth / (float)sHeightmapHeight;
+                float aspectWin = avail.x / avail.y;
+
+                float displayW, displayH;
+                if (aspectImg > aspectWin)
+                {
+                    displayW = avail.x;
+                    displayH = avail.x / aspectImg;
+                }
+                else
+                {
+                    displayH = avail.y;
+                    displayW = avail.y * aspectImg;
+                }
+
+                ImVec2 cursorPos = ImGui::GetCursorPos();
+                ImGui::SetCursorPos(ImVec2(cursorPos.x + (avail.x - displayW) * 0.5f, cursorPos.y + (avail.y - displayH) * 0.5f));
+                ImGui::Image((ImTextureID)sHeightmapSRV, ImVec2(displayW, displayH));
+            }
+            else
+            {
+                ImGui::Text("No heightmap data");
+            }
+        }
+        ImGui::End();
+
+        if (!sHeightmapViewerOpen && sHeightmapSRV)
+        {
+            sHeightmapSRV->Release();
+            sHeightmapSRV = nullptr;
+        }
     }
 
 }

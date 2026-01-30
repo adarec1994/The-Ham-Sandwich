@@ -575,6 +575,15 @@ namespace UI_ContentBrowser {
                                 if (dotPos != std::string::npos)
                                     baseName = baseName.substr(0, dotPos);
 
+                                if (ImGui::MenuItem("View Heightmap"))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (fe)
+                                        ViewSingleAreaHeightmap(state, file.archive, fe, baseName);
+                                }
+
+                                ImGui::Separator();
+
                                 if (ImGui::MenuItem("Extract Raw (.area)"))
                                 {
                                     sExportDefaultName = baseName;
@@ -845,7 +854,38 @@ namespace UI_ContentBrowser {
                             }
                         }
 
-                        if (file.isDirectory && sFolderIcon)
+                        if (file.isLoadAllEntry)
+                        {
+                            // Blue gradient box with play icon effect
+                            ImU32 bgColor = IM_COL32(40, 80, 140, 255);
+                            drawList->AddRectFilled(contentMin + ImVec2(5, 5), contentMin + ImVec2(iconSize - 5, iconSize - 5), bgColor, 8.0f);
+                            // Draw a simple "play" triangle
+                            ImVec2 center = contentMin + ImVec2(iconSize * 0.5f, iconSize * 0.5f);
+                            float triSize = iconSize * 0.25f;
+                            drawList->AddTriangleFilled(
+                                center + ImVec2(-triSize * 0.5f, -triSize),
+                                center + ImVec2(-triSize * 0.5f, triSize),
+                                center + ImVec2(triSize, 0),
+                                IM_COL32(255, 255, 255, 255)
+                            );
+
+                            // Right-click context menu for Load All
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
+                            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+
+                            if (ImGui::BeginPopupContextItem("##loadallcontext"))
+                            {
+                                if (ImGui::MenuItem("View Heightmap"))
+                                {
+                                    std::string folderName = sSelectedFolder ? wstring_to_utf8(sSelectedFolder->getEntryName()) : "Unknown";
+                                    ViewAllAreasHeightmap(state, folderName);
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::PopStyleVar(2);
+                        }
+                        else if (file.isDirectory && sFolderIcon)
                         {
                             drawList->AddImage(sFolderIcon, contentMin, contentMin + ImVec2(iconSize, iconSize));
                         }
@@ -887,7 +927,7 @@ namespace UI_ContentBrowser {
                         ImGui::SetCursorScreenPos(textStart + ImVec2(2, 0));
 
                         std::string stem = file.name;
-                        if (!file.isDirectory)
+                        if (!file.isDirectory && !file.isLoadAllEntry)
                         {
                             size_t lastDot = stem.rfind('.');
                             if (lastDot != std::string::npos)
@@ -898,7 +938,9 @@ namespace UI_ContentBrowser {
                         drawList->PushClipRect(ImVec2(clipRect.x, clipRect.y), ImVec2(clipRect.z, clipRect.w), true);
 
                         ImVec4 nameColor(1.0f, 1.0f, 1.0f, 1.0f);
-                        if (file.extension == ".m3")
+                        if (file.isLoadAllEntry)
+                            nameColor = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+                        else if (file.extension == ".m3")
                             nameColor = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
                         else if (file.extension == ".tex")
                             nameColor = ImVec4(0.8f, 0.5f, 0.9f, 1.0f);
@@ -915,7 +957,7 @@ namespace UI_ContentBrowser {
 
                         drawList->PopClipRect();
 
-                        if (!file.isDirectory)
+                        if (!file.isDirectory && !file.isLoadAllEntry)
                         {
                             ImVec2 extPos = textStart + ImVec2(2, textLineHeight * nameLines);
                             ImGui::SetCursorScreenPos(extPos);
@@ -1858,6 +1900,8 @@ namespace UI_ContentBrowser {
             }
             ImGui::End();
         }
+
+        DrawHeightmapViewer();
     }
 
     void NavigateToPath(AppState& state, const std::string& folderPath)

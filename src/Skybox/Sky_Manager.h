@@ -73,6 +73,8 @@ public:
 
     std::vector<std::wstring> getSkyModelPaths() const;
 
+    void clear();
+
     bool isLoading() const { return mIsLoading; }
 
 private:

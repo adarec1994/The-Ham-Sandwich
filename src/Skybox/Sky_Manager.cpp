@@ -379,6 +379,21 @@ bool Manager::isSkyModelVisible(int index) const
     return mHiddenSkyModels.count(index) == 0 && mDeletedSkyModels.count(index) == 0;
 }
 
+void Manager::clear()
+{
+    std::lock_guard<std::mutex> lock(mMutex);
+    mLoadedSkies.clear();
+    mSkyboxM3s.clear();
+    mLoadedModelPaths.clear();
+    mSkyModelPathsOrdered.clear();
+    mSkyIDToLoadedIndex.clear();
+    mCollectedSkyIDs.clear();
+    mHiddenSkyModels.clear();
+    mDeletedSkyModels.clear();
+    mActiveSkyIndex = -1;
+    mSelectedSkyModelIndex = -1;
+}
+
 size_t Manager::getSkyboxM3Count() const
 {
     std::lock_guard<std::mutex> lock(mMutex);
