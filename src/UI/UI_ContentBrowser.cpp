@@ -582,6 +582,48 @@ namespace UI_ContentBrowser {
                                         ViewSingleAreaHeightmap(state, file.archive, fe, baseName);
                                 }
 
+                                if (ImGui::BeginMenu("Extract Heightmap"))
+                                {
+                                    auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                                    if (ImGui::MenuItem("PNG"))
+                                    {
+                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + "_heightmap.png";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapPngDlg", "Export Heightmap as PNG", ".png", config);
+                                    }
+                                    if (ImGui::MenuItem("JPEG"))
+                                    {
+                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + "_heightmap.jpg";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapJpgDlg", "Export Heightmap as JPEG", ".jpg", config);
+                                    }
+                                    if (ImGui::MenuItem("BMP"))
+                                    {
+                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + "_heightmap.bmp";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapBmpDlg", "Export Heightmap as BMP", ".bmp", config);
+                                    }
+                                    if (ImGui::MenuItem("TGA"))
+                                    {
+                                        if (fe) SetPendingSingleHeightmapExport(file.archive, fe, baseName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = baseName + "_heightmap.tga";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapTgaDlg", "Export Heightmap as TGA", ".tga", config);
+                                    }
+                                    ImGui::EndMenu();
+                                }
+
                                 ImGui::Separator();
 
                                 if (ImGui::MenuItem("Extract Raw (.area)"))
@@ -856,18 +898,59 @@ namespace UI_ContentBrowser {
 
                         if (file.isLoadAllEntry)
                         {
-                            // Blue gradient box with play icon effect
-                            ImU32 bgColor = IM_COL32(40, 80, 140, 255);
-                            drawList->AddRectFilled(contentMin + ImVec2(5, 5), contentMin + ImVec2(iconSize - 5, iconSize - 5), bgColor, 8.0f);
-                            // Draw a simple "play" triangle
-                            ImVec2 center = contentMin + ImVec2(iconSize * 0.5f, iconSize * 0.5f);
-                            float triSize = iconSize * 0.25f;
-                            drawList->AddTriangleFilled(
-                                center + ImVec2(-triSize * 0.5f, -triSize),
-                                center + ImVec2(-triSize * 0.5f, triSize),
-                                center + ImVec2(triSize, 0),
-                                IM_COL32(255, 255, 255, 255)
-                            );
+                            // Queue composite thumbnail generation if not attempted
+                            if (!file.attemptedLoad && !file.textureID)
+                            {
+                                file.attemptedLoad = true;
+
+                                // Collect area files for the worker thread
+                                std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
+                                for (size_t j = 0; j < sCachedFiles.size(); j++)
+                                {
+                                    const auto& f = sCachedFiles[j];
+                                    if (!f.isDirectory && f.extension == ".area" && !f.isLoadAllEntry)
+                                    {
+                                        auto fe = std::dynamic_pointer_cast<FileEntry>(f.entry);
+                                        if (fe)
+                                            areaFiles.push_back({f.archive, fe});
+                                    }
+                                }
+
+                                if (!areaFiles.empty())
+                                {
+                                    ThumbnailRequest req;
+                                    req.isComposite = true;
+                                    req.compositeAreaFiles = std::move(areaFiles);
+                                    req.fileIndex = static_cast<int>(i);
+                                    req.generation = sCurrentGeneration;
+
+                                    {
+                                        std::lock_guard<std::mutex> lock(sQueueMutex);
+                                        sLoadQueue.push_back(std::move(req));
+                                    }
+                                    sQueueCV.notify_one();
+                                }
+                            }
+
+                            // Draw the thumbnail or fallback to blue box
+                            if (file.textureID)
+                            {
+                                drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                            }
+                            else
+                            {
+                                // Fallback: Blue gradient box with play icon
+                                ImU32 bgColor = IM_COL32(40, 80, 140, 255);
+                                drawList->AddRectFilled(contentMin + ImVec2(5, 5), contentMin + ImVec2(iconSize - 5, iconSize - 5), bgColor, 8.0f);
+                                ImVec2 center = contentMin + ImVec2(iconSize * 0.5f, iconSize * 0.5f);
+                                float triSize = iconSize * 0.25f;
+                                drawList->AddTriangleFilled(
+                                    center + ImVec2(-triSize * 0.5f, -triSize),
+                                    center + ImVec2(-triSize * 0.5f, triSize),
+                                    center + ImVec2(triSize, 0),
+                                    IM_COL32(255, 255, 255, 255)
+                                );
+                            }
 
                             // Right-click context menu for Load All
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
@@ -875,10 +958,52 @@ namespace UI_ContentBrowser {
 
                             if (ImGui::BeginPopupContextItem("##loadallcontext"))
                             {
+                                std::string folderName = sSelectedFolder ? wstring_to_utf8(sSelectedFolder->getEntryName()) : "Unknown";
+
                                 if (ImGui::MenuItem("View Heightmap"))
                                 {
-                                    std::string folderName = sSelectedFolder ? wstring_to_utf8(sSelectedFolder->getEntryName()) : "Unknown";
                                     ViewAllAreasHeightmap(state, folderName);
+                                }
+
+                                if (ImGui::BeginMenu("Extract Heightmap"))
+                                {
+                                    if (ImGui::MenuItem("PNG"))
+                                    {
+                                        SetPendingAllHeightmapExport(folderName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = folderName + "_heightmap.png";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapPngDlg", "Export Heightmap as PNG", ".png", config);
+                                    }
+                                    if (ImGui::MenuItem("JPEG"))
+                                    {
+                                        SetPendingAllHeightmapExport(folderName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = folderName + "_heightmap.jpg";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapJpgDlg", "Export Heightmap as JPEG", ".jpg", config);
+                                    }
+                                    if (ImGui::MenuItem("BMP"))
+                                    {
+                                        SetPendingAllHeightmapExport(folderName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = folderName + "_heightmap.bmp";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapBmpDlg", "Export Heightmap as BMP", ".bmp", config);
+                                    }
+                                    if (ImGui::MenuItem("TGA"))
+                                    {
+                                        SetPendingAllHeightmapExport(folderName);
+                                        IGFD::FileDialogConfig config;
+                                        config.path = ".";
+                                        config.fileName = folderName + "_heightmap.tga";
+                                        config.flags = ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapTgaDlg", "Export Heightmap as TGA", ".tga", config);
+                                    }
+                                    ImGui::EndMenu();
                                 }
                                 ImGui::EndPopup();
                             }
