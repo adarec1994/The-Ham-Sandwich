@@ -9,12 +9,8 @@
 #include <iostream>
 #include <unordered_set>
 
-// ============================================================================
-// TEXTURE FAILURE TRACKING - Only logs M3 files that fail to load textures
-// ============================================================================
 static std::atomic<int> g_TexturesFailed{0};
 
-// Track models with texture loading issues
 static std::mutex g_TextureFailureMutex;
 static std::unordered_map<std::string, std::vector<std::string>> g_FailedTexturePaths;
 static std::unordered_set<std::string> g_ModelsWithTextureIssues;
@@ -23,22 +19,19 @@ void RecordTextureFailure(const std::string& modelPath, const std::string& textu
 {
     std::lock_guard<std::mutex> lock(g_TextureFailureMutex);
 
-    // Only print once per model+texture combination
     auto& texList = g_FailedTexturePaths[modelPath];
     for (const auto& existing : texList)
     {
-        if (existing == texturePath) return; // Already recorded
+        if (existing == texturePath) return;
     }
 
     texList.push_back(texturePath);
     g_ModelsWithTextureIssues.insert(modelPath);
     g_TexturesFailed++;
 
-    // Print immediately for visibility
     std::cerr << "[M3 TEXTURE FAIL] " << modelPath << " -> " << texturePath << std::endl;
 }
 
-// Debug: print prop fields to find variant selector (disabled - unk7 is variant)
 void DebugPrintPropFields(const Prop&) {}
 
 void PrintFailedTextures()
@@ -58,7 +51,6 @@ void PrintFailedTextures()
     std::cout << "==========================================\n" << std::endl;
 }
 
-// Stub functions - do nothing
 static void PropDebugLog(const std::string&) {}
 static void PropDebugLogWarning(const std::string&) {}
 static void PropDebugLogError(const std::string&) {}
@@ -311,6 +303,29 @@ void PropLoader::ClearCache()
 
     std::lock_guard<std::mutex> fileLock(mFileCacheMutex);
     mFileCache.clear();
+}
+
+void PropLoader::ClearPendingWork()
+{
+    {
+        std::lock_guard<std::mutex> lock(mWorkMutex);
+        std::queue<Prop*> empty;
+        std::swap(mWorkQueue, empty);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mUploadMutex);
+        while (!mPendingUploads.empty())
+        {
+            auto& upload = mPendingUploads.front();
+            delete upload.modelData;
+            mPendingUploads.pop();
+        }
+    }
+
+    mPendingCount.store(0, std::memory_order_relaxed);
+
+    mWorkCondition.notify_all();
 }
 
 std::shared_ptr<M3Render> PropLoader::GetCachedModel(const std::string& path)
@@ -821,7 +836,6 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
     }
     else
     {
-        // Check if there are pending textures but no archive
         std::lock_guard<std::mutex> lock(mCacheMutex);
         for (auto& [path, cached] : mModelCache)
         {

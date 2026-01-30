@@ -329,7 +329,6 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
 
             gAreaRender.bind(gContext);
 
-            // DEBUG: Log gLoadedAreas size once after load
             static size_t sLastLoggedSize = 999999;
             if (gLoadedAreas.size() != sLastLoggedSize)
             {
@@ -342,8 +341,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
                 sLastLoggedSize = gLoadedAreas.size();
             }
 
-            // DEBUG: Only render first N areas to test if multi-area is the issue
-            static constexpr size_t DEBUG_MAX_AREAS = 999; // Set to 1 to test single area, 999 for all
+            static constexpr size_t DEBUG_MAX_AREAS = 999;
             size_t areasRendered = 0;
 
             for (size_t i = 0; i < gLoadedAreas.size() && areasRendered < DEBUG_MAX_AREAS; ++i)
@@ -351,7 +349,6 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
                 const auto& area = gLoadedAreas[i];
                 if (!area) continue;
 
-                // Skip areas with no valid chunks to avoid render issues
                 bool hasValidChunks = false;
                 for (const auto& chunk : area->getChunks())
                 {

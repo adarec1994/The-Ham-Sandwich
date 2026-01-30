@@ -10,32 +10,6 @@
 #include <cwctype>
 #include <algorithm>
 #include <cctype>
-#include <fstream>
-#include <mutex>
-
-static std::mutex gDebugMutex;
-static std::ofstream gDebugFile;
-static bool gDebugInitialized = false;
-
-static void DebugLog(const char* fmt, ...)
-{
-    std::lock_guard<std::mutex> lock(gDebugMutex);
-    if (!gDebugInitialized)
-    {
-        gDebugFile.open("terrain_texture_debug.log", std::ios::out | std::ios::trunc);
-        gDebugInitialized = true;
-    }
-    if (!gDebugFile.is_open()) return;
-
-    char buffer[1024];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
-
-    gDebugFile << buffer << std::endl;
-    gDebugFile.flush();
-}
 
 namespace TerrainTexture
 {
@@ -269,12 +243,9 @@ namespace TerrainTexture
     {
         if (!archive || path.empty() || !mDevice) return false;
 
-        DebugLog("  LoadTextureFromPath: %s", path.c_str());
-
         auto cacheIt = mPathTextureCache.find(path);
         if (cacheIt != mPathTextureCache.end())
         {
-            DebugLog("    Found in cache");
             outSRV = cacheIt->second.srv;
             outW = cacheIt->second.width;
             outH = cacheIt->second.height;
@@ -284,12 +255,9 @@ namespace TerrainTexture
         RawTextureData rawData;
         if (!LoadRawTextureFromPath(archive, path, rawData))
         {
-            DebugLog("    LoadRawTextureFromPath FAILED");
             mPathTextureCache[path] = {nullptr, 0, 0};
             return false;
         }
-
-        DebugLog("    Raw data loaded: %dx%d, rgba size=%zu", rawData.width, rawData.height, rawData.rgba.size());
 
         outSRV = UploadRGBATexture(mDevice, mContext, rawData.rgba.data(), rawData.width, rawData.height, true);
         outW = rawData.width;
@@ -306,13 +274,11 @@ namespace TerrainTexture
 
         if (!mFallbackWhite)
         {
-            DebugLog("Creating fallback WHITE texture");
             uint8_t white[4] = {255, 255, 255, 255};
             mFallbackWhite = UploadRGBATexture(mDevice, mContext, white, 1, 1, false);
         }
         if (!mFallbackNormal)
         {
-            DebugLog("Creating fallback NORMAL texture (128,128,255,255)");
             uint8_t normal[4] = {128, 128, 255, 255};
             mFallbackNormal = UploadRGBATexture(mDevice, mContext, normal, 1, 1, false);
         }
@@ -336,14 +302,11 @@ namespace TerrainTexture
         if (cacheIt != mTextureCache.end() && cacheIt->second.loaded)
             return &cacheIt->second;
 
-        DebugLog("GetLayerTexture: layerId=%u", layerId);
-
         EnsureFallbackTextures();
 
         const WorldLayerEntry* entry = GetLayerEntry(layerId);
         if (!entry)
         {
-            DebugLog("  No entry found, using fallback");
             CachedTexture tex;
             tex.diffuse = mFallbackWhite;
             tex.normal = mFallbackNormal;
@@ -354,39 +317,22 @@ namespace TerrainTexture
             return &mTextureCache[layerId];
         }
 
-        DebugLog("  diffusePath: %s", entry->diffusePath.c_str());
-        DebugLog("  normalPath: %s", entry->normalPath.c_str());
-
         CachedTexture tex;
 
         int w = 0, h = 0;
         if (!entry->diffusePath.empty())
         {
-            DebugLog("  Loading DIFFUSE texture...");
             if (LoadTextureFromPath(archive, entry->diffusePath, tex.diffuse, w, h))
             {
                 tex.width = w;
                 tex.height = h;
-                DebugLog("  DIFFUSE loaded: %dx%d", w, h);
-            }
-            else
-            {
-                DebugLog("  DIFFUSE load FAILED");
             }
         }
 
         if (!entry->normalPath.empty())
         {
             int nw = 0, nh = 0;
-            DebugLog("  Loading NORMAL texture...");
-            if (LoadTextureFromPath(archive, entry->normalPath, tex.normal, nw, nh))
-            {
-                DebugLog("  NORMAL loaded: %dx%d", nw, nh);
-            }
-            else
-            {
-                DebugLog("  NORMAL load FAILED");
-            }
+            LoadTextureFromPath(archive, entry->normalPath, tex.normal, nw, nh);
         }
 
         if (!tex.diffuse)
@@ -399,7 +345,6 @@ namespace TerrainTexture
         if (!tex.normal)
         {
             tex.normal = mFallbackNormal;
-            DebugLog("  Using fallback normal map");
         }
 
         tex.loaded = true;
@@ -455,15 +400,6 @@ namespace TerrainTexture
     {
         if (!device || !data || width <= 0 || height <= 0) return nullptr;
 
-        DebugLog("UploadRGBATexture: %dx%d, generateMips=%d", width, height, generateMips ? 1 : 0);
-
-        int sampleCount = std::min(16, width * height);
-        for (int i = 0; i < sampleCount; i++)
-        {
-            int idx = (i * width * height / sampleCount) * 4;
-            DebugLog("  pixel[%d]: R=%d G=%d B=%d A=%d", i, data[idx], data[idx+1], data[idx+2], data[idx+3]);
-        }
-
         D3D11_TEXTURE2D_DESC texDesc = {};
         texDesc.Width = width;
         texDesc.Height = height;
@@ -480,11 +416,7 @@ namespace TerrainTexture
         if (generateMips)
         {
             HRESULT hr = device->CreateTexture2D(&texDesc, nullptr, &texture);
-            if (FAILED(hr))
-            {
-                DebugLog("  CreateTexture2D FAILED (mips path): hr=0x%08X", hr);
-                return nullptr;
-            }
+            if (FAILED(hr)) return nullptr;
 
             if (context)
             {
@@ -498,11 +430,7 @@ namespace TerrainTexture
             initData.SysMemPitch = width * 4;
 
             HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &texture);
-            if (FAILED(hr))
-            {
-                DebugLog("  CreateTexture2D FAILED (no mips path): hr=0x%08X", hr);
-                return nullptr;
-            }
+            if (FAILED(hr)) return nullptr;
         }
 
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
@@ -513,19 +441,12 @@ namespace TerrainTexture
 
         ComPtr<ID3D11ShaderResourceView> srv;
         HRESULT hr = device->CreateShaderResourceView(texture.Get(), &srvDesc, &srv);
-        if (FAILED(hr))
-        {
-            DebugLog("  CreateShaderResourceView FAILED: hr=0x%08X", hr);
-            return nullptr;
-        }
+        if (FAILED(hr)) return nullptr;
 
         if (generateMips && context)
         {
             context->GenerateMips(srv.Get());
-            DebugLog("  GenerateMips called");
         }
-
-        DebugLog("  Upload SUCCESS");
 
         return srv;
     }

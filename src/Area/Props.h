@@ -254,6 +254,8 @@ public:
 
     void ProcessGPUUploads(int maxPerFrame = 10);
 
+    void ClearPendingWork();
+
     bool HasPendingWork() const;
     size_t GetPendingCount() const;
     size_t GetCacheSize() const;
@@ -336,8 +338,6 @@ private:
     }
 };
 
-// Debug utility functions for prop texture loading
-// Call these from your main application to diagnose texture loading issues
 void PrintPropTextureDebugSummary();
 void ResetPropTextureDebugCounters();
 void SetPropTextureDebugEnabled(bool enabled);

@@ -3,24 +3,20 @@
 #include "UI_Globals.h"
 #include "UI_Utils.h"
 #include "UI_Tables.h"
+#include "UI_Details.h"
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
-#include "../Area/Heightmap.h"
+#include "../Area/Props.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../tex/tex.h"
 #include "../Audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
 #include "../BNK/BNK_hirc.h"
-#include "../Skybox/Sky_Manager.h"
-#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <filesystem>
 #include <d3d11.h>
 #include <cstring>
-#include <cfloat>
-#include <climits>
-#include <stb_image_write.h>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -357,20 +353,7 @@ namespace UI_ContentBrowser {
                 res.generation = req.generation;
                 res.success = false;
 
-                // Handle composite thumbnail request
-                if (req.isComposite)
-                {
-                    std::vector<uint8_t> pixels;
-                    int w, h;
-                    if (Heightmap::GenerateCompositeThumbnailFromFiles(req.compositeAreaFiles, pixels, w, h, req.generation))
-                    {
-                        res.width = w;
-                        res.height = h;
-                        res.data = std::move(pixels);
-                        res.success = true;
-                    }
-                }
-                else if (req.archive && req.entry)
+                if (req.archive && req.entry)
                 {
                     if (req.extension == ".area")
                     {
@@ -555,9 +538,11 @@ namespace UI_ContentBrowser {
 
     static std::string GetWemDisplayNameFromFilename(const std::string& filename)
     {
+        // Extract numeric ID from filename like "12345678.wem"
         size_t dotPos = filename.rfind('.');
         std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
 
+        // Try to parse as number
         try {
             uint32_t id = std::stoul(baseName);
             std::string resolved = GetWemDisplayName(id);
@@ -565,6 +550,7 @@ namespace UI_ContentBrowser {
                 return resolved + ".wem";
             }
         } catch (...) {
+            // Not a numeric filename, keep original
         }
         return filename;
     }
@@ -586,6 +572,7 @@ namespace UI_ContentBrowser {
                 std::string name = wstring_to_utf8(child->getEntryName());
                 std::string ext = GetExtension(name);
 
+                // Apply WEM naming
                 if (ext == ".wem") {
                     name = GetWemDisplayNameFromFilename(name);
                 }
@@ -621,9 +608,6 @@ namespace UI_ContentBrowser {
             sResultQueue.clear();
         }
 
-        // Clear composite heightmap cache and generating state
-        Heightmap::ClearCompositeHeightmapCache();
-
         for (const auto& file : sCachedFiles)
         {
             if (file.textureID)
@@ -644,6 +628,7 @@ namespace UI_ContentBrowser {
             }
         }
 
+        // Load WEM name lookup early so it's available for all file listings
         LoadWemNameLookup(state.archives);
 
         bool isFiltering = (sSearchFilter[0] != '\0');
@@ -717,6 +702,7 @@ namespace UI_ContentBrowser {
                     info.archive = sSelectedArchive;
                     info.isDirectory = child->isDirectory();
 
+                    // Apply WEM naming for standalone .wem files
                     if (info.extension == ".wem") {
                         info.name = GetWemDisplayNameFromFilename(info.name);
                     }
@@ -732,39 +718,15 @@ namespace UI_ContentBrowser {
             return a.name < b.name;
         });
 
-        if (sSelectedFolder && !isFiltering)
-        {
-            bool hasAreaFiles = false;
-            for (const auto& f : sCachedFiles)
-            {
-                if (!f.isDirectory && f.extension == ".area")
-                {
-                    hasAreaFiles = true;
-                    break;
-                }
-            }
-
-            if (hasAreaFiles)
-            {
-                std::string folderName = wstring_to_utf8(sSelectedFolder->getEntryName());
-
-                FileInfo loadAllEntry;
-                loadAllEntry.name = "Load " + folderName;
-                loadAllEntry.extension = ".loadall";
-                loadAllEntry.entry = nullptr;
-                loadAllEntry.archive = sSelectedArchive;
-                loadAllEntry.isDirectory = false;
-                loadAllEntry.isLoadAllEntry = true;
-                sCachedFiles.insert(sCachedFiles.begin(), loadAllEntry);
-            }
-        }
-
         sNeedsRefresh = false;
     }
 
     void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
     {
         if (!arc || !fileEntry) return;
+
+        PropLoader::Instance().ClearPendingWork();
+        UI_Details::Reset();
 
         ResetAreaReferencePosition();
 
@@ -791,80 +753,6 @@ namespace UI_ContentBrowser {
         }
     }
 
-    void LoadAllAreasInFolder(AppState& state)
-    {
-        if (!sSelectedFolder || !sSelectedArchive) return;
-
-        std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
-        for (const auto& file : sCachedFiles)
-        {
-            if (!file.isDirectory && file.extension == ".area")
-            {
-                auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
-                if (fe)
-                    areaFiles.push_back({file.archive, fe});
-            }
-        }
-
-        if (areaFiles.empty()) return;
-
-        ResetAreaReferencePosition();
-        Sky::Manager::Instance().clear();
-
-        gLoadedAreas.clear();
-        gSelectedChunk = nullptr;
-        gSelectedChunkIndex = -1;
-        gSelectedAreaIndex = -1;
-        gSelectedAreaName.clear();
-        gLoadedModel = nullptr;
-        state.currentArea.reset();
-
-        for (const auto& [arc, fileEntry] : areaFiles)
-        {
-            auto af = std::make_shared<AreaFile>(arc, fileEntry);
-            if (af->load())
-            {
-                // Count valid chunks
-                const auto& chunks = af->getChunks();
-                int validChunks = 0;
-                for (const auto& c : chunks)
-                    if (c && c->isFullyInitialized()) validChunks++;
-
-                auto offset = af->getWorldOffset();
-                printf("Loaded area: TileX=%d TileY=%d WorldOffset=(%.1f, %.1f, %.1f) ValidChunks=%d\n",
-                       af->getTileX(), af->getTileY(), offset.x, offset.y, offset.z, validChunks);
-
-                // Only add areas with valid chunks
-                if (validChunks > 0)
-                {
-                    gLoadedAreas.push_back(af);
-                    if (!state.currentArea)
-                        state.currentArea = af;
-                }
-                else
-                {
-                    printf("  Skipping area with 0 valid chunks\n");
-                }
-            }
-            else
-            {
-                printf("FAILED to load area file\n");
-            }
-        }
-
-        Sky::Manager::Instance().clear();
-
-        if (!gLoadedAreas.empty())
-        {
-            SnapCameraToLoaded(state);
-            for (auto& area : gLoadedAreas)
-                area->loadAllPropsAsync();
-            gShowProps = true;
-        }
-
-        printf("[LoadAllAreasInFolder] Loaded %zu areas\n", gLoadedAreas.size());
-    }
-
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
     {
         if (!arc || !fileEntry) return;
@@ -881,12 +769,6 @@ namespace UI_ContentBrowser {
 
     void HandleFileOpen(AppState& state, const FileInfo& file)
     {
-        if (file.isLoadAllEntry)
-        {
-            LoadAllAreasInFolder(state);
-            return;
-        }
-
         if (file.isDirectory)
         {
             sSelectedFolder = file.entry;
@@ -1096,6 +978,5 @@ namespace UI_ContentBrowser {
             return filePath.substr(0, lastSlash);
         return "";
     }
-
 
 }

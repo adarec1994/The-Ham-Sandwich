@@ -10,4 +10,5 @@ namespace UI_Details
     void StartExportGLB(AppState& state, const std::string& defaultName);
     void StartExportFBX(AppState& state, const std::string& defaultName);
     bool IsExportInProgress();
+    bool IsPropsLoadingInProgress();
 }

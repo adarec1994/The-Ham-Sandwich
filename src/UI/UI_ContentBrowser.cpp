@@ -899,12 +899,10 @@ namespace UI_ContentBrowser {
 
                         if (file.isLoadAllEntry)
                         {
-                            // Queue composite thumbnail generation if not attempted
                             if (!file.attemptedLoad && !file.textureID)
                             {
                                 file.attemptedLoad = true;
 
-                                // Collect area files for the worker thread
                                 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
                                 for (size_t j = 0; j < sCachedFiles.size(); j++)
                                 {
@@ -933,14 +931,12 @@ namespace UI_ContentBrowser {
                                 }
                             }
 
-                            // Draw the thumbnail or fallback to blue box
                             if (file.textureID)
                             {
                                 drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
                             }
                             else
                             {
-                                // Fallback: Blue gradient box with play icon
                                 ImU32 bgColor = IM_COL32(40, 80, 140, 255);
                                 drawList->AddRectFilled(contentMin + ImVec2(5, 5), contentMin + ImVec2(iconSize - 5, iconSize - 5), bgColor, 8.0f);
                                 ImVec2 center = contentMin + ImVec2(iconSize * 0.5f, iconSize * 0.5f);
@@ -953,7 +949,6 @@ namespace UI_ContentBrowser {
                                 );
                             }
 
-                            // Right-click context menu for Load All
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 8));
                             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
 

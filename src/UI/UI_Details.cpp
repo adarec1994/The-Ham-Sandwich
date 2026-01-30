@@ -6,6 +6,7 @@
 #include "UI_Utils.h"
 #include "UI_TopBar.h"
 #include "../Area/AreaFile.h"
+#include "../Area/Props.h"
 #include "../models/M3Render.h"
 #include "../models/M3Common.h"
 #include "../tex/tex.h"
@@ -19,8 +20,20 @@
 
 namespace UI_Details
 {
+    static bool sPropsLoadingInProgress = false;
+    static size_t sPropsLoadingTotal = 0;
+    static AreaFile* sPropsLoadingArea = nullptr;
+
     void Reset()
     {
+        sPropsLoadingInProgress = false;
+        sPropsLoadingTotal = 0;
+        sPropsLoadingArea = nullptr;
+    }
+
+    bool IsPropsLoadingInProgress()
+    {
+        return sPropsLoadingInProgress;
     }
 
     static std::string ExtractFolderPath(const std::string& path)
@@ -629,6 +642,25 @@ namespace UI_Details
             return;
         }
 
+        if (sPropsLoadingInProgress && sPropsLoadingArea != area.get())
+        {
+            sPropsLoadingInProgress = false;
+            sPropsLoadingArea = nullptr;
+            sPropsLoadingTotal = 0;
+        }
+
+        if (sPropsLoadingInProgress)
+        {
+            PropLoader::Instance().ProcessGPUUploads(50);
+
+            if (!PropLoader::Instance().HasPendingWork())
+            {
+                sPropsLoadingInProgress = false;
+                sPropsLoadingArea = nullptr;
+                sPropsLoadingTotal = 0;
+            }
+        }
+
         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Selected Terrain");
         ImGui::Separator();
 
@@ -647,13 +679,35 @@ namespace UI_Details
 
         size_t propCount = area->getPropCount();
         size_t loadedProps = area->getLoadedPropCount();
-        ImGui::Text("Props: %zu / %zu loaded", loadedProps, propCount);
 
-        if (loadedProps < propCount)
+        if (sPropsLoadingInProgress)
         {
-            if (ImGui::Button("Load Props", ImVec2(-1, 24)))
+            float progress = sPropsLoadingTotal > 0 ? static_cast<float>(loadedProps) / static_cast<float>(sPropsLoadingTotal) : 0.0f;
+
+            char overlay[64];
+            snprintf(overlay, sizeof(overlay), "Loading Props: %zu / %zu", loadedProps, sPropsLoadingTotal);
+
+            ImGui::ProgressBar(progress, ImVec2(-1, 20), overlay);
+
+            size_t pending = PropLoader::Instance().GetPendingCount();
+            if (pending > 0)
             {
-                area->loadAllProps();
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Pending: %zu", pending);
+            }
+        }
+        else
+        {
+            ImGui::Text("Props: %zu / %zu loaded", loadedProps, propCount);
+
+            if (loadedProps < propCount)
+            {
+                if (ImGui::Button("Load Props", ImVec2(-1, 24)))
+                {
+                    sPropsLoadingInProgress = true;
+                    sPropsLoadingTotal = propCount;
+                    sPropsLoadingArea = area.get();
+                    area->loadAllPropsAsync();
+                }
             }
         }
     }
