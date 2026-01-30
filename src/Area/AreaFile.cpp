@@ -14,6 +14,21 @@
 #include <thread>
 #include <chrono>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
+
+static std::ofstream& GetDebugLog()
+{
+    static std::ofstream log("area_debug.txt", std::ios::out | std::ios::app);
+    return log;
+}
+
+#define AREA_LOG(msg) do { \
+    std::ostringstream ss; \
+    ss << msg; \
+    auto& log = GetDebugLog(); \
+    if (log.is_open()) { log << ss.str() << std::endl; log.flush(); } \
+} while(0)
 
 using namespace DirectX;
 
@@ -24,7 +39,7 @@ static XMMATRIX GlmToXM(const glm::mat4& m)
         m[0][1], m[1][1], m[2][1], m[3][1],
         m[0][2], m[1][2], m[2][2], m[3][2],
         m[0][3], m[1][3], m[2][3], m[3][3]
-    );
+   );
 }
 
 static std::string NormalizePropPath(const std::string& path)
@@ -139,6 +154,7 @@ XMFLOAT3 AreaFile::getWorldMaxBounds() const
 
 bool AreaFile::load()
 {
+    AREA_LOG("[AreaFile::load] START - content size: " << mContent.size());
     if (mContent.size() < 8) return false;
     struct R
     {
@@ -173,43 +189,55 @@ bool AreaFile::load()
         }
     }
 
-    if (!propData.empty()) ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
-    if (!curtData.empty()) ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
-    if (chnkData.empty()) { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); return true; }
-
-    struct ChunkJob
+    if (!propData.empty())
     {
-        uint32 index;
-        uint32 cellX;
-        uint32 cellY;
-        std::vector<uint8> data;
-    };
+        AREA_LOG("[AreaFile::load] Parsing props chunk, size: " << propData.size());
+        ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
+        AREA_LOG("[AreaFile::load] Parsed " << mProps.size() << " props");
+    }
+    if (!curtData.empty())
+    {
+        ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
+    }
+
+    if (chnkData.empty())
+    {
+        mMinBounds = XMFLOAT3(0, 0, 0);
+        mMaxBounds = XMFLOAT3(512, 50, 512);
+        return true;
+    }
+
+    struct ChunkJob { uint32 index; uint32 cellX; uint32 cellY; std::vector<uint8> data; };
     std::vector<ChunkJob> jobs;
-    jobs.reserve(256);
-
-    R cr{ chnkData.data(), chnkData.data() + chnkData.size() };
+    const uint8* cptr = chnkData.data();
+    const uint8* cend = cptr + chnkData.size();
     uint32 lastIndex = 0;
-    while (cr.can(4))
+
+    while (static_cast<size_t>(cend - cptr) >= 4)
     {
-        uint32 cellInfo = cr.u32le();
+        uint32 cellInfo = static_cast<uint32>(cptr[0]) | (static_cast<uint32>(cptr[1]) << 8) |
+                         (static_cast<uint32>(cptr[2]) << 16) | (static_cast<uint32>(cptr[3]) << 24);
+        cptr += 4;
         uint32 idxDelta = (cellInfo >> 24) & 0xFF;
         uint32 size = cellInfo & 0x00FFFFFF;
         uint32 index = idxDelta + lastIndex;
         lastIndex = index + 1;
         if (index >= 256) break;
-        if (!cr.can(size)) break;
-        if (size < 4) { cr.skip(size); continue; }
+        if (static_cast<size_t>(cend - cptr) < size) break;
+        if (size < 4) { cptr += size; continue; }
         ChunkJob job;
         job.index = index;
         job.cellX = index % 16;
         job.cellY = index / 16;
         job.data.resize(size);
-        cr.bytes(job.data.data(), size);
+        memcpy(job.data.data(), cptr, size);
+        cptr += size;
         jobs.push_back(std::move(job));
     }
 
     std::vector<ParsedChunk> parsedChunks(256);
     size_t numThreads = std::max(1u, std::thread::hardware_concurrency());
+    AREA_LOG("[AreaFile::load] Starting chunk parsing with " << numThreads << " threads, " << jobs.size() << " jobs");
 
     std::vector<std::thread> threads;
     std::atomic<size_t> jobIndex{0};
@@ -228,6 +256,7 @@ bool AreaFile::load()
         });
     }
     for (auto& t : threads) t.join();
+    AREA_LOG("[AreaFile::load] Chunk parsing complete");
 
     mChunks.assign(256, nullptr);
     uint32 validCount = 0;
@@ -256,10 +285,8 @@ bool AreaFile::load()
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
 
-    printf("[AreaDebug] Area %d_%d (load): terrain local bounds X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
-           mTileX, mTileY, mMinBounds.x, mMaxBounds.x, mMinBounds.z, mMaxBounds.z);
-    printf("[AreaDebug] WorldOffset=(%.1f, %.1f, %.1f)\n",
-           mWorldOffset.x, mWorldOffset.y, mWorldOffset.z);
+    AREA_LOG("[AreaDebug] Area " << mTileX << "_" << mTileY << " (load): terrain local bounds X=(" << mMinBounds.x << " to " << mMaxBounds.x << ") Z=(" << mMinBounds.z << " to " << mMaxBounds.z << ")");
+    AREA_LOG("[AreaDebug] WorldOffset=(" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
 
     mPropsAreWorldCoords = false;
     if (!mProps.empty())
@@ -287,21 +314,15 @@ bool AreaFile::load()
         float placementWorldX = static_cast<float>(placementTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
         float placementWorldZ = static_cast<float>(placementTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
 
-        printf("[AreaDebug] Props bounds: X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
-               minPropX, maxPropX, minPropZ, maxPropZ);
-        printf("[AreaDebug] Props center: (%.1f, %.1f)\n", propCenterX, propCenterZ);
-        printf("[AreaDebug] Min placement cells: (%u, %u) -> tiles (%d, %d)\n",
-               minPlaceX, minPlaceY, placementTileX, placementTileY);
-        printf("[AreaDebug] Placement world origin: (%.1f, %.1f)\n", placementWorldX, placementWorldZ);
+        AREA_LOG("[AreaDebug] Props bounds: X=(" << minPropX << " to " << maxPropX << ") Z=(" << minPropZ << " to " << maxPropZ << ")");
+        AREA_LOG("[AreaDebug] Props center: (" << propCenterX << ", " << propCenterZ << ")");
+        AREA_LOG("[AreaDebug] Min placement cells: (" << minPlaceX << ", " << minPlaceY << ") -> tiles (" << placementTileX << ", " << placementTileY << ")");
+        AREA_LOG("[AreaDebug] Placement world origin: (" << placementWorldX << ", " << placementWorldZ << ")");
 
-        printf("[AreaDebug] First 5 props with placement info:\n");
+        AREA_LOG("[AreaDebug] First 5 props with placement info:");
         for (size_t i = 0; i < std::min((size_t)5, mProps.size()); i++)
         {
-            printf("[AreaDebug]   Prop %u: pos=(%.1f, %.1f, %.1f) placement=(%u,%u)-(%u,%u)\n",
-                   mProps[i].uniqueID,
-                   mProps[i].position.x, mProps[i].position.y, mProps[i].position.z,
-                   mProps[i].placement.minX, mProps[i].placement.minY,
-                   mProps[i].placement.maxX, mProps[i].placement.maxY);
+            AREA_LOG("[AreaDebug]   Prop " << mProps[i].uniqueID << ": pos=(" << mProps[i].position.x << ", " << mProps[i].position.y << ", " << mProps[i].position.z << ") placement=(" << mProps[i].placement.minX << "," << mProps[i].placement.minY << ")-(" << mProps[i].placement.maxX << "," << mProps[i].placement.maxY << ")");
         }
 
         int propsInTerrainBounds = 0;
@@ -313,31 +334,43 @@ bool AreaFile::load()
                 propsInTerrainBounds++;
             }
         }
-        printf("[AreaDebug] Props within terrain bounds (0-512): %d of %d\n",
-               propsInTerrainBounds, (int)mProps.size());
+        AREA_LOG("[AreaDebug] Props within terrain bounds (0-512): " << propsInTerrainBounds << " of " << mProps.size());
 
-        if (propsInTerrainBounds < (int)mProps.size() / 2)
+        // Props are in WORLD coordinates - convert to LOCAL tile coordinates
+        // Tile world origin based on tile indices
+        float tileWorldX = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+        float tileWorldZ = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
+
+        AREA_LOG("[AreaDebug] Tile world origin: X=" << tileWorldX << ", Z=" << tileWorldZ);
+        AREA_LOG("[AreaDebug] Converting props from world to local coords by subtracting tile origin");
+
+        for (auto& prop : mProps)
         {
-            float offsetX = minPropX - mMinBounds.x;
-            float offsetZ = minPropZ - mMinBounds.z;
+            prop.position.x -= tileWorldX;
+            prop.position.z -= tileWorldZ;
+        }
 
-            printf("[AreaDebug] Aligning props min to terrain min: shifting by (%.1f, %.1f)\n", -offsetX, -offsetZ);
-
-            for (auto& prop : mProps)
+        // Log results
+        float newMinX = FLT_MAX, newMaxX = -FLT_MAX;
+        float newMinZ = FLT_MAX, newMaxZ = -FLT_MAX;
+        int newInBounds = 0;
+        for (const auto& prop : mProps)
+        {
+            newMinX = std::min(newMinX, prop.position.x);
+            newMaxX = std::max(newMaxX, prop.position.x);
+            newMinZ = std::min(newMinZ, prop.position.z);
+            newMaxZ = std::max(newMaxZ, prop.position.z);
+            if (prop.position.x >= -50 && prop.position.x <= 562 &&
+                prop.position.z >= -50 && prop.position.z <= 562)
             {
-                prop.position.x -= offsetX;
-                prop.position.z -= offsetZ;
+                newInBounds++;
             }
-
-            printf("[AreaDebug] After alignment - first prop pos: (%.1f, %.1f, %.1f)\n",
-                   mProps[0].position.x, mProps[0].position.y, mProps[0].position.z);
         }
-        else
-        {
-            printf("[AreaDebug] Props already aligned with terrain - no shift needed\n");
-        }
+        AREA_LOG("[AreaDebug] After conversion - Props bounds: X=(" << newMinX << " to " << newMaxX << ") Z=(" << newMinZ << " to " << newMaxZ << ")");
+        AREA_LOG("[AreaDebug] After conversion - Props in/near bounds (-50 to 562): " << newInBounds << " of " << mProps.size());
+        AREA_LOG("[AreaDebug] First prop after conversion: (" << mProps[0].position.x << ", " << mProps[0].position.y << ", " << mProps[0].position.z << ")");
     }
-    fflush(stdout);
+
 
     try
     {
@@ -345,11 +378,11 @@ bool AreaFile::load()
     }
     catch (const std::exception& e)
     {
-        printf("[AreaFile] Sky loading failed: %s\n", e.what());
+        AREA_LOG("[AreaFile] Sky loading failed: " << e.what());
     }
     catch (...)
     {
-        printf("[AreaFile] Sky loading failed with unknown exception\n");
+        AREA_LOG("[AreaFile] Sky loading failed with unknown exception");
     }
 
     return true;
@@ -390,28 +423,12 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
 
-    printf("[AreaDebug] Area %d_%d: terrain local bounds X=(%.1f to %.1f) Z=(%.1f to %.1f)\n",
-           mTileX, mTileY, mMinBounds.x, mMaxBounds.x, mMinBounds.z, mMaxBounds.z);
-    printf("[AreaDebug] WorldOffset=(%.1f, %.1f, %.1f)\n",
-           mWorldOffset.x, mWorldOffset.y, mWorldOffset.z);
+    AREA_LOG("[AreaDebug] Area " << mTileX << "_" << mTileY << ": terrain local bounds X=(" << mMinBounds.x << " to " << mMaxBounds.x << ") Z=(" << mMinBounds.z << " to " << mMaxBounds.z << ")");
+    AREA_LOG("[AreaDebug] WorldOffset=(" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
 
     mPropsAreWorldCoords = false;
     if (!mProps.empty())
     {
-        float minPropX = FLT_MAX, maxPropX = -FLT_MAX;
-        float minPropZ = FLT_MAX, maxPropZ = -FLT_MAX;
-
-        for (const auto& prop : mProps)
-        {
-            minPropX = std::min(minPropX, prop.position.x);
-            maxPropX = std::max(maxPropX, prop.position.x);
-            minPropZ = std::min(minPropZ, prop.position.z);
-            maxPropZ = std::max(maxPropZ, prop.position.z);
-        }
-
-        float propCenterX = (minPropX + maxPropX) * 0.5f;
-        float propCenterZ = (minPropZ + maxPropZ) * 0.5f;
-
         int propsInTerrainBounds = 0;
         for (const auto& prop : mProps)
         {
@@ -422,19 +439,17 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
             }
         }
 
-        if (propsInTerrainBounds < (int)mProps.size() / 2)
-        {
-            float offsetX = minPropX - mMinBounds.x;
-            float offsetZ = minPropZ - mMinBounds.z;
+        // Props are in WORLD coordinates - convert to LOCAL tile coordinates
+        float tileWorldX = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+        float tileWorldZ = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
 
-            for (auto& prop : mProps)
-            {
-                prop.position.x -= offsetX;
-                prop.position.z -= offsetZ;
-            }
+        for (auto& prop : mProps)
+        {
+            prop.position.x -= tileWorldX;
+            prop.position.z -= tileWorldZ;
         }
     }
-    fflush(stdout);
+
 
     try
     {
@@ -442,11 +457,11 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
     }
     catch (const std::exception& e)
     {
-        printf("[AreaFile] Sky loading failed: %s\n", e.what());
+        AREA_LOG("[AreaFile] Sky loading failed: " << e.what());
     }
     catch (...)
     {
-        printf("[AreaFile] Sky loading failed with unknown exception\n");
+        AREA_LOG("[AreaFile] Sky loading failed with unknown exception");
     }
 
     return true;
@@ -626,24 +641,56 @@ void AreaFile::updatePropLoading()
 
 void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
 {
+    static bool debugOnce = true;
+    if (debugOnce && !mProps.empty())
+    {
+        AREA_LOG("\n===== PROP RENDER DEBUG =====");
+        AREA_LOG("Tile: (" << mTileX << ", " << mTileY << ")");
+        AREA_LOG("WorldOffset: (" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
+        AREA_LOG("Rotation: " << mGlobalRotation << ", MirrorX: " << mMirrorX << ", MirrorZ: " << mMirrorZ);
+        AREA_LOG("Terrain local bounds: (" << mMinBounds.x << "," << mMinBounds.y << "," << mMinBounds.z << ") to (" << mMaxBounds.x << "," << mMaxBounds.y << "," << mMaxBounds.z << ")");
+        AREA_LOG("First 5 prop positions:");
+        for (size_t i = 0; i < std::min((size_t)5, mProps.size()); i++)
+        {
+            AREA_LOG("  [" << i << "] pos=(" << mProps[i].position.x << ", " << mProps[i].position.y << ", " << mProps[i].position.z << ") loaded=" << mProps[i].loaded.load());
+        }
+        AREA_LOG("=============================");
+        debugOnce = false;
+    }
+
+    XMVECTOR offsetVec = XMLoadFloat3(&mWorldOffset);
+    XMMATRIX worldModel = XMMatrixTranslationFromVector(offsetVec);
+
+    XMFLOAT3 center(256.0f, 0.0f, 256.0f);
+    XMVECTOR centerVec = XMLoadFloat3(&center);
+
+    worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(centerVec));
+
+    if (mGlobalRotation != 0.0f)
+        worldModel = XMMatrixMultiply(worldModel, XMMatrixRotationY(XMConvertToRadians(mGlobalRotation)));
+
+    if (mMirrorX || mMirrorZ)
+    {
+        float scaleX = mMirrorX ? -1.0f : 1.0f;
+        float scaleZ = mMirrorZ ? -1.0f : 1.0f;
+        worldModel = XMMatrixMultiply(worldModel, XMMatrixScaling(scaleX, 1.0f, scaleZ));
+    }
+
+    worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(XMVectorNegate(centerVec)));
+
     for (const auto& prop : mProps)
     {
         if (!prop.loaded || !prop.render) continue;
 
-        glm::vec3 pos(
-            prop.position.x + mWorldOffset.x,
-            prop.position.y + mWorldOffset.y,
-            prop.position.z + mWorldOffset.z
-        );
+        glm::mat4 glmLocalModel = glm::mat4(1.0f);
+        glmLocalModel = glm::translate(glmLocalModel, prop.position);
+        glmLocalModel = glmLocalModel * glm::mat4_cast(prop.rotation);
+        glmLocalModel = glm::scale(glmLocalModel, glm::vec3(prop.scale));
 
-        glm::mat4 glmModel = glm::mat4(1.0f);
-        glmModel = glm::translate(glmModel, pos);
-        glmModel = glmModel * glm::mat4_cast(prop.rotation);
-        glmModel = glm::scale(glmModel, glm::vec3(prop.scale));
+        XMMATRIX localModel = GlmToXM(glmLocalModel);
+        XMMATRIX finalModel = XMMatrixMultiply(localModel, worldModel);
 
-        XMMATRIX model = GlmToXM(glmModel);
-
-        prop.render->render(matView, matProj, model);
+        prop.render->render(matView, matProj, finalModel);
     }
 }
 
@@ -799,18 +846,21 @@ void AreaChunkRender::loadTextures(const ArchivePtr& archive)
             mLayerScale[i] = 4.0f;
             continue;
         }
+
         const auto* cached = texMgr.GetLayerTexture(archive, layerId);
         if (cached && cached->loaded)
         {
             mLayerDiffuse[i] = cached->diffuse;
-            mLayerNormal[i] = cached->normal ? cached->normal : nullptr;
+            mLayerNormal[i] = cached->normal;
         }
-        const auto* layerEntry = texMgr.GetLayerEntry(layerId);
-        if (layerEntry && layerEntry->scaleU > 0.0f)
-            mLayerScale[i] = layerEntry->scaleU;
+
+        const auto* entry = texMgr.GetLayerEntry(layerId);
+        if (entry)
+            mLayerScale[i] = entry->scaleU;
         else
             mLayerScale[i] = 4.0f;
     }
+
     mTexturesLoaded = true;
 }
 
@@ -819,94 +869,83 @@ void AreaChunkRender::bindTextures(ID3D11DeviceContext* context) const
     if (!context) return;
 
     auto& texMgr = TerrainTexture::Manager::Instance();
-    ID3D11ShaderResourceView* fallbackWhite = texMgr.GetFallbackWhite();
-    ID3D11ShaderResourceView* fallbackNormal = texMgr.GetFallbackNormal();
 
-    ID3D11ShaderResourceView* srvs[10] = {};
+    ID3D11ShaderResourceView* blendSRV = mBlendMapSRV.Get();
+    if (!blendSRV) blendSRV = texMgr.GetFallbackWhite();
+    context->PSSetShaderResources(0, 1, &blendSRV);
 
-    srvs[0] = mBlendMapSRV ? mBlendMapSRV.Get() : fallbackWhite;
-    srvs[1] = mColorMapSRV ? mColorMapSRV.Get() : fallbackWhite;
-
-    for (int i = 0; i < 4; ++i)
-        srvs[2 + i] = mLayerDiffuse[i] ? mLayerDiffuse[i].Get() : fallbackWhite;
+    ID3D11ShaderResourceView* colorSRV = mColorMapSRV.Get();
+    if (!colorSRV) colorSRV = texMgr.GetFallbackWhite();
+    context->PSSetShaderResources(1, 1, &colorSRV);
 
     for (int i = 0; i < 4; ++i)
-        srvs[6 + i] = mLayerNormal[i] ? mLayerNormal[i].Get() : fallbackNormal;
+    {
+        ID3D11ShaderResourceView* diffuse = mLayerDiffuse[i].Get();
+        if (!diffuse) diffuse = texMgr.GetFallbackWhite();
+        context->PSSetShaderResources(2 + i, 1, &diffuse);
 
-    context->PSSetShaderResources(0, 10, srvs);
-}
-
-void AreaChunkRender::render(ID3D11DeviceContext* context)
-{
-    if (!mVertexBuffer || !sIndexBuffer || !context) return;
-
-    UINT stride = sizeof(AreaVertex);
-    UINT offset = 0;
-    context->IASetVertexBuffers(0, 1, mVertexBuffer.GetAddressOf(), &stride, &offset);
-    context->IASetIndexBuffer(sIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
-    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context->DrawIndexed(static_cast<UINT>(indices.size()), 0, 0);
+        ID3D11ShaderResourceView* normal = mLayerNormal[i].Get();
+        if (!normal) normal = texMgr.GetFallbackNormal();
+        context->PSSetShaderResources(6 + i, 1, &normal);
+    }
 }
 
 void AreaChunkRender::geometryInit()
 {
-    if (!sDevice) return;
-
-    if (indices.empty())
+    if (!indices.empty()) return;
+    indices.reserve(16 * 16 * 6);
+    for (int y = 0; y < 16; ++y)
     {
-        indices.reserve(16 * 16 * 6);
-        for (uint32 y = 0; y < 16; y++)
+        for (int x = 0; x < 16; ++x)
         {
-            for (uint32 x = 0; x < 16; x++)
-            {
-                uint32 tl = y * 17 + x;
-                uint32 tr = y * 17 + x + 1;
-                uint32 bl = (y + 1) * 17 + x;
-                uint32 br = (y + 1) * 17 + x + 1;
-                indices.push_back(tl);
-                indices.push_back(bl);
-                indices.push_back(tr);
-                indices.push_back(tr);
-                indices.push_back(bl);
-                indices.push_back(br);
-            }
+            uint32 topLeft = y * 17 + x;
+            uint32 topRight = topLeft + 1;
+            uint32 bottomLeft = (y + 1) * 17 + x;
+            uint32 bottomRight = bottomLeft + 1;
+            indices.push_back(topLeft);
+            indices.push_back(bottomLeft);
+            indices.push_back(topRight);
+            indices.push_back(topRight);
+            indices.push_back(bottomLeft);
+            indices.push_back(bottomRight);
         }
     }
 
-    if (!sIndexBuffer && !indices.empty())
+    if (sDevice && !sIndexBuffer)
     {
-        D3D11_BUFFER_DESC ibd = {};
-        ibd.Usage = D3D11_USAGE_IMMUTABLE;
-        ibd.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint32));
-        ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-
+        D3D11_BUFFER_DESC desc = {};
+        desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint32));
+        desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA initData = {};
         initData.pSysMem = indices.data();
-
-        sDevice->CreateBuffer(&ibd, &initData, &sIndexBuffer);
+        sDevice->CreateBuffer(&desc, &initData, &sIndexBuffer);
     }
 }
 
 void AreaChunkRender::calcNormals()
 {
-    for (int y = 0; y < 17; y++)
+    for (int y = 0; y < 17; ++y)
     {
-        for (int x = 0; x < 17; x++)
+        for (int x = 0; x < 17; ++x)
         {
-            auto getPos = [&](int px, int py) -> XMVECTOR
+            auto getPos = [&](int px, int py) -> XMFLOAT3
             {
                 px = std::clamp(px, 0, 16);
                 py = std::clamp(py, 0, 16);
                 auto& v = mVertices[py * 17 + px];
-                return XMVectorSet(v.x, v.y, v.z, 0.0f);
+                return XMFLOAT3(v.x, v.y, v.z);
             };
-            XMVECTOR left = getPos(x - 1, y);
-            XMVECTOR right = getPos(x + 1, y);
-            XMVECTOR up = getPos(x, y - 1);
-            XMVECTOR down = getPos(x, y + 1);
-            XMVECTOR dx = XMVectorSubtract(right, left);
-            XMVECTOR dz = XMVectorSubtract(down, up);
+
+            XMFLOAT3 left = getPos(x - 1, y);
+            XMFLOAT3 right = getPos(x + 1, y);
+            XMFLOAT3 up = getPos(x, y - 1);
+            XMFLOAT3 down = getPos(x, y + 1);
+
+            XMVECTOR dx = XMVectorSubtract(XMLoadFloat3(&right), XMLoadFloat3(&left));
+            XMVECTOR dz = XMVectorSubtract(XMLoadFloat3(&down), XMLoadFloat3(&up));
             XMVECTOR normal = XMVector3Normalize(XMVector3Cross(dz, dx));
+
             XMFLOAT3 n;
             XMStoreFloat3(&n, normal);
             mVertices[y * 17 + x].nx = n.x;
@@ -916,25 +955,62 @@ void AreaChunkRender::calcNormals()
     }
 }
 
-void AreaChunkRender::calcTangentBitangent() {}
-void AreaChunkRender::extendBuffer() {}
+void AreaChunkRender::calcTangentBitangent()
+{
+    for (int y = 0; y < 17; ++y)
+    {
+        for (int x = 0; x < 17; ++x)
+        {
+            auto& v = mVertices[y * 17 + x];
+            XMFLOAT3 normal(v.nx, v.ny, v.nz);
+            XMVECTOR N = XMLoadFloat3(&normal);
+            XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+            XMVECTOR T = XMVector3Normalize(XMVector3Cross(up, N));
+            if (XMVectorGetX(XMVector3Length(T)) < 0.001f)
+            {
+                up = XMVectorSet(0, 0, 1, 0);
+                T = XMVector3Normalize(XMVector3Cross(up, N));
+            }
+            XMFLOAT3 tangent;
+            XMStoreFloat3(&tangent, T);
+            v.tanx = tangent.x;
+            v.tany = tangent.y;
+            v.tanz = tangent.z;
+            v.tanw = 1.0f;
+        }
+    }
+}
 
 void AreaChunkRender::uploadGPU()
 {
     if (!sDevice || mVertices.empty()) return;
 
     geometryInit();
+    calcTangentBitangent();
 
-    D3D11_BUFFER_DESC vbd = {};
-    vbd.Usage = D3D11_USAGE_IMMUTABLE;
-    vbd.ByteWidth = static_cast<UINT>(mVertices.size() * sizeof(AreaVertex));
-    vbd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_BUFFER_DESC vbDesc = {};
+    vbDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    vbDesc.ByteWidth = static_cast<UINT>(mVertices.size() * sizeof(AreaVertex));
+    vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 
-    D3D11_SUBRESOURCE_DATA initData = {};
-    initData.pSysMem = mVertices.data();
+    D3D11_SUBRESOURCE_DATA vbInit = {};
+    vbInit.pSysMem = mVertices.data();
 
-    sDevice->CreateBuffer(&vbd, &initData, &mVertexBuffer);
+    sDevice->CreateBuffer(&vbDesc, &vbInit, &mVertexBuffer);
     mIndexCount = static_cast<int>(indices.size());
+}
+
+void AreaChunkRender::render(ID3D11DeviceContext* context)
+{
+    if (!context || !mVertexBuffer || !sIndexBuffer) return;
+
+    UINT stride = sizeof(AreaVertex);
+    UINT offset = 0;
+    ID3D11Buffer* vb = mVertexBuffer.Get();
+    context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+    context->IASetIndexBuffer(sIndexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->DrawIndexed(mIndexCount, 0, 0);
 }
 
 AreaChunkRender::~AreaChunkRender() = default;
@@ -945,6 +1021,7 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     result.cellX = cellX;
     result.cellY = cellY;
     if (cellData.size() < 4) return result;
+
     struct R
     {
         const uint8* p; const uint8* e;
@@ -954,8 +1031,10 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
         uint8 u8() { return *p++; }
         void skip(size_t n) { p += n; }
     };
+
     R r{ cellData.data(), cellData.data() + cellData.size() };
     result.flags = r.u32le();
+
     std::vector<uint16> heightmap;
     bool hasHeightmap = false;
     if ((result.flags & ChnkCellFlags::HeightMap) && r.can(722)) { hasHeightmap = true; heightmap.resize(19 * 19); for (int j = 0; j < 19 * 19; j++) heightmap[j] = r.u16le(); }
@@ -990,6 +1069,7 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
     if ((result.flags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
     if ((result.flags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
+
     while (r.can(8))
     {
         uint32 chunkID = r.u32le();
@@ -1003,9 +1083,12 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
             default: r.skip(chunkSize); break;
         }
     }
+
     if (result.blendMap.empty() && result.blendMapDXT.empty()) { result.blendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.blendMap[i * 4 + 0] = 255; result.blendMap[i * 4 + 1] = 0; result.blendMap[i * 4 + 2] = 0; result.blendMap[i * 4 + 3] = 0; } }
     if (result.colorMap.empty() && result.colorMapDXT.empty()) { result.colorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { result.colorMap[i * 4 + 0] = 128; result.colorMap[i * 4 + 1] = 128; result.colorMap[i * 4 + 2] = 128; result.colorMap[i * 4 + 3] = 255; } }
+
     if (!hasHeightmap) return result;
+
     float baseX = static_cast<float>(cellX) * 32.0f;
     float baseZ = static_cast<float>(cellY) * 32.0f;
     float totalHeight = 0.0f;
@@ -1038,6 +1121,7 @@ ParsedChunk AreaChunkRender::parseChunkData(const std::vector<uint8>& cellData, 
         }
     }
     if (validHeights > 0) result.avgHeight = totalHeight / static_cast<float>(validHeights);
+
     for (int y = 0; y < 17; y++)
     {
         for (int x = 0; x < 17; x++)
@@ -1098,101 +1182,37 @@ AreaChunkRender::AreaChunkRender(const std::vector<uint8>& cellData, uint32 cell
 {
     for (int i = 0; i < 4; ++i) mLayerScale[i] = 0.0f;
     if (cellData.size() < 4) return;
-    struct R
+    auto parsed = parseChunkData(cellData, cellX, cellY);
+    if (!parsed.valid) return;
+    mFlags = parsed.flags;
+    mMinBounds = parsed.minBounds;
+    mMaxBounds = parsed.maxBounds;
+    mMaxHeight = parsed.maxHeight;
+    mAverageHeight = parsed.avgHeight;
+    for (int i = 0; i < 4; i++) { mWorldLayerIDs[i] = parsed.worldLayerIDs[i]; mZoneIds[i] = parsed.zoneIds[i]; }
+    mVertices = std::move(parsed.vertices);
+    mBlendMap = std::move(parsed.blendMap);
+    mBlendMapDXT = std::move(parsed.blendMapDXT);
+    mColorMap = std::move(parsed.colorMap);
+    mColorMapDXT = std::move(parsed.colorMapDXT);
+    mUnknownMap = std::move(parsed.unknownMap);
+    mUnk0x20 = parsed.unk0x20;
+    for (int i = 0; i < 4; i++) mSkyCorners[i] = parsed.skyCorners[i];
+    mShadowMap = std::move(parsed.shadowMap);
+    mLodHeightMap = std::move(parsed.lodHeightMap);
+    mLodHeightRange[0] = parsed.lodHeightRange[0];
+    mLodHeightRange[1] = parsed.lodHeightRange[1];
+    mZoneBounds = std::move(parsed.zoneBounds);
+    mUnkMap1 = std::move(parsed.unkMap1);
+    mProps = std::move(parsed.props);
+    mCurd = std::move(parsed.curd);
+    mWaters = std::move(parsed.waters);
+    mHasWater = parsed.hasWater;
+    if (!mVertices.empty())
     {
-        const uint8* p; const uint8* e;
-        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
-        uint32 u32le() { uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) | (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24); p += 4; return v; }
-        uint16 u16le() { uint16 v = static_cast<uint16>(p[0]) | (static_cast<uint16>(p[1]) << 8); p += 2; return v; }
-        uint8 u8() { return *p++; }
-        void skip(size_t n) { p += n; }
-    };
-    R r{ cellData.data(), cellData.data() + cellData.size() };
-    mFlags = r.u32le();
-    std::vector<uint16> heightmap;
-    bool hasHeightmap = false;
-    if ((mFlags & ChnkCellFlags::HeightMap) && r.can(722)) { hasHeightmap = true; heightmap.resize(19 * 19); for (int j = 0; j < 19 * 19; j++) heightmap[j] = r.u16le(); }
-    if ((mFlags & ChnkCellFlags::WorldLayerIDs) && r.can(16)) { for (int j = 0; j < 4; j++) mWorldLayerIDs[j] = r.u32le(); }
-    if ((mFlags & ChnkCellFlags::BlendMap) && r.can(8450)) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); mBlendMap[i * 4 + 0] = static_cast<uint8>(((val >> 0) & 0xF) * 255 / 15); mBlendMap[i * 4 + 1] = static_cast<uint8>(((val >> 4) & 0xF) * 255 / 15); mBlendMap[i * 4 + 2] = static_cast<uint8>(((val >> 8) & 0xF) * 255 / 15); mBlendMap[i * 4 + 3] = static_cast<uint8>(((val >> 12) & 0xF) * 255 / 15); } }
-    if ((mFlags & ChnkCellFlags::ColorMap) && r.can(8450)) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { uint16 val = r.u16le(); uint8 r5 = (val >> 0) & 0x1F; uint8 g6 = (val >> 5) & 0x3F; uint8 b5 = (val >> 11) & 0x1F; mColorMap[i * 4 + 0] = static_cast<uint8>((r5 * 255) / 31); mColorMap[i * 4 + 1] = static_cast<uint8>((g6 * 255) / 63); mColorMap[i * 4 + 2] = static_cast<uint8>((b5 * 255) / 31); mColorMap[i * 4 + 3] = 255; } }
-    if ((mFlags & ChnkCellFlags::UnkMap) && r.can(8450)) { mUnknownMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) mUnknownMap[j] = r.u16le(); }
-    if ((mFlags & ChnkCellFlags::Unk0x20) && r.can(4)) mUnk0x20 = static_cast<int32>(r.u32le());
-    if ((mFlags & ChnkCellFlags::SkyIDs) && r.can(64)) { for (int corner = 0; corner < 4; corner++) for (int skyIdx = 0; skyIdx < 4; skyIdx++) mSkyCorners[corner].worldSkyIDs[skyIdx] = r.u32le(); }
-    if ((mFlags & ChnkCellFlags::SkyWeights) && r.can(16)) { for (int corner = 0; corner < 4; corner++) for (int weightIdx = 0; weightIdx < 4; weightIdx++) mSkyCorners[corner].worldSkyWeights[weightIdx] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::ShadowMap) && r.can(4225)) { mShadowMap.resize(65 * 65); for (int j = 0; j < 65 * 65; j++) mShadowMap[j] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::LoDHeightMap) && r.can(2178)) { mLodHeightMap.resize(33 * 33); for (int j = 0; j < 33 * 33; j++) mLodHeightMap[j] = r.u16le(); }
-    if ((mFlags & ChnkCellFlags::LoDHeightRange) && r.can(4)) { mLodHeightRange[0] = r.u16le(); mLodHeightRange[1] = r.u16le(); }
-    if ((mFlags & ChnkCellFlags::Unk0x800) && r.can(578)) r.skip(578);
-    if ((mFlags & ChnkCellFlags::Unk0x1000) && r.can(1)) r.skip(1);
-    if ((mFlags & ChnkCellFlags::ColorMapDXT) && r.can(4624)) { mColorMapDXT.resize(4624); for (int j = 0; j < 4624; j++) mColorMapDXT[j] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::UnkMap0DXT) && r.can(2312)) r.skip(2312);
-    if ((mFlags & ChnkCellFlags::Unk0x8000) && r.can(8450)) r.skip(8450);
-    if ((mFlags & ChnkCellFlags::ZoneBound) && r.can(4096)) { mZoneBounds.resize(64 * 64); for (int j = 0; j < 64 * 64; j++) mZoneBounds[j] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::BlendMapDXT) && r.can(2312)) { mBlendMapDXT.resize(2312); for (int j = 0; j < 2312; j++) mBlendMapDXT[j] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::UnkMap1DXT) && r.can(2312)) { mUnkMap1.resize(2312); for (int j = 0; j < 2312; j++) mUnkMap1[j] = r.u8(); }
-    if ((mFlags & ChnkCellFlags::UnkMap2DXT) && r.can(2312)) r.skip(2312);
-    if ((mFlags & ChnkCellFlags::UnkMap3DXT) && r.can(2312)) r.skip(2312);
-    if ((mFlags & ChnkCellFlags::Unk0x200000) && r.can(1)) r.skip(1);
-    if ((mFlags & ChnkCellFlags::Unk0x400000) && r.can(16)) r.skip(16);
-    if ((mFlags & ChnkCellFlags::Unk0x800000) && r.can(16900)) r.skip(16900);
-    if ((mFlags & ChnkCellFlags::Unk0x1000000) && r.can(8)) r.skip(8);
-    if ((mFlags & ChnkCellFlags::Unk0x2000000) && r.can(8450)) r.skip(8450);
-    if ((mFlags & ChnkCellFlags::Unk0x4000000) && r.can(21316)) r.skip(21316);
-    if ((mFlags & ChnkCellFlags::Unk0x8000000) && r.can(4096)) r.skip(4096);
-    if ((mFlags & ChnkCellFlags::Zone) && r.can(16)) { for (int j = 0; j < 4; j++) mZoneIds[j] = r.u32le(); }
-    if ((mFlags & ChnkCellFlags::Unk0x20000000) && r.can(8450)) r.skip(8450);
-    if ((mFlags & ChnkCellFlags::Unk0x40000000) && r.can(8450)) r.skip(8450);
-    if ((mFlags & ChnkCellFlags::UnkMap4DXT) && r.can(2312)) r.skip(2312);
-    while (r.can(8))
-    {
-        uint32 chunkID = r.u32le();
-        uint32 chunkSize = r.u32le();
-        if (!r.can(chunkSize)) break;
-        switch (chunkID)
-        {
-            case 0x504F5250: { uint32 propCount = chunkSize / 4; mProps.uniqueIDs.resize(propCount); for (uint32 i = 0; i < propCount; i++) mProps.uniqueIDs[i] = r.u32le(); break; }
-            case 0x44727563: { mCurd.rawData.resize(chunkSize); for (uint32 i = 0; i < chunkSize; i++) mCurd.rawData[i] = r.u8(); break; }
-            case 0x47744157: { if (chunkSize >= 4) { uint32 waterCount = r.u32le(); if (waterCount > 0 && waterCount < 1000) { mWaters.resize(waterCount); uint32 remainingBytes = chunkSize - 4; uint32 bytesPerWater = waterCount > 0 ? remainingBytes / waterCount : 0; for (uint32 i = 0; i < waterCount && r.can(bytesPerWater); i++) { mWaters[i].rawData.resize(bytesPerWater); for (uint32 j = 0; j < bytesPerWater; j++) mWaters[i].rawData[j] = r.u8(); } mHasWater = true; } } break; }
-            default: r.skip(chunkSize); break;
-        }
+        calcNormals();
+        uploadGPU();
     }
-    if (mBlendMap.empty() && mBlendMapDXT.empty()) { mBlendMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mBlendMap[i * 4 + 0] = 255; mBlendMap[i * 4 + 1] = 0; mBlendMap[i * 4 + 2] = 0; mBlendMap[i * 4 + 3] = 0; } }
-    if (mColorMap.empty() && mColorMapDXT.empty()) { mColorMap.resize(65 * 65 * 4); for (int i = 0; i < 65 * 65; i++) { mColorMap[i * 4 + 0] = 128; mColorMap[i * 4 + 1] = 128; mColorMap[i * 4 + 2] = 128; mColorMap[i * 4 + 3] = 255; } }
-    if (!hasHeightmap) return;
-    float baseX = static_cast<float>(cellX) * 32.0f;
-    float baseZ = static_cast<float>(cellY) * 32.0f;
-    float totalHeight = 0.0f;
-    uint32 validHeights = 0;
-    mVertices.resize(17 * 17);
-    for (int y = 0; y < 17; y++)
-    {
-        for (int x = 0; x < 17; x++)
-        {
-            uint16 h = heightmap[y * 19 + x] & 0x7FFF;
-            float height = (static_cast<float>(h) / 8.0f) - 2048.0f;
-            AreaVertex v{};
-            v.x = baseX + static_cast<float>(x) * UnitSize;
-            v.z = baseZ + static_cast<float>(y) * UnitSize;
-            v.y = height;
-            v.u = static_cast<float>(x) / 16.0f;
-            v.v = static_cast<float>(y) / 16.0f;
-            v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
-            v.tanx = 1.0f; v.tany = 0.0f; v.tanz = 0.0f; v.tanw = 1.0f;
-            if (height > mMaxHeight) mMaxHeight = height;
-            totalHeight += height;
-            validHeights++;
-            mMinBounds.x = std::min(mMinBounds.x, v.x);
-            mMinBounds.y = std::min(mMinBounds.y, v.y);
-            mMinBounds.z = std::min(mMinBounds.z, v.z);
-            mMaxBounds.x = std::max(mMaxBounds.x, v.x);
-            mMaxBounds.y = std::max(mMaxBounds.y, v.y);
-            mMaxBounds.z = std::max(mMaxBounds.z, v.z);
-            mVertices[y * 17 + x] = v;
-        }
-    }
-    if (validHeights > 0) mAverageHeight = totalHeight / static_cast<float>(validHeights);
-    calcNormals();
-    uploadGPU();
 }
 
 void AreaFile::printTransformDebug() const {}
