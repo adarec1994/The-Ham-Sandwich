@@ -7,6 +7,7 @@
 #include "../Archive.h"
 #include "../Area/AreaFile.h"
 #include "../Area/Props.h"
+#include "../Area/Heightmap.h"
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../tex/tex.h"
@@ -17,6 +18,8 @@
 #include <filesystem>
 #include <d3d11.h>
 #include <cstring>
+#include <climits>
+#include <cfloat>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -353,7 +356,19 @@ namespace UI_ContentBrowser {
                 res.generation = req.generation;
                 res.success = false;
 
-                if (req.archive && req.entry)
+                if (req.isComposite && !req.compositeAreaFiles.empty())
+                {
+                    std::vector<uint8_t> pixels;
+                    int w, h;
+                    if (Heightmap::GenerateCompositeThumbnailFromFiles(req.compositeAreaFiles, pixels, w, h, req.generation))
+                    {
+                        res.width = w;
+                        res.height = h;
+                        res.data = std::move(pixels);
+                        res.success = true;
+                    }
+                }
+                else if (req.archive && req.entry)
                 {
                     if (req.extension == ".area")
                     {
@@ -718,6 +733,33 @@ namespace UI_ContentBrowser {
             return a.name < b.name;
         });
 
+        if (sSelectedFolder && !isFiltering)
+        {
+            bool hasAreaFiles = false;
+            for (const auto& f : sCachedFiles)
+            {
+                if (!f.isDirectory && f.extension == ".area")
+                {
+                    hasAreaFiles = true;
+                    break;
+                }
+            }
+
+            if (hasAreaFiles)
+            {
+                std::string folderName = wstring_to_utf8(sSelectedFolder->getEntryName());
+
+                FileInfo loadAllEntry;
+                loadAllEntry.name = "Load " + folderName;
+                loadAllEntry.extension = ".loadall";
+                loadAllEntry.entry = nullptr;
+                loadAllEntry.archive = sSelectedArchive;
+                loadAllEntry.isDirectory = false;
+                loadAllEntry.isLoadAllEntry = true;
+                sCachedFiles.insert(sCachedFiles.begin(), loadAllEntry);
+            }
+        }
+
         sNeedsRefresh = false;
     }
 
@@ -753,6 +795,55 @@ namespace UI_ContentBrowser {
         }
     }
 
+    void LoadAllAreasInFolder(AppState& state)
+    {
+        if (!sSelectedFolder || !sSelectedArchive) return;
+
+        std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
+        for (const auto& file : sCachedFiles)
+        {
+            if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
+            {
+                auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                if (fe)
+                    areaFiles.push_back({file.archive, fe});
+            }
+        }
+
+        if (areaFiles.empty()) return;
+
+        PropLoader::Instance().ClearPendingWork();
+        UI_Details::Reset();
+        ResetAreaReferencePosition();
+
+        gLoadedAreas.clear();
+        gSelectedChunk = nullptr;
+        gSelectedChunkIndex = -1;
+        gSelectedAreaIndex = -1;
+        gSelectedAreaName.clear();
+        gLoadedModel = nullptr;
+        state.currentArea.reset();
+
+        for (const auto& [arc, fileEntry] : areaFiles)
+        {
+            auto af = std::make_shared<AreaFile>(arc, fileEntry);
+            if (af->load())
+            {
+                gLoadedAreas.push_back(af);
+                if (!state.currentArea)
+                    state.currentArea = af;
+            }
+        }
+
+        if (!gLoadedAreas.empty())
+        {
+            SnapCameraToLoaded(state);
+            for (auto& area : gLoadedAreas)
+                area->loadAllPropsAsync();
+            gShowProps = true;
+        }
+    }
+
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)
     {
         if (!arc || !fileEntry) return;
@@ -769,6 +860,12 @@ namespace UI_ContentBrowser {
 
     void HandleFileOpen(AppState& state, const FileInfo& file)
     {
+        if (file.isLoadAllEntry)
+        {
+            LoadAllAreasInFolder(state);
+            return;
+        }
+
         if (file.isDirectory)
         {
             sSelectedFolder = file.entry;

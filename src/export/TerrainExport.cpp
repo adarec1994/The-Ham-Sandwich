@@ -1,9 +1,11 @@
 #include "TerrainExport.h"
 #include "../Area/AreaFile.h"
 #include "../Area/TerrainTexture.h"
+#include "../Area/Props.h"
 #include "../Archive.h"
 #include "../tex/tex.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <fstream>
 #include <filesystem>
 #include <set>
@@ -329,8 +331,47 @@ namespace TerrainExport
             }
         }
 
-        out << "\n]\n";
-        out << "}\n";
+        out << "\n]";
+
+        if (settings.exportProps)
+        {
+            std::vector<std::tuple<std::string, glm::vec3, glm::quat, float>> propInstances;
+
+            for (const auto& area : areas)
+            {
+                if (!area) continue;
+                glm::vec3 areaOffset = ToGlm(area->getWorldOffset());
+
+                const auto& props = area->getProps();
+                for (const auto& prop : props)
+                {
+                    if (prop.path.empty()) continue;
+
+                    glm::vec3 pos = prop.position + areaOffset;
+                    pos *= settings.scale;
+
+                    propInstances.emplace_back(prop.path, pos, prop.rotation, prop.scale);
+                }
+            }
+
+            out << ",\n\"props\": [\n";
+            bool firstProp = true;
+            for (const auto& [model, pos, rot, scale] : propInstances)
+            {
+                if (!firstProp) out << ",\n";
+                firstProp = false;
+
+                out << "  {\"model\": \"" << model << "\", ";
+                out << "\"position\": [" << pos.x << "," << pos.y << "," << pos.z << "], ";
+                out << "\"rotation\": [" << rot.x << "," << rot.y << "," << rot.z << "," << rot.w << "], ";
+                out << "\"scale\": " << scale << "}";
+            }
+            out << "\n]";
+
+            if (progress) progress(totalChunks, totalChunks, "Props exported: " + std::to_string(propInstances.size()));
+        }
+
+        out << "\n}\n";
         out.close();
 
         result.success = true;

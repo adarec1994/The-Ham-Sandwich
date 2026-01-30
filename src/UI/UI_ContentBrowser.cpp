@@ -654,6 +654,18 @@ namespace UI_ContentBrowser {
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportWsTerrainDlg", "Export Terrain", nullptr, config);
                                 }
 
+                                if (ImGui::MenuItem("Export as .wsterrain (with props)"))
+                                {
+                                    sExportDefaultName = baseName;
+                                    sExportArchive = file.archive;
+                                    sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportWsTerrainWithPropsDlg", "Export Terrain with Props", nullptr, config);
+                                }
+
                                 ImGui::EndPopup();
                             }
 
@@ -1001,6 +1013,27 @@ namespace UI_ContentBrowser {
                                     }
                                     ImGui::EndMenu();
                                 }
+
+                                ImGui::Separator();
+
+                                if (ImGui::MenuItem("Export as .wsterrain"))
+                                {
+                                    sExportDefaultName = folderName;
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportAllWsTerrainDlg", "Export All Terrain", nullptr, config);
+                                }
+
+                                if (ImGui::MenuItem("Export as .wsterrain (with props)"))
+                                {
+                                    sExportDefaultName = folderName;
+                                    IGFD::FileDialogConfig config;
+                                    config.path = ".";
+                                    config.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ExportAllWsTerrainWithPropsDlg", "Export All Terrain with Props", nullptr, config);
+                                }
+
                                 ImGui::EndPopup();
                             }
 
@@ -1651,6 +1684,121 @@ namespace UI_ContentBrowser {
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "Failed to load area file";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportWsTerrainWithPropsDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                auto areaFile = std::make_shared<AreaFile>(sExportArchive, sExportFileEntry);
+                if (areaFile->load())
+                {
+                    TerrainExport::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.scale = 1.0f;
+                    settings.exportProps = true;
+
+                    auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings);
+                    sNotificationSuccess = result.success;
+                    sNotificationMessage = result.success ? "Terrain with props exported successfully!" : ("Export failed: " + result.errorMessage);
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "Failed to load area file";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportAllWsTerrainDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                std::vector<AreaFilePtr> areaFiles;
+                for (const auto& file : sCachedFiles)
+                {
+                    if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
+                    {
+                        auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                        if (fe)
+                        {
+                            auto areaFile = std::make_shared<AreaFile>(file.archive, fe);
+                            if (areaFile->load())
+                                areaFiles.push_back(areaFile);
+                        }
+                    }
+                }
+
+                if (!areaFiles.empty())
+                {
+                    TerrainExport::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.scale = 1.0f;
+
+                    auto result = TerrainExport::ExportAreasToTerrain(areaFiles, settings);
+                    sNotificationSuccess = result.success;
+                    sNotificationMessage = result.success ?
+                        "Terrain exported: " + std::to_string(result.chunkCount) + " chunks" :
+                        ("Export failed: " + result.errorMessage);
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "No area files found";
+                }
+                sNotificationTimer = 3.0f;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportAllWsTerrainWithPropsDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
+            {
+                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+                std::vector<AreaFilePtr> areaFiles;
+                for (const auto& file : sCachedFiles)
+                {
+                    if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
+                    {
+                        auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
+                        if (fe)
+                        {
+                            auto areaFile = std::make_shared<AreaFile>(file.archive, fe);
+                            if (areaFile->load())
+                                areaFiles.push_back(areaFile);
+                        }
+                    }
+                }
+
+                if (!areaFiles.empty())
+                {
+                    TerrainExport::ExportSettings settings;
+                    settings.outputPath = dirPath;
+                    settings.scale = 1.0f;
+                    settings.exportProps = true;
+
+                    auto result = TerrainExport::ExportAreasToTerrain(areaFiles, settings);
+                    sNotificationSuccess = result.success;
+                    sNotificationMessage = result.success ?
+                        "Terrain with props exported: " + std::to_string(result.chunkCount) + " chunks" :
+                        ("Export failed: " + result.errorMessage);
+                }
+                else
+                {
+                    sNotificationSuccess = false;
+                    sNotificationMessage = "No area files found";
                 }
                 sNotificationTimer = 3.0f;
             }

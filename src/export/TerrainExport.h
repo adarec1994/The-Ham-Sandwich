@@ -16,6 +16,7 @@ namespace TerrainExport
     {
         std::string outputPath;
         float scale = 1.0f;
+        bool exportProps = false;
     };
 
     struct ExportResult
