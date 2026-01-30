@@ -14,21 +14,6 @@
 #include <thread>
 #include <chrono>
 #include <cstdio>
-#include <fstream>
-#include <sstream>
-
-static std::ofstream& GetDebugLog()
-{
-    static std::ofstream log("area_debug.txt", std::ios::out | std::ios::app);
-    return log;
-}
-
-#define AREA_LOG(msg) do { \
-    std::ostringstream ss; \
-    ss << msg; \
-    auto& log = GetDebugLog(); \
-    if (log.is_open()) { log << ss.str() << std::endl; log.flush(); } \
-} while(0)
 
 using namespace DirectX;
 
@@ -154,7 +139,6 @@ XMFLOAT3 AreaFile::getWorldMaxBounds() const
 
 bool AreaFile::load()
 {
-    AREA_LOG("[AreaFile::load] START - content size: " << mContent.size());
     if (mContent.size() < 8) return false;
     struct R
     {
@@ -191,9 +175,7 @@ bool AreaFile::load()
 
     if (!propData.empty())
     {
-        AREA_LOG("[AreaFile::load] Parsing props chunk, size: " << propData.size());
         ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
-        AREA_LOG("[AreaFile::load] Parsed " << mProps.size() << " props");
     }
     if (!curtData.empty())
     {
@@ -237,7 +219,6 @@ bool AreaFile::load()
 
     std::vector<ParsedChunk> parsedChunks(256);
     size_t numThreads = std::max(1u, std::thread::hardware_concurrency());
-    AREA_LOG("[AreaFile::load] Starting chunk parsing with " << numThreads << " threads, " << jobs.size() << " jobs");
 
     std::vector<std::thread> threads;
     std::atomic<size_t> jobIndex{0};
@@ -256,7 +237,6 @@ bool AreaFile::load()
         });
     }
     for (auto& t : threads) t.join();
-    AREA_LOG("[AreaFile::load] Chunk parsing complete");
 
     mChunks.assign(256, nullptr);
     uint32 validCount = 0;
@@ -285,104 +265,25 @@ bool AreaFile::load()
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
 
-    AREA_LOG("[AreaDebug] Area " << mTileX << "_" << mTileY << " (load): terrain local bounds X=(" << mMinBounds.x << " to " << mMaxBounds.x << ") Z=(" << mMinBounds.z << " to " << mMaxBounds.z << ")");
-    AREA_LOG("[AreaDebug] WorldOffset=(" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
-
     mPropsAreWorldCoords = false;
     if (!mProps.empty())
     {
-        float minPropX = FLT_MAX, maxPropX = -FLT_MAX;
-        float minPropZ = FLT_MAX, maxPropZ = -FLT_MAX;
-        uint32_t minPlaceX = UINT32_MAX, minPlaceY = UINT32_MAX;
-
-        for (const auto& prop : mProps)
-        {
-            minPropX = std::min(minPropX, prop.position.x);
-            maxPropX = std::max(maxPropX, prop.position.x);
-            minPropZ = std::min(minPropZ, prop.position.z);
-            maxPropZ = std::max(maxPropZ, prop.position.z);
-            minPlaceX = std::min(minPlaceX, (uint32_t)prop.placement.minX);
-            minPlaceY = std::min(minPlaceY, (uint32_t)prop.placement.minY);
-        }
-
-        float propCenterX = (minPropX + maxPropX) * 0.5f;
-        float propCenterZ = (minPropZ + maxPropZ) * 0.5f;
-
-        int placementTileX = minPlaceX / 16;
-        int placementTileY = minPlaceY / 16;
-
-        float placementWorldX = static_cast<float>(placementTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
-        float placementWorldZ = static_cast<float>(placementTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
-
-        AREA_LOG("[AreaDebug] Props bounds: X=(" << minPropX << " to " << maxPropX << ") Z=(" << minPropZ << " to " << maxPropZ << ")");
-        AREA_LOG("[AreaDebug] Props center: (" << propCenterX << ", " << propCenterZ << ")");
-        AREA_LOG("[AreaDebug] Min placement cells: (" << minPlaceX << ", " << minPlaceY << ") -> tiles (" << placementTileX << ", " << placementTileY << ")");
-        AREA_LOG("[AreaDebug] Placement world origin: (" << placementWorldX << ", " << placementWorldZ << ")");
-
-        AREA_LOG("[AreaDebug] First 5 props with placement info:");
-        for (size_t i = 0; i < std::min((size_t)5, mProps.size()); i++)
-        {
-            AREA_LOG("[AreaDebug]   Prop " << mProps[i].uniqueID << ": pos=(" << mProps[i].position.x << ", " << mProps[i].position.y << ", " << mProps[i].position.z << ") placement=(" << mProps[i].placement.minX << "," << mProps[i].placement.minY << ")-(" << mProps[i].placement.maxX << "," << mProps[i].placement.maxY << ")");
-        }
-
-        int propsInTerrainBounds = 0;
-        for (const auto& prop : mProps)
-        {
-            if (prop.position.x >= 0 && prop.position.x <= 512 &&
-                prop.position.z >= 0 && prop.position.z <= 512)
-            {
-                propsInTerrainBounds++;
-            }
-        }
-        AREA_LOG("[AreaDebug] Props within terrain bounds (0-512): " << propsInTerrainBounds << " of " << mProps.size());
-
-        // Props are in WORLD coordinates - convert to LOCAL tile coordinates
-        // Tile world origin based on tile indices
         float tileWorldX = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
         float tileWorldZ = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
-
-        AREA_LOG("[AreaDebug] Tile world origin: X=" << tileWorldX << ", Z=" << tileWorldZ);
-        AREA_LOG("[AreaDebug] Converting props from world to local coords by subtracting tile origin");
 
         for (auto& prop : mProps)
         {
             prop.position.x -= tileWorldX;
             prop.position.z -= tileWorldZ;
         }
-
-        // Log results
-        float newMinX = FLT_MAX, newMaxX = -FLT_MAX;
-        float newMinZ = FLT_MAX, newMaxZ = -FLT_MAX;
-        int newInBounds = 0;
-        for (const auto& prop : mProps)
-        {
-            newMinX = std::min(newMinX, prop.position.x);
-            newMaxX = std::max(newMaxX, prop.position.x);
-            newMinZ = std::min(newMinZ, prop.position.z);
-            newMaxZ = std::max(newMaxZ, prop.position.z);
-            if (prop.position.x >= -50 && prop.position.x <= 562 &&
-                prop.position.z >= -50 && prop.position.z <= 562)
-            {
-                newInBounds++;
-            }
-        }
-        AREA_LOG("[AreaDebug] After conversion - Props bounds: X=(" << newMinX << " to " << newMaxX << ") Z=(" << newMinZ << " to " << newMaxZ << ")");
-        AREA_LOG("[AreaDebug] After conversion - Props in/near bounds (-50 to 562): " << newInBounds << " of " << mProps.size());
-        AREA_LOG("[AreaDebug] First prop after conversion: (" << mProps[0].position.x << ", " << mProps[0].position.y << ", " << mProps[0].position.z << ")");
     }
-
 
     try
     {
         Sky::Manager::Instance().loadSkyForArea(this);
     }
-    catch (const std::exception& e)
-    {
-        AREA_LOG("[AreaFile] Sky loading failed: " << e.what());
-    }
     catch (...)
     {
-        AREA_LOG("[AreaFile] Sky loading failed with unknown exception");
     }
 
     return true;
@@ -423,23 +324,9 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
 
-    AREA_LOG("[AreaDebug] Area " << mTileX << "_" << mTileY << ": terrain local bounds X=(" << mMinBounds.x << " to " << mMaxBounds.x << ") Z=(" << mMinBounds.z << " to " << mMaxBounds.z << ")");
-    AREA_LOG("[AreaDebug] WorldOffset=(" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
-
     mPropsAreWorldCoords = false;
     if (!mProps.empty())
     {
-        int propsInTerrainBounds = 0;
-        for (const auto& prop : mProps)
-        {
-            if (prop.position.x >= 0 && prop.position.x <= 512 &&
-                prop.position.z >= 0 && prop.position.z <= 512)
-            {
-                propsInTerrainBounds++;
-            }
-        }
-
-        // Props are in WORLD coordinates - convert to LOCAL tile coordinates
         float tileWorldX = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
         float tileWorldZ = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
 
@@ -450,18 +337,12 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
         }
     }
 
-
     try
     {
         Sky::Manager::Instance().loadSkyForArea(this);
     }
-    catch (const std::exception& e)
-    {
-        AREA_LOG("[AreaFile] Sky loading failed: " << e.what());
-    }
     catch (...)
     {
-        AREA_LOG("[AreaFile] Sky loading failed with unknown exception");
     }
 
     return true;
@@ -641,23 +522,6 @@ void AreaFile::updatePropLoading()
 
 void AreaFile::renderProps(const Matrix& matView, const Matrix& matProj)
 {
-    static bool debugOnce = true;
-    if (debugOnce && !mProps.empty())
-    {
-        AREA_LOG("\n===== PROP RENDER DEBUG =====");
-        AREA_LOG("Tile: (" << mTileX << ", " << mTileY << ")");
-        AREA_LOG("WorldOffset: (" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")");
-        AREA_LOG("Rotation: " << mGlobalRotation << ", MirrorX: " << mMirrorX << ", MirrorZ: " << mMirrorZ);
-        AREA_LOG("Terrain local bounds: (" << mMinBounds.x << "," << mMinBounds.y << "," << mMinBounds.z << ") to (" << mMaxBounds.x << "," << mMaxBounds.y << "," << mMaxBounds.z << ")");
-        AREA_LOG("First 5 prop positions:");
-        for (size_t i = 0; i < std::min((size_t)5, mProps.size()); i++)
-        {
-            AREA_LOG("  [" << i << "] pos=(" << mProps[i].position.x << ", " << mProps[i].position.y << ", " << mProps[i].position.z << ") loaded=" << mProps[i].loaded.load());
-        }
-        AREA_LOG("=============================");
-        debugOnce = false;
-    }
-
     XMVECTOR offsetVec = XMLoadFloat3(&mWorldOffset);
     XMMATRIX worldModel = XMMatrixTranslationFromVector(offsetVec);
 
