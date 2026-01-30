@@ -20,6 +20,7 @@
 #include <cfloat>
 #include <climits>
 #include <stb_image_write.h>
+#include <future>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -105,6 +106,33 @@ namespace UI_ContentBrowser {
     static int sCompositeCacheHeight = 0;
     static uint64_t sCompositeCacheGeneration = 0;
     static std::mutex sCompositeCacheMutex;
+
+    // Composite heightmap generation progress
+    static std::atomic<bool> sCompositeGenerating{false};
+    static std::atomic<int> sCompositeProgressCurrent{0};
+    static std::atomic<int> sCompositeProgressTotal{0};
+
+    // Heightmap viewer loading state
+    static bool sHeightmapWaitingForGeneration = false;
+    static std::string sHeightmapWaitingFolderName;
+
+    bool IsCompositeHeightmapGenerating()
+    {
+        return sCompositeGenerating;
+    }
+
+    float GetCompositeHeightmapProgress()
+    {
+        int total = sCompositeProgressTotal;
+        if (total <= 0) return 0.0f;
+        return static_cast<float>(sCompositeProgressCurrent) / static_cast<float>(total);
+    }
+
+    bool IsCompositeHeightmapReady()
+    {
+        std::lock_guard<std::mutex> lock(sCompositeCacheMutex);
+        return !sCompositeHeightmapCache.empty() && sCompositeCacheGeneration == sCurrentGeneration;
+    }
 
     // Heightmap export state
     static std::vector<uint8_t> sHeightmapPixels;
@@ -353,27 +381,73 @@ namespace UI_ContentBrowser {
     {
         if (areaFiles.empty()) return false;
 
+        sCompositeGenerating = true;
+        sCompositeProgressTotal = static_cast<int>(areaFiles.size());
+        sCompositeProgressCurrent = 0;
+
+        // Determine thread count - use hardware threads but cap at reasonable number
+        unsigned int numThreads = std::thread::hardware_concurrency();
+        if (numThreads == 0) numThreads = 4;
+        numThreads = std::min(numThreads, 8u);
+        numThreads = std::min(numThreads, static_cast<unsigned int>(areaFiles.size()));
+
+        // Parse area files in parallel batches
         std::vector<ParsedArea> parsedAreas;
+        parsedAreas.reserve(areaFiles.size());
+        std::mutex resultsMutex;
+
+        size_t totalFiles = areaFiles.size();
+        size_t processed = 0;
+
+        while (processed < totalFiles)
+        {
+            // Launch batch of async tasks
+            std::vector<std::future<ParsedArea>> futures;
+            size_t batchEnd = std::min(processed + numThreads, totalFiles);
+
+            for (size_t i = processed; i < batchEnd; i++)
+            {
+                const auto& [arc, fe] = areaFiles[i];
+                futures.push_back(std::async(std::launch::async, [arc, fe]() {
+                    return AreaFile::parseAreaFile(arc, fe);
+                }));
+            }
+
+            // Collect results from this batch
+            for (auto& future : futures)
+            {
+                auto parsed = future.get();
+                if (parsed.valid)
+                {
+                    std::lock_guard<std::mutex> lock(resultsMutex);
+                    parsedAreas.push_back(std::move(parsed));
+                }
+                sCompositeProgressCurrent++;
+            }
+
+            processed = batchEnd;
+        }
+
+        // Calculate bounds from all parsed areas
         int minTX = INT_MAX, maxTX = INT_MIN;
         int minTY = INT_MAX, maxTY = INT_MIN;
         float globalMinH = FLT_MAX, globalMaxH = -FLT_MAX;
 
-        for (const auto& [arc, fe] : areaFiles)
+        for (const auto& parsed : parsedAreas)
         {
-            auto parsed = AreaFile::parseAreaFile(arc, fe);
-            if (parsed.valid)
-            {
-                minTX = std::min(minTX, parsed.tileX);
-                maxTX = std::max(maxTX, parsed.tileX);
-                minTY = std::min(minTY, parsed.tileY);
-                maxTY = std::max(maxTY, parsed.tileY);
-                globalMinH = std::min(globalMinH, parsed.minBounds.y);
-                globalMaxH = std::max(globalMaxH, parsed.maxHeight);
-                parsedAreas.push_back(std::move(parsed));
-            }
+            minTX = std::min(minTX, parsed.tileX);
+            maxTX = std::max(maxTX, parsed.tileX);
+            minTY = std::min(minTY, parsed.tileY);
+            maxTY = std::max(maxTY, parsed.tileY);
+            globalMinH = std::min(globalMinH, parsed.minBounds.y);
+            globalMaxH = std::max(globalMaxH, parsed.maxHeight);
         }
 
-        if (parsedAreas.empty()) return false;
+        if (parsedAreas.empty())
+        {
+            sCompositeGenerating = false;
+            return false;
+        }
 
         int tilesX = maxTY - minTY + 1;
         int tilesY = maxTX - minTX + 1;
@@ -470,6 +544,8 @@ namespace UI_ContentBrowser {
             sCompositeCacheHeight = croppedHeight;
             sCompositeCacheGeneration = generation;
         }
+
+        sCompositeGenerating = false;
 
         // Create thumbnail - downscale to max 256x256 maintaining aspect ratio
         int thumbSize = 256;
@@ -791,13 +867,17 @@ namespace UI_ContentBrowser {
             sResultQueue.clear();
         }
 
-        // Clear composite heightmap cache
+        // Clear composite heightmap cache and generating state
         {
             std::lock_guard<std::mutex> lock(sCompositeCacheMutex);
             sCompositeHeightmapCache.clear();
             sCompositeCacheWidth = 0;
             sCompositeCacheHeight = 0;
         }
+        sCompositeGenerating = false;
+        sCompositeProgressCurrent = 0;
+        sCompositeProgressTotal = 0;
+        sHeightmapWaitingForGeneration = false;
 
         for (const auto& file : sCachedFiles)
         {
@@ -1645,12 +1725,23 @@ namespace UI_ContentBrowser {
 
                 sHeightmapTitle = "Heightmap: " + folderName + " (" + std::to_string(areaCount) + " areas)";
                 sHeightmapExportName = folderName;
+                sHeightmapWaitingForGeneration = false;
                 sHeightmapViewerOpen = true;
                 return;
             }
         }
 
-        // No cache, generate from scratch
+        // If still generating, open viewer with loading state
+        if (sCompositeGenerating)
+        {
+            sHeightmapTitle = "Heightmap: " + folderName + " (" + std::to_string(areaCount) + " areas)";
+            sHeightmapWaitingFolderName = folderName;
+            sHeightmapWaitingForGeneration = true;
+            sHeightmapViewerOpen = true;
+            return;
+        }
+
+        // No cache and not generating - shouldn't happen normally, but generate from scratch
         std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
         for (const auto& file : sCachedFiles)
         {
@@ -1771,12 +1862,147 @@ namespace UI_ContentBrowser {
 
     void DrawHeightmapViewer()
     {
-        if (!sHeightmapViewerOpen) return;
+        // Always handle export dialogs, even if viewer is closed
+        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapPngDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                if (sPendingHeightmapType == PendingHeightmapType::Single)
+                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
+                else if (sPendingHeightmapType == PendingHeightmapType::All)
+                    GenerateAllAreasHeightmap(sPendingHeightmapName);
+                sPendingHeightmapType = PendingHeightmapType::None;
+
+                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+                ExportHeightmapToFile(path, "png");
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapJpgDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                if (sPendingHeightmapType == PendingHeightmapType::Single)
+                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
+                else if (sPendingHeightmapType == PendingHeightmapType::All)
+                    GenerateAllAreasHeightmap(sPendingHeightmapName);
+                sPendingHeightmapType = PendingHeightmapType::None;
+
+                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+                ExportHeightmapToFile(path, "jpg");
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapBmpDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                if (sPendingHeightmapType == PendingHeightmapType::Single)
+                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
+                else if (sPendingHeightmapType == PendingHeightmapType::All)
+                    GenerateAllAreasHeightmap(sPendingHeightmapName);
+                sPendingHeightmapType = PendingHeightmapType::None;
+
+                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+                ExportHeightmapToFile(path, "bmp");
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapTgaDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                if (sPendingHeightmapType == PendingHeightmapType::Single)
+                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
+                else if (sPendingHeightmapType == PendingHeightmapType::All)
+                    GenerateAllAreasHeightmap(sPendingHeightmapName);
+                sPendingHeightmapType = PendingHeightmapType::None;
+
+                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+                ExportHeightmapToFile(path, "tga");
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (!sHeightmapViewerOpen)
+        {
+            if (sHeightmapSRV)
+            {
+                sHeightmapSRV->Release();
+                sHeightmapSRV = nullptr;
+                sHeightmapPixels.clear();
+            }
+            return;
+        }
+
+        // If waiting for generation, check if it's done
+        if (sHeightmapWaitingForGeneration)
+        {
+            std::lock_guard<std::mutex> lock(sCompositeCacheMutex);
+            if (!sCompositeHeightmapCache.empty() && sCompositeCacheGeneration == sCurrentGeneration)
+            {
+                // Generation complete - load the data
+                sHeightmapPixels = sCompositeHeightmapCache;
+                sHeightmapWidth = sCompositeCacheWidth;
+                sHeightmapHeight = sCompositeCacheHeight;
+
+                if (sHeightmapSRV)
+                {
+                    sHeightmapSRV->Release();
+                    sHeightmapSRV = nullptr;
+                }
+
+                if (gDevice && !sHeightmapPixels.empty())
+                {
+                    D3D11_TEXTURE2D_DESC desc = {};
+                    desc.Width = sHeightmapWidth;
+                    desc.Height = sHeightmapHeight;
+                    desc.MipLevels = 1;
+                    desc.ArraySize = 1;
+                    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                    desc.SampleDesc.Count = 1;
+                    desc.Usage = D3D11_USAGE_DEFAULT;
+                    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+                    D3D11_SUBRESOURCE_DATA initData = {};
+                    initData.pSysMem = sHeightmapPixels.data();
+                    initData.SysMemPitch = sHeightmapWidth * 4;
+
+                    ID3D11Texture2D* tex = nullptr;
+                    if (SUCCEEDED(gDevice->CreateTexture2D(&desc, &initData, &tex)))
+                    {
+                        gDevice->CreateShaderResourceView(tex, nullptr, &sHeightmapSRV);
+                        tex->Release();
+                    }
+                }
+
+                sHeightmapExportName = sHeightmapWaitingFolderName;
+                sHeightmapWaitingForGeneration = false;
+            }
+        }
 
         ImGui::SetNextWindowSize(ImVec2(600, 600), ImGuiCond_FirstUseEver);
         if (ImGui::Begin(sHeightmapTitle.c_str(), &sHeightmapViewerOpen))
         {
-            if (sHeightmapSRV)
+            // Show loading progress if waiting
+            if (sHeightmapWaitingForGeneration)
+            {
+                ImVec2 avail = ImGui::GetContentRegionAvail();
+                ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + avail.x * 0.1f, ImGui::GetCursorPosY() + avail.y * 0.45f));
+
+                float progress = GetCompositeHeightmapProgress();
+                int current = sCompositeProgressCurrent;
+                int total = sCompositeProgressTotal;
+
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "Loading areas... %d / %d", current, total);
+
+                ImGui::ProgressBar(progress, ImVec2(avail.x * 0.8f, 0), overlay);
+            }
+            else if (sHeightmapSRV)
             {
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 float aspectImg = (float)sHeightmapWidth / (float)sHeightmapHeight;
@@ -1846,78 +2072,6 @@ namespace UI_ContentBrowser {
             }
         }
         ImGui::End();
-
-        // Handle export dialogs - generate heightmap on confirm
-        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapPngDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-            {
-                if (sPendingHeightmapType == PendingHeightmapType::Single)
-                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
-                else if (sPendingHeightmapType == PendingHeightmapType::All)
-                    GenerateAllAreasHeightmap(sPendingHeightmapName);
-                sPendingHeightmapType = PendingHeightmapType::None;
-
-                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-                ExportHeightmapToFile(path, "png");
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapJpgDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-            {
-                if (sPendingHeightmapType == PendingHeightmapType::Single)
-                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
-                else if (sPendingHeightmapType == PendingHeightmapType::All)
-                    GenerateAllAreasHeightmap(sPendingHeightmapName);
-                sPendingHeightmapType = PendingHeightmapType::None;
-
-                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-                ExportHeightmapToFile(path, "jpg");
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapBmpDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-            {
-                if (sPendingHeightmapType == PendingHeightmapType::Single)
-                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
-                else if (sPendingHeightmapType == PendingHeightmapType::All)
-                    GenerateAllAreasHeightmap(sPendingHeightmapName);
-                sPendingHeightmapType = PendingHeightmapType::None;
-
-                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-                ExportHeightmapToFile(path, "bmp");
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ExportHeightmapTgaDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk())
-            {
-                if (sPendingHeightmapType == PendingHeightmapType::Single)
-                    GenerateSingleAreaHeightmap(sPendingHeightmapArchive, sPendingHeightmapEntry, sPendingHeightmapName);
-                else if (sPendingHeightmapType == PendingHeightmapType::All)
-                    GenerateAllAreasHeightmap(sPendingHeightmapName);
-                sPendingHeightmapType = PendingHeightmapType::None;
-
-                std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-                ExportHeightmapToFile(path, "tga");
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (!sHeightmapViewerOpen && sHeightmapSRV)
-        {
-            sHeightmapSRV->Release();
-            sHeightmapSRV = nullptr;
-            sHeightmapPixels.clear();
-        }
     }
 
 }

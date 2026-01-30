@@ -142,6 +142,9 @@ namespace UI_ContentBrowser {
     void SetPendingAllHeightmapExport(const std::string& folderName);
     void GenerateSingleAreaHeightmap(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name);
     void GenerateAllAreasHeightmap(const std::string& folderName);
+    bool IsCompositeHeightmapGenerating();
+    float GetCompositeHeightmapProgress();
+    bool IsCompositeHeightmapReady();
     void ViewSingleAreaHeightmap(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry, const std::string& name);
     void ViewAllAreasHeightmap(AppState& state, const std::string& folderName);
     void DrawHeightmapViewer();
