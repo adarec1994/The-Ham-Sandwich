@@ -38,13 +38,14 @@ PSInput main(VSInput input)
 {
     PSInput output;
 
-    float4 worldPos = mul(model, float4(input.position, 1.0));
+    // Model from DirectXMath: row-vector convention (v * M)
+    float4 worldPos = mul(float4(input.position, 1.0), model);
     output.fragPos = worldPos.xyz;
 
     float3x3 normalMatrix = (float3x3)model;
-    output.normal = normalize(mul(normalMatrix, input.normal));
+    output.normal = normalize(mul(input.normal, normalMatrix));
 
-    float3 T = normalize(mul(normalMatrix, input.tangent.xyz));
+    float3 T = normalize(mul(input.tangent.xyz, normalMatrix));
     float3 N = output.normal;
     float3 B = cross(N, T) * input.tangent.w;
 
@@ -54,6 +55,7 @@ PSInput main(VSInput input)
     output.texCoord = input.texCoord;
     output.blendCoord = input.texCoord;
 
+    // View/Proj from GLM: column-vector convention (M * v)
     float4 viewPos = mul(view, worldPos);
     output.position = mul(projection, viewPos);
 

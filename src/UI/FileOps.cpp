@@ -824,9 +824,31 @@ namespace UI_ContentBrowser {
             auto af = std::make_shared<AreaFile>(arc, fileEntry);
             if (af->load())
             {
-                gLoadedAreas.push_back(af);
-                if (!state.currentArea)
-                    state.currentArea = af;
+                // Count valid chunks
+                const auto& chunks = af->getChunks();
+                int validChunks = 0;
+                for (const auto& c : chunks)
+                    if (c && c->isFullyInitialized()) validChunks++;
+
+                auto offset = af->getWorldOffset();
+                printf("Loaded area: TileX=%d TileY=%d WorldOffset=(%.1f, %.1f, %.1f) ValidChunks=%d\n",
+                       af->getTileX(), af->getTileY(), offset.x, offset.y, offset.z, validChunks);
+
+                // Only add areas with valid chunks
+                if (validChunks > 0)
+                {
+                    gLoadedAreas.push_back(af);
+                    if (!state.currentArea)
+                        state.currentArea = af;
+                }
+                else
+                {
+                    printf("  Skipping area with 0 valid chunks\n");
+                }
+            }
+            else
+            {
+                printf("FAILED to load area file\n");
             }
         }
 
@@ -839,6 +861,8 @@ namespace UI_ContentBrowser {
                 area->loadAllPropsAsync();
             gShowProps = true;
         }
+
+        printf("[LoadAllAreasInFolder] Loaded %zu areas\n", gLoadedAreas.size());
     }
 
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)

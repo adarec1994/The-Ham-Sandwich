@@ -14,6 +14,31 @@
 #include <thread>
 #include <chrono>
 #include <cstdio>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <mutex>
+
+static std::mutex gDebugLogMutex;
+static std::ofstream gDebugLogFile;
+static bool gDebugLogInitialized = false;
+
+static void DebugLog(const std::string& msg)
+{
+    std::lock_guard<std::mutex> lock(gDebugLogMutex);
+    if (!gDebugLogInitialized)
+    {
+        gDebugLogFile.open("area_debug.log", std::ios::out | std::ios::trunc);
+        gDebugLogInitialized = true;
+    }
+    if (gDebugLogFile.is_open())
+    {
+        gDebugLogFile << msg;
+        gDebugLogFile.flush();
+    }
+}
+
+#define DLOG(x) do { std::ostringstream _oss; _oss << x; DebugLog(_oss.str()); } while(0)
 
 using namespace DirectX;
 
@@ -42,6 +67,7 @@ const float AreaFile::GRID_SIZE = 512.0f;
 
 static int gReferenceTileX = -1;
 static int gReferenceTileY = -1;
+static std::mutex gGeometryInitMutex;
 
 std::vector<uint32> AreaChunkRender::indices;
 ComPtr<ID3D11Buffer> AreaChunkRender::sIndexBuffer;
@@ -54,7 +80,12 @@ void AreaChunkRender::SetDevice(ID3D11Device* device, ID3D11DeviceContext* conte
     sContext = context;
 }
 
-void ResetAreaReferencePosition() { gReferenceTileX = -1; gReferenceTileY = -1; }
+void ResetAreaReferencePosition()
+{
+    DLOG("[ResetAreaReferencePosition] Clearing reference tile position\n");
+    gReferenceTileX = -1;
+    gReferenceTileY = -1;
+}
 
 static inline int hexNibble(wchar_t c)
 {
@@ -95,10 +126,12 @@ void AreaFile::calculateWorldOffset()
     {
         gReferenceTileX = mTileX;
         gReferenceTileY = mTileY;
+        DLOG("[calculateWorldOffset] Setting reference tile: (" << gReferenceTileX << ", " << gReferenceTileY << ")\n");
     }
     mWorldOffset.x = static_cast<float>(mTileY - gReferenceTileY) * GRID_SIZE;
     mWorldOffset.y = 0.0f;
     mWorldOffset.z = static_cast<float>(mTileX - gReferenceTileX) * GRID_SIZE;
+    DLOG("[calculateWorldOffset] Tile (" << mTileX << ", " << mTileY << ") -> WorldOffset=(" << mWorldOffset.x << ", " << mWorldOffset.y << ", " << mWorldOffset.z << ")\n");
 }
 
 AreaFile::AreaFile(ArchivePtr archive, FileEntryPtr file)
@@ -139,6 +172,7 @@ XMFLOAT3 AreaFile::getWorldMaxBounds() const
 
 bool AreaFile::load()
 {
+    DLOG("[AreaFile::load] START - TileX=" << mTileX << " TileY=" << mTileY << " content size=" << mContent.size() << "\n");
     if (mContent.size() < 8) return false;
     struct R
     {
@@ -172,6 +206,8 @@ bool AreaFile::load()
             default: r.skip(size); break;
         }
     }
+
+    DLOG("[AreaFile::load] CHNK size=" << chnkData.size() << " PROp size=" << propData.size() << " CURT size=" << curtData.size() << "\n");
 
     if (!propData.empty())
     {
@@ -248,6 +284,14 @@ bool AreaFile::load()
         mChunks[i] = chunk;
         if (chunk && chunk->isFullyInitialized())
         {
+            if (validCount == 0)
+            {
+                const auto& verts = chunk->getVertices();
+                if (!verts.empty())
+                {
+                    DLOG("  First chunk " << i << ": " << verts.size() << " vertices, first=(" << verts[0].x << "," << verts[0].y << "," << verts[0].z << ") last=(" << verts.back().x << "," << verts.back().y << "," << verts.back().z << ")\n");
+                }
+            }
             totalH += chunk->getAverageHeight();
             validCount++;
             mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
@@ -261,6 +305,8 @@ bool AreaFile::load()
             mMaxBounds.z = std::max(mMaxBounds.z, cmax.z);
         }
     }
+
+    DLOG("[AreaFile::load] Loaded " << validCount << " valid chunks, bounds=(" << mMinBounds.x << "," << mMinBounds.z << ") to (" << mMaxBounds.x << "," << mMaxBounds.z << "), WorldOffset=(" << mWorldOffset.x << "," << mWorldOffset.y << "," << mWorldOffset.z << ")\n");
 
     if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
     else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
@@ -352,6 +398,23 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
 {
     if (!context || !constantBuffer) return;
 
+    // Simple logging - first 100 renders
+    static int sRenderLogCount = 0;
+    bool doLog = (sRenderLogCount < 100);
+
+    if (doLog)
+    {
+        sRenderLogCount++;
+
+        // Count valid chunks
+        int validChunks = 0;
+        for (const auto& c : mChunks)
+            if (c && c->isFullyInitialized()) validChunks++;
+
+        DLOG("[AreaFile::render #" << sRenderLogCount << "] TileX=" << mTileX << " TileY=" << mTileY << " WorldOffset=(" << mWorldOffset.x << "," << mWorldOffset.y << "," << mWorldOffset.z << ") validChunks=" << validChunks << "\n");
+    }
+
+    // Use proper world matrix with offset
     XMVECTOR offsetVec = XMLoadFloat3(&mWorldOffset);
     XMMATRIX worldModel = XMMatrixTranslationFromVector(offsetVec);
 
@@ -372,9 +435,11 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
 
     worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(XMVectorNegate(centerVec)));
 
+    int chunkCount = 0;
     for (auto& c : mChunks)
     {
         if (!c || !c->isFullyInitialized()) continue;
+        chunkCount++;
         c->loadTextures(mArchive);
 
         TerrainShader::TerrainCB cb;
@@ -403,6 +468,11 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
 
         c->bindTextures(context);
         c->render(context);
+    }
+
+    if (doLog)
+    {
+        DLOG("[AreaFile::render] Rendered " << chunkCount << " chunks\n");
     }
 }
 
@@ -687,6 +757,17 @@ ParsedArea AreaFile::parseAreaFile(const ArchivePtr& archive, const FileEntryPtr
 void AreaChunkRender::loadTextures(const ArchivePtr& archive)
 {
     if (mTexturesLoaded) return;
+
+    static bool firstChunkDebug = true;
+    if (firstChunkDebug)
+    {
+        DLOG("[loadTextures] First chunk debug:\n");
+        DLOG("  BlendMap size: " << mBlendMap.size() << ", BlendMapDXT size: " << mBlendMapDXT.size() << "\n");
+        DLOG("  ColorMap size: " << mColorMap.size() << ", ColorMapDXT size: " << mColorMapDXT.size() << "\n");
+        DLOG("  WorldLayerIDs: [" << mWorldLayerIDs[0] << ", " << mWorldLayerIDs[1] << ", " << mWorldLayerIDs[2] << ", " << mWorldLayerIDs[3] << "]\n");
+        firstChunkDebug = false;
+    }
+
     auto& texMgr = TerrainTexture::Manager::Instance();
     texMgr.LoadWorldLayerTable(archive);
 
@@ -756,7 +837,12 @@ void AreaChunkRender::bindTextures(ID3D11DeviceContext* context) const
 
 void AreaChunkRender::geometryInit()
 {
+    std::lock_guard<std::mutex> lock(gGeometryInitMutex);
+
     if (!indices.empty()) return;
+
+    DLOG("[geometryInit] Initializing shared index buffer\n");
+
     indices.reserve(16 * 16 * 6);
     for (int y = 0; y < 16; ++y)
     {
@@ -775,6 +861,8 @@ void AreaChunkRender::geometryInit()
         }
     }
 
+    DLOG("[geometryInit] indices.size()=" << indices.size() << " first6=[" << indices[0] << "," << indices[1] << "," << indices[2] << "," << indices[3] << "," << indices[4] << "," << indices[5] << "]\n");
+
     if (sDevice && !sIndexBuffer)
     {
         D3D11_BUFFER_DESC desc = {};
@@ -783,7 +871,8 @@ void AreaChunkRender::geometryInit()
         desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
         D3D11_SUBRESOURCE_DATA initData = {};
         initData.pSysMem = indices.data();
-        sDevice->CreateBuffer(&desc, &initData, &sIndexBuffer);
+        HRESULT hr = sDevice->CreateBuffer(&desc, &initData, &sIndexBuffer);
+        DLOG("[geometryInit] CreateBuffer result: 0x" << std::hex << hr << std::dec << "\n");
     }
 }
 
@@ -860,13 +949,29 @@ void AreaChunkRender::uploadGPU()
     D3D11_SUBRESOURCE_DATA vbInit = {};
     vbInit.pSysMem = mVertices.data();
 
-    sDevice->CreateBuffer(&vbDesc, &vbInit, &mVertexBuffer);
+    HRESULT hr = sDevice->CreateBuffer(&vbDesc, &vbInit, &mVertexBuffer);
     mIndexCount = static_cast<int>(indices.size());
+
+    static int sUploadDebugCount = 0;
+    if (sUploadDebugCount < 3)
+    {
+        DLOG("[uploadGPU] vertices=" << mVertices.size() << " mIndexCount=" << mIndexCount << " indices.size()=" << indices.size() << " hr=0x" << std::hex << hr << std::dec << "\n");
+        sUploadDebugCount++;
+    }
 }
 
 void AreaChunkRender::render(ID3D11DeviceContext* context)
 {
     if (!context || !mVertexBuffer || !sIndexBuffer) return;
+
+    // Simple chunk render logging - first 30 chunks
+    static int sChunkLogCount = 0;
+    if (sChunkLogCount < 30)
+    {
+        sChunkLogCount++;
+        const auto& v0 = mVertices[0];
+        DLOG("[ChunkRender #" << sChunkLogCount << "] verts=" << mVertices.size() << " first=(" << v0.x << "," << v0.y << "," << v0.z << ") VB=" << (void*)mVertexBuffer.Get() << " IB=" << (void*)sIndexBuffer.Get() << "\n");
+    }
 
     UINT stride = sizeof(AreaVertex);
     UINT offset = 0;

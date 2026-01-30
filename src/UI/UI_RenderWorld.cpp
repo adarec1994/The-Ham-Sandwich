@@ -15,6 +15,7 @@
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <fstream>
 
 using Microsoft::WRL::ComPtr;
 
@@ -328,13 +329,43 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
 
             gAreaRender.bind(gContext);
 
-            for (size_t i = 0; i < gLoadedAreas.size(); ++i)
+            // DEBUG: Log gLoadedAreas size once after load
+            static size_t sLastLoggedSize = 999999;
+            if (gLoadedAreas.size() != sLastLoggedSize)
+            {
+                std::ofstream dbg("area_debug.log", std::ios::app);
+                if (dbg.is_open())
+                {
+                    dbg << "[RenderAreas] gLoadedAreas.size() changed to " << gLoadedAreas.size() << "\n";
+                    dbg.close();
+                }
+                sLastLoggedSize = gLoadedAreas.size();
+            }
+
+            // DEBUG: Only render first N areas to test if multi-area is the issue
+            static constexpr size_t DEBUG_MAX_AREAS = 999; // Set to 1 to test single area, 999 for all
+            size_t areasRendered = 0;
+
+            for (size_t i = 0; i < gLoadedAreas.size() && areasRendered < DEBUG_MAX_AREAS; ++i)
             {
                 const auto& area = gLoadedAreas[i];
                 if (!area) continue;
 
+                // Skip areas with no valid chunks to avoid render issues
+                bool hasValidChunks = false;
+                for (const auto& chunk : area->getChunks())
+                {
+                    if (chunk && chunk->isFullyInitialized())
+                    {
+                        hasValidChunks = true;
+                        break;
+                    }
+                }
+                if (!hasValidChunks) continue;
+
                 bool isSelected = (static_cast<int>(i) == gSelectedAreaIndex && gSelectedPropID == 0);
                 area->render(gContext, dxView, dxProj, gAreaRender.getConstantBuffer(), isSelected);
+                areasRendered++;
             }
         }
 
