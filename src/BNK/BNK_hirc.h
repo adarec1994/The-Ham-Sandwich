@@ -76,7 +76,7 @@ public:
     bool loadSoundEventCsv(const uint8_t* data, size_t size);
     bool loadSoundBankTable(const uint8_t* data, size_t size);
     bool loadEventsBnk(const uint8_t* data, size_t size);
-    bool loadStructureBnk(const uint8_t* data, size_t size);  // Load Structure_SFX.bnk or Structure_Music.bnk
+    bool loadStructureBnk(const uint8_t* data, size_t size);
     bool loadAudioBnk(const uint8_t* data, size_t size);
     bool loadAudioBnk(const uint8_t* data, size_t size, const std::string& bankName);
     void finalize();
@@ -99,7 +99,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> mActionToTarget;
     std::unordered_map<uint32_t, std::vector<uint32_t>> mEventToActions;
     HircParser mEventsParser;
-    HircParser mStructureParser;  // Parser for Structure_SFX.bnk
+    HircParser mStructureParser;
     std::unordered_map<uint32_t, uint32_t> mChildToParent;  // child -> parent container
 
     std::unordered_map<uint32_t, uint32_t> mWemIdToBankId;
