@@ -90,6 +90,7 @@ namespace UI_ContentBrowser {
     extern ArchivePtr sExportArchive;
     extern std::shared_ptr<FileEntry> sExportFileEntry;
     extern std::string sExportDefaultName;
+    extern std::string sLastExportPath;
     extern std::atomic<bool> sExportInProgress;
     extern std::atomic<int> sExportProgress;
     extern std::atomic<int> sExportTotal;

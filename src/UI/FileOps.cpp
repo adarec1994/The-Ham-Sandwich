@@ -54,6 +54,7 @@ namespace UI_ContentBrowser {
     ArchivePtr sExportArchive = nullptr;
     std::shared_ptr<FileEntry> sExportFileEntry = nullptr;
     std::string sExportDefaultName;
+    std::string sLastExportPath = ".";
     std::atomic<bool> sExportInProgress{false};
     std::atomic<int> sExportProgress{0};
     std::atomic<int> sExportTotal{100};
