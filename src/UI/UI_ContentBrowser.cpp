@@ -431,7 +431,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".glb";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportGLBDlg", "Export GLB", ".glb", config);
@@ -446,7 +446,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".fbx";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportFBXDlg", "Export FBX", ".fbx", config);
@@ -461,7 +461,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".m3";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractM3RawDlg", "Extract Raw M3", ".m3", config);
@@ -499,7 +499,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".tex";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractTexRawDlg", "Extract Raw Texture", ".tex", config);
@@ -514,7 +514,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".png";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportTexPNGDlg", "Export PNG", ".png", config);
@@ -527,7 +527,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".jpg";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportTexJPGDlg", "Export JPG", ".jpg", config);
@@ -540,7 +540,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".tiff";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportTexTIFFDlg", "Export TIFF", ".tiff", config);
@@ -553,7 +553,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".dds";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportTexDDSDlg", "Export DDS", ".dds", config);
@@ -591,7 +591,7 @@ namespace UI_ContentBrowser {
                                     {
                                         if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + "_heightmap.png";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapPngDlg", "Export Heightmap as PNG", ".png", config);
@@ -600,7 +600,7 @@ namespace UI_ContentBrowser {
                                     {
                                         if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + "_heightmap.jpg";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapJpgDlg", "Export Heightmap as JPEG", ".jpg", config);
@@ -609,7 +609,7 @@ namespace UI_ContentBrowser {
                                     {
                                         if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + "_heightmap.bmp";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapBmpDlg", "Export Heightmap as BMP", ".bmp", config);
@@ -618,7 +618,7 @@ namespace UI_ContentBrowser {
                                     {
                                         if (fe) Heightmap::SetPendingSingleHeightmapExport(file.archive, fe, baseName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + "_heightmap.tga";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapTgaDlg", "Export Heightmap as TGA", ".tga", config);
@@ -635,7 +635,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".area";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractAreaRawDlg", "Extract Raw Area", ".area", config);
@@ -650,7 +650,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportWsTerrainDlg", "Export Terrain", nullptr, config);
                                 }
@@ -662,7 +662,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportWsTerrainWithPropsDlg", "Export Terrain with Props", nullptr, config);
                                 }
@@ -752,7 +752,7 @@ namespace UI_ContentBrowser {
                                         sAudioExportName = baseName;
 
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + ".wem";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkWemRawDlg", "Extract Raw WEM", ".wem", config);
@@ -765,7 +765,7 @@ namespace UI_ContentBrowser {
                                     {
                                         sAudioExportName = baseName;
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + ".wav";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportAudioDlg", "Save WAV", ".wav", config);
@@ -799,7 +799,7 @@ namespace UI_ContentBrowser {
 
                                         sBnkExportName = baseName;
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkDlg", "Select Output Folder", nullptr, config);
                                     }
@@ -814,7 +814,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".bnk";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractBnkRawDlg", "Extract Raw BNK", ".bnk", config);
@@ -845,7 +845,7 @@ namespace UI_ContentBrowser {
                                     {
                                         sTblExportName = baseName;
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = baseName + ".csv";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportTblCsvDlg", "Export CSV", ".csv", config);
@@ -861,7 +861,7 @@ namespace UI_ContentBrowser {
                                     sExportFileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
 
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.fileName = baseName + ".tbl";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExtractTblRawDlg", "Extract Raw TBL", ".tbl", config);
@@ -982,7 +982,7 @@ namespace UI_ContentBrowser {
                                     {
                                         Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = folderName + "_heightmap.png";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapPngDlg", "Export Heightmap as PNG", ".png", config);
@@ -991,7 +991,7 @@ namespace UI_ContentBrowser {
                                     {
                                         Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = folderName + "_heightmap.jpg";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapJpgDlg", "Export Heightmap as JPEG", ".jpg", config);
@@ -1000,7 +1000,7 @@ namespace UI_ContentBrowser {
                                     {
                                         Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = folderName + "_heightmap.bmp";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapBmpDlg", "Export Heightmap as BMP", ".bmp", config);
@@ -1009,7 +1009,7 @@ namespace UI_ContentBrowser {
                                     {
                                         Heightmap::SetPendingAllHeightmapExport(folderName);
                                         IGFD::FileDialogConfig config;
-                                        config.path = sLastExportPath;
+                                        config.path = ".";
                                         config.fileName = folderName + "_heightmap.tga";
                                         config.flags = ImGuiFileDialogFlags_Modal;
                                         ImGuiFileDialog::Instance()->OpenDialog("ExportHeightmapTgaDlg", "Export Heightmap as TGA", ".tga", config);
@@ -1023,7 +1023,7 @@ namespace UI_ContentBrowser {
                                 {
                                     sExportDefaultName = folderName;
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportAllWsTerrainDlg", "Export All Terrain", nullptr, config);
                                 }
@@ -1032,18 +1032,9 @@ namespace UI_ContentBrowser {
                                 {
                                     sExportDefaultName = folderName;
                                     IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
+                                    config.path = ".";
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog("ExportAllWsTerrainWithPropsDlg", "Export All Terrain with Props", nullptr, config);
-                                }
-
-                                if (ImGui::MenuItem("Export as single .wsterrain (combined)"))
-                                {
-                                    sExportDefaultName = folderName;
-                                    IGFD::FileDialogConfig config;
-                                    config.path = sLastExportPath;
-                                    config.flags = ImGuiFileDialogFlags_Modal;
-                                    ImGuiFileDialog::Instance()->OpenDialog("ExportCombinedWsTerrainDlg", "Export Combined Terrain", nullptr, config);
                                 }
 
                                 ImGui::EndPopup();
@@ -1839,7 +1830,6 @@ namespace UI_ContentBrowser {
             if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
-                sLastExportPath = dirPath;
 
                 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
@@ -1921,7 +1911,6 @@ namespace UI_ContentBrowser {
             if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
-                sLastExportPath = dirPath;
 
                 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
@@ -1992,109 +1981,6 @@ namespace UI_ContentBrowser {
                             sExportResult.errorMessage = std::to_string(successCount) + "/" + std::to_string(areaEntries.size()) +
                                 " areas, " + std::to_string(totalChunks) + " chunks, " + std::to_string(exportedModels.size()) + " models";
                         }
-                        sExportInProgress = false;
-                        sShowExportResult = true;
-                    }).detach();
-                }
-                else
-                {
-                    sNotificationSuccess = false;
-                    sNotificationMessage = "No area files found";
-                    sNotificationTimer = 3.0f;
-                }
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ExportCombinedWsTerrainDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
-        {
-            if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
-            {
-                std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
-                sLastExportPath = dirPath;
-                std::string folderName = sExportDefaultName;
-
-                std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
-                for (const auto& file : sCachedFiles)
-                {
-                    if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
-                    {
-                        auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
-                        if (fe)
-                            areaEntries.push_back({file.archive, fe});
-                    }
-                }
-
-                if (!areaEntries.empty())
-                {
-                    sExportInProgress = true;
-                    sExportProgress = 0;
-                    sExportTotal = (int)areaEntries.size() + 1;
-                    sExportStatus = "Loading areas...";
-
-                    std::thread([areaEntries, dirPath, folderName]() {
-                        std::vector<std::shared_ptr<AreaFile>> loadedAreas;
-                        loadedAreas.reserve(areaEntries.size());
-
-                        for (size_t i = 0; i < areaEntries.size(); ++i)
-                        {
-                            const auto& [archive, entry] = areaEntries[i];
-                            std::string areaName = wstring_to_utf8(entry->getEntryName());
-                            size_t dotPos = areaName.rfind('.');
-                            if (dotPos != std::string::npos)
-                                areaName = areaName.substr(0, dotPos);
-
-                            {
-                                std::lock_guard<std::mutex> lock(sExportMutex);
-                                sExportStatus = "Loading " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
-                            }
-                            sExportProgress = (int)i;
-
-                            auto areaFile = std::make_shared<AreaFile>(archive, entry);
-                            if (areaFile->load())
-                                loadedAreas.push_back(areaFile);
-                        }
-
-                        if (!loadedAreas.empty())
-                        {
-                            {
-                                std::lock_guard<std::mutex> lock(sExportMutex);
-                                sExportStatus = "Exporting combined terrain...";
-                            }
-                            sExportProgress = (int)areaEntries.size();
-
-                            std::string modelsPath = dirPath + "/models";
-                            std::filesystem::create_directories(modelsPath);
-
-                            TerrainExport::ExportSettings settings;
-                            settings.outputPath = dirPath;
-                            settings.sharedModelsPath = modelsPath;
-                            settings.scale = 1.0f;
-                            settings.exportProps = true;
-                            settings.exportSkybox = true;
-                            settings.exportPropModels = true;
-
-                            auto result = TerrainExport::ExportAreasToTerrain(loadedAreas, settings,
-                                [](int cur, int total, const std::string& status) {
-                                    std::lock_guard<std::mutex> lock(sExportMutex);
-                                    sExportStatus = status;
-                                });
-
-                            {
-                                std::lock_guard<std::mutex> lock(sExportMutex);
-                                sExportResult.success = result.success;
-                                sExportResult.errorMessage = std::to_string(loadedAreas.size()) + " areas, " +
-                                    std::to_string(result.chunkCount) + " chunks, " +
-                                    std::to_string(result.propCount) + " models";
-                            }
-                        }
-                        else
-                        {
-                            std::lock_guard<std::mutex> lock(sExportMutex);
-                            sExportResult.success = false;
-                            sExportResult.errorMessage = "No areas loaded successfully";
-                        }
-
                         sExportInProgress = false;
                         sShowExportResult = true;
                     }).detach();

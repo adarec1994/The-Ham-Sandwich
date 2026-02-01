@@ -19,22 +19,21 @@
 #include <locale>
 #include <sstream>
 #include <iomanip>
-#include <mutex>
 namespace M3Export
 {
     static uint32_t Crc32Table[256];
-    static std::once_flag Crc32InitFlag;
+    static bool Crc32Init = false;
     static void InitCrc32()
     {
-        std::call_once(Crc32InitFlag, []() {
-            for (uint32_t i = 0; i < 256; i++)
-            {
-                uint32_t c = i;
-                for (int j = 0; j < 8; j++)
-                    c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
-                Crc32Table[i] = c;
-            }
-        });
+        if (Crc32Init) return;
+        for (uint32_t i = 0; i < 256; i++)
+        {
+            uint32_t c = i;
+            for (int j = 0; j < 8; j++)
+                c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+            Crc32Table[i] = c;
+        }
+        Crc32Init = true;
     }
     static uint32_t Crc32(const uint8_t* data, size_t len, uint32_t crc = 0)
     {
@@ -240,7 +239,8 @@ namespace M3Export
         if (!tf.decodeLargestMipToRGBA(img)) return {};
         return EncodePNG_RGB(img.rgba.data(), img.width, img.height);
     }
-    static int64_t GenFbxId(int64_t& counter) { return counter++; }
+    static int64_t gFbxIdCounter = 1000000000;
+    static int64_t GenFbxId() { return gFbxIdCounter++; }
     static std::string FbxF(double v) {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(6) << v;
@@ -379,17 +379,17 @@ namespace M3Export
             result.textureCount = static_cast<int>(fbxTextures.size());
         }
         if (progress) progress(20, 100, "Building FBX...");
-        int64_t fbxIdCounter = 1000000000;
+        gFbxIdCounter = 1000000000;
         std::vector<int64_t> meshIds, meshGeoIds, materialIds, boneIds, boneAttrIds, clusterIds, skinIds;
-        int64_t rootId = GenFbxId(fbxIdCounter);
-        for (size_t i = 0; i < meshList.size(); ++i) { meshIds.push_back(GenFbxId(fbxIdCounter)); meshGeoIds.push_back(GenFbxId(fbxIdCounter)); }
-        for (size_t i = 0; i < meshList.size(); ++i) materialIds.push_back(GenFbxId(fbxIdCounter));
-        for (auto& tex : fbxTextures) { tex.texId = GenFbxId(fbxIdCounter); tex.vidId = GenFbxId(fbxIdCounter); }
+        int64_t rootId = GenFbxId();
+        for (size_t i = 0; i < meshList.size(); ++i) { meshIds.push_back(GenFbxId()); meshGeoIds.push_back(GenFbxId()); }
+        for (size_t i = 0; i < meshList.size(); ++i) materialIds.push_back(GenFbxId());
+        for (auto& tex : fbxTextures) { tex.texId = GenFbxId(); tex.vidId = GenFbxId(); }
         if (hasSkeleton) {
-            for (size_t i = 0; i < bones.size(); ++i) { boneIds.push_back(GenFbxId(fbxIdCounter)); boneAttrIds.push_back(GenFbxId(fbxIdCounter)); }
-            for (size_t i = 0; i < meshList.size(); ++i) skinIds.push_back(GenFbxId(fbxIdCounter));
+            for (size_t i = 0; i < bones.size(); ++i) { boneIds.push_back(GenFbxId()); boneAttrIds.push_back(GenFbxId()); }
+            for (size_t i = 0; i < meshList.size(); ++i) skinIds.push_back(GenFbxId());
             for (size_t m = 0; m < meshList.size(); ++m)
-                for (size_t b = 0; b < bones.size(); ++b) clusterIds.push_back(GenFbxId(fbxIdCounter));
+                for (size_t b = 0; b < bones.size(); ++b) clusterIds.push_back(GenFbxId());
         }
         struct FbxAnimCurve { int64_t id; std::vector<int64_t> times; std::vector<float> values; };
         struct FbxAnimCurveNode { int64_t id; std::string prop; int64_t curveX, curveY, curveZ; size_t boneIdx; };
@@ -407,9 +407,9 @@ namespace M3Export
             for (size_t ai = 0; ai < animations.size(); ++ai) {
                 const auto& anim = animations[ai];
                 FbxAnimStack stack;
-                stack.id = GenFbxId(fbxIdCounter);
+                stack.id = GenFbxId();
                 stack.name = "Animation_" + std::to_string(anim.sequenceId);
-                stack.layerId = GenFbxId(fbxIdCounter);
+                stack.layerId = GenFbxId();
                 float startMs = (float)anim.timestampStart;
                 float endMs = (float)anim.timestampEnd;
                 float durationMs = endMs - startMs;
@@ -429,11 +429,11 @@ namespace M3Export
                     for (int t = 0; t <= 2; ++t) if (!bone.tracks[t].keyframes.empty()) { scaleTrack = &bone.tracks[t]; break; }
                     if (transTrack && !transTrack->keyframes.empty()) {
                         FbxAnimCurveNode node;
-                        node.id = GenFbxId(fbxIdCounter);
+                        node.id = GenFbxId();
                         node.prop = "Lcl Translation";
                         node.boneIdx = bi;
                         FbxAnimCurve cx, cy, cz;
-                        cx.id = GenFbxId(fbxIdCounter); cy.id = GenFbxId(fbxIdCounter); cz.id = GenFbxId(fbxIdCounter);
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
                         for (const auto& kf : transTrack->keyframes) {
                             float ktMs = (float)kf.timestamp;
                             if (ktMs >= startMs && ktMs <= endMs) {
@@ -454,11 +454,11 @@ namespace M3Export
                     }
                     if (rotTrack && !rotTrack->keyframes.empty()) {
                         FbxAnimCurveNode node;
-                        node.id = GenFbxId(fbxIdCounter);
+                        node.id = GenFbxId();
                         node.prop = "Lcl Rotation";
                         node.boneIdx = bi;
                         FbxAnimCurve cx, cy, cz;
-                        cx.id = GenFbxId(fbxIdCounter); cy.id = GenFbxId(fbxIdCounter); cz.id = GenFbxId(fbxIdCounter);
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
                         for (const auto& kf : rotTrack->keyframes) {
                             float ktMs = (float)kf.timestamp;
                             if (ktMs >= startMs && ktMs <= endMs) {
@@ -480,11 +480,11 @@ namespace M3Export
                     }
                     if (scaleTrack && !scaleTrack->keyframes.empty()) {
                         FbxAnimCurveNode node;
-                        node.id = GenFbxId(fbxIdCounter);
+                        node.id = GenFbxId();
                         node.prop = "Lcl Scaling";
                         node.boneIdx = bi;
                         FbxAnimCurve cx, cy, cz;
-                        cx.id = GenFbxId(fbxIdCounter); cy.id = GenFbxId(fbxIdCounter); cz.id = GenFbxId(fbxIdCounter);
+                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
                         for (const auto& kf : scaleTrack->keyframes) {
                             float ktMs = (float)kf.timestamp;
                             if (ktMs >= startMs && ktMs <= endMs) {
