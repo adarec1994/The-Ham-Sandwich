@@ -4,6 +4,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <set>
 
 class AreaFile;
 using AreaFilePtr = std::shared_ptr<AreaFile>;
@@ -15,8 +16,12 @@ namespace TerrainExport
     struct ExportSettings
     {
         std::string outputPath;
+        std::string sharedModelsPath;
         float scale = 1.0f;
-        bool exportProps = false;
+        bool exportProps = true;
+        bool exportSkybox = true;
+        bool exportPropModels = true;
+        std::set<std::string>* exportedModels = nullptr;
     };
 
     struct ExportResult
@@ -28,6 +33,8 @@ namespace TerrainExport
         int triangleCount = 0;
         int chunkCount = 0;
         int textureCount = 0;
+        int propCount = 0;
+        int skyboxCount = 0;
     };
 
     ExportResult ExportAreaToTerrain(const AreaFilePtr& area, const ExportSettings& settings, ProgressCallback progress = nullptr);

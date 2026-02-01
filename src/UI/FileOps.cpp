@@ -18,8 +18,6 @@
 #include <filesystem>
 #include <d3d11.h>
 #include <cstring>
-#include <climits>
-#include <cfloat>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -91,6 +89,17 @@ namespace UI_ContentBrowser {
     std::thread sWorkerThread;
     uint64_t sCurrentGeneration = 0;
     std::condition_variable sQueueCV;
+
+    static std::atomic<bool> sLoadAllInProgress{false};
+    static std::atomic<int> sLoadAllCurrent{0};
+    static std::atomic<int> sLoadAllTotal{0};
+    static std::string sLoadAllFolderName;
+    static std::string sLoadAllCurrentAreaName;
+    static std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> sLoadAllAreaFiles;
+    static AppState* sLoadAllState = nullptr;
+    static std::thread sLoadAllThread;
+    static std::mutex sLoadAllMutex;
+    static std::vector<std::shared_ptr<AreaFile>> sLoadAllResults;
 
     static std::shared_ptr<FileEntry> FindFileRecursive(const IFileSystemEntryPtr& entry, const std::string& targetLower)
     {
@@ -457,8 +466,11 @@ namespace UI_ContentBrowser {
         if (!sWorkerRunning)
         {
             sWorkerRunning = true;
-            sWorkerThread = std::thread(ThumbnailWorker);
-            sWorkerThread.detach();
+            const int numWorkers = 4;
+            for (int i = 0; i < numWorkers; ++i)
+            {
+                std::thread(ThumbnailWorker).detach();
+            }
         }
     }
 
@@ -500,12 +512,14 @@ namespace UI_ContentBrowser {
 
     void ProcessThumbnailResults()
     {
-        std::lock_guard<std::mutex> lock(sQueueMutex);
-        while (!sResultQueue.empty())
+        std::deque<ThumbnailResult> results;
         {
-            auto res = sResultQueue.front();
-            sResultQueue.pop_front();
+            std::lock_guard<std::mutex> lock(sQueueMutex);
+            results.swap(sResultQueue);
+        }
 
+        for (auto& res : results)
+        {
             if (res.generation != sCurrentGeneration) continue;
             if (res.fileIndex < 0 || res.fileIndex >= (int)sCachedFiles.size()) continue;
 
@@ -798,6 +812,7 @@ namespace UI_ContentBrowser {
     void LoadAllAreasInFolder(AppState& state)
     {
         if (!sSelectedFolder || !sSelectedArchive) return;
+        if (sLoadAllInProgress) return;
 
         std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaFiles;
         for (const auto& file : sCachedFiles)
@@ -812,11 +827,24 @@ namespace UI_ContentBrowser {
 
         if (areaFiles.empty()) return;
 
+        if (sLoadAllThread.joinable())
+            sLoadAllThread.join();
+
+        sLoadAllFolderName = wstring_to_utf8(sSelectedFolder->getEntryName());
+        sLoadAllCurrentAreaName.clear();
+        sLoadAllAreaFiles = std::move(areaFiles);
+        sLoadAllTotal = static_cast<int>(sLoadAllAreaFiles.size());
+        sLoadAllCurrent = 0;
+        sLoadAllState = &state;
+        sLoadAllResults.clear();
+        sLoadAllInProgress = true;
+
         PropLoader::Instance().ClearPendingWork();
         UI_Details::Reset();
         ResetAreaReferencePosition();
 
         gLoadedAreas.clear();
+        gLoadedAreas.reserve(sLoadAllAreaFiles.size());
         gSelectedChunk = nullptr;
         gSelectedChunkIndex = -1;
         gSelectedAreaIndex = -1;
@@ -824,24 +852,109 @@ namespace UI_ContentBrowser {
         gLoadedModel = nullptr;
         state.currentArea.reset();
 
-        for (const auto& [arc, fileEntry] : areaFiles)
-        {
-            auto af = std::make_shared<AreaFile>(arc, fileEntry);
-            if (af->load())
+        sLoadAllThread = std::thread([]() {
+            for (size_t i = 0; i < sLoadAllAreaFiles.size(); i++)
             {
-                gLoadedAreas.push_back(af);
-                if (!state.currentArea)
-                    state.currentArea = af;
+                const auto& [arc, fileEntry] = sLoadAllAreaFiles[i];
+
+                {
+                    std::lock_guard<std::mutex> lock(sLoadAllMutex);
+                    sLoadAllCurrentAreaName = wstring_to_utf8(fileEntry->getEntryName());
+                }
+
+                auto af = std::make_shared<AreaFile>(arc, fileEntry);
+                if (af->load())
+                {
+                    std::lock_guard<std::mutex> lock(sLoadAllMutex);
+                    sLoadAllResults.push_back(af);
+                }
+                sLoadAllCurrent++;
             }
+        });
+    }
+
+    void UpdateLoadAllAreas(AppState& state)
+    {
+        if (!sLoadAllInProgress) return;
+
+        {
+            std::lock_guard<std::mutex> lock(sLoadAllMutex);
+            for (auto& af : sLoadAllResults)
+                gLoadedAreas.push_back(std::move(af));
+            sLoadAllResults.clear();
         }
 
-        if (!gLoadedAreas.empty())
+        if (sLoadAllCurrent >= sLoadAllTotal)
         {
-            SnapCameraToLoaded(state);
-            for (auto& area : gLoadedAreas)
-                area->loadAllPropsAsync();
-            gShowProps = true;
+            if (sLoadAllThread.joinable())
+                sLoadAllThread.join();
+
+            if (!gLoadedAreas.empty())
+            {
+                state.currentArea = gLoadedAreas[0];
+                SnapCameraToLoaded(state);
+                for (auto& area : gLoadedAreas)
+                    area->loadAllPropsAsync();
+                gShowProps = true;
+            }
+
+            sLoadAllInProgress = false;
+            sLoadAllAreaFiles.clear();
+            sLoadAllAreaFiles.shrink_to_fit();
+            sLoadAllCurrentAreaName.clear();
         }
+    }
+
+    void DrawLoadAllProgress()
+    {
+        if (!sLoadAllInProgress) return;
+
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 center = ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f);
+        ImVec2 size(450, 140);
+
+        ImGui::SetNextWindowPos(ImVec2(center.x - size.x * 0.5f, center.y - size.y * 0.5f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.12f, 0.95f));
+
+        std::string currentAreaName;
+        {
+            std::lock_guard<std::mutex> lock(sLoadAllMutex);
+            currentAreaName = sLoadAllCurrentAreaName;
+        }
+
+        if (ImGui::Begin("Loading Areas", nullptr, flags))
+        {
+            ImGui::Text("Loading %s", sLoadAllFolderName.c_str());
+            ImGui::Spacing();
+
+            int current = sLoadAllCurrent.load();
+            int total = sLoadAllTotal.load();
+            float progress = total > 0 ? (float)current / (float)total : 0.0f;
+
+            char overlay[64];
+            snprintf(overlay, sizeof(overlay), "%d / %d areas", current, total);
+            ImGui::ProgressBar(progress, ImVec2(-1, 24), overlay);
+
+            ImGui::Spacing();
+            if (!currentAreaName.empty())
+                ImGui::TextColored(ImVec4(0.5f, 0.7f, 0.9f, 1.0f), "%s", currentAreaName.c_str());
+            else
+                ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Preparing...");
+        }
+        ImGui::End();
+
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+    }
+
+    bool IsLoadAllInProgress()
+    {
+        return sLoadAllInProgress;
     }
 
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry)

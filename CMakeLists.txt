@@ -111,6 +111,8 @@ set(IMGUI_SOURCES
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
         src/BNK/BNK_hirc.cpp
         src/BNK/BNK_hirc.h
+        src/Shaders/ShaderManager.cpp
+        src/Shaders/ShaderManager.h
 )
 if(WIN32)
     list(APPEND IMGUI_SOURCES
@@ -339,6 +341,8 @@ set(HAM_SANDWICH_SOURCES
         src/UI/FileOps.h
         src/Area/Heightmap.cpp
         src/Area/Heightmap.h
+        src/Area/Water.cpp
+        src/Area/Water.h
 )
 
 if(WIN32)

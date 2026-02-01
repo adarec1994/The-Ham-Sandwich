@@ -82,6 +82,7 @@ namespace Tex
 
         bool readFromMemory(const uint8_t* data, size_t size);
         bool decodeLargestMipToRGBA(ImageRGBA& out) const;
+        bool decodeThumbnailMipToRGBA(ImageRGBA& out, int maxSize = 128) const;
 
         static bool decodeDXT1(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);
         static bool decodeDXT3(const uint8_t* src, int width, int height, std::vector<uint8_t>& outRGBA);

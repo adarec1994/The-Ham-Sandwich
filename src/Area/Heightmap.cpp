@@ -103,7 +103,7 @@ namespace Heightmap {
         {
             std::vector<std::future<ParsedArea>> futures;
             size_t batchEnd = std::min(processed + numThreads, totalFiles);
-            
+
             for (size_t i = processed; i < batchEnd; i++)
             {
                 const auto& [arc, fe] = areaFiles[i];
@@ -140,7 +140,7 @@ namespace Heightmap {
             globalMaxH = std::max(globalMaxH, parsed.maxHeight);
         }
 
-        if (parsedAreas.empty()) 
+        if (parsedAreas.empty())
         {
             sCompositeGenerating = false;
             return false;
@@ -794,7 +794,7 @@ namespace Heightmap {
                 else if (sPendingHeightmapType == PendingHeightmapType::All)
                     GenerateAllAreasHeightmap(sPendingHeightmapName, currentGeneration);
                 sPendingHeightmapType = PendingHeightmapType::None;
-                
+
                 std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
                 ExportHeightmapToFile(path, "png");
             }
@@ -810,7 +810,7 @@ namespace Heightmap {
                 else if (sPendingHeightmapType == PendingHeightmapType::All)
                     GenerateAllAreasHeightmap(sPendingHeightmapName, currentGeneration);
                 sPendingHeightmapType = PendingHeightmapType::None;
-                
+
                 std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
                 ExportHeightmapToFile(path, "jpg");
             }
@@ -826,7 +826,7 @@ namespace Heightmap {
                 else if (sPendingHeightmapType == PendingHeightmapType::All)
                     GenerateAllAreasHeightmap(sPendingHeightmapName, currentGeneration);
                 sPendingHeightmapType = PendingHeightmapType::None;
-                
+
                 std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
                 ExportHeightmapToFile(path, "bmp");
             }
@@ -842,7 +842,7 @@ namespace Heightmap {
                 else if (sPendingHeightmapType == PendingHeightmapType::All)
                     GenerateAllAreasHeightmap(sPendingHeightmapName, currentGeneration);
                 sPendingHeightmapType = PendingHeightmapType::None;
-                
+
                 std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
                 ExportHeightmapToFile(path, "tga");
             }
@@ -911,14 +911,14 @@ namespace Heightmap {
             {
                 ImVec2 avail = ImGui::GetContentRegionAvail();
                 ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + avail.x * 0.1f, ImGui::GetCursorPosY() + avail.y * 0.45f));
-                
+
                 float progress = GetCompositeHeightmapProgress();
                 int current = sCompositeProgressCurrent;
                 int total = sCompositeProgressTotal;
-                
+
                 char overlay[64];
                 snprintf(overlay, sizeof(overlay), "Loading areas... %d / %d", current, total);
-                
+
                 ImGui::ProgressBar(progress, ImVec2(avail.x * 0.8f, 0), overlay);
             }
             else if (sHeightmapSRV)

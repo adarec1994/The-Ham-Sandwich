@@ -4,6 +4,9 @@
 #include "../Area/Props.h"
 #include "../Archive.h"
 #include "../tex/tex.h"
+#include "M3Export.h"
+#include "../models/M3Loader.h"
+#include "../models/M3Render.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <fstream>
@@ -43,11 +46,38 @@ namespace TerrainExport
         size_t slash = path.rfind(L'/');
         if (slash == std::wstring::npos) slash = path.rfind(L'\\');
         std::wstring name = (slash != std::wstring::npos) ? path.substr(slash + 1) : path;
-        size_t ext = name.rfind(L".area");
-        if (ext != std::wstring::npos) name = name.substr(0, ext);
         size_t dot = name.rfind(L'.');
-        if (dot != std::wstring::npos && name.size() - dot == 5) name = name.substr(0, dot);
+        if (dot != std::wstring::npos) name = name.substr(0, dot);
         return SanitizeName(WideToNarrow(name));
+    }
+
+    static std::string ExtractModelFilename(const std::string& path)
+    {
+        if (path.empty()) return "model";
+        size_t lastSlash = path.rfind('/');
+        if (lastSlash == std::string::npos) lastSlash = path.rfind('\\');
+        std::string filename = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+        size_t ext = filename.rfind(".m3");
+        if (ext != std::string::npos) filename = filename.substr(0, ext);
+        return SanitizeName(filename);
+    }
+
+    static std::string ExtractModelRelativePath(const std::string& path)
+    {
+        if (path.empty()) return "model";
+        std::string result = path;
+
+        // Remove .m3 extension
+        size_t ext = result.rfind(".m3");
+        if (ext != std::string::npos) result = result.substr(0, ext);
+
+        // Normalize slashes to forward slashes
+        for (char& c : result) if (c == '\\') c = '/';
+
+        // Remove leading slash if present
+        if (!result.empty() && result[0] == '/') result = result.substr(1);
+
+        return result;
     }
 
     static std::string Base64Encode(const uint8_t* data, size_t len)
@@ -175,26 +205,163 @@ namespace TerrainExport
         ExportResult result;
         if (areas.empty()) { result.errorMessage = "No areas"; return result; }
 
-        std::string outDir = settings.outputPath;
-        if (outDir.empty()) { result.errorMessage = "No output path"; return result; }
-        std::filesystem::create_directories(outDir);
+        std::string baseOutputDir = settings.outputPath;
+        if (baseOutputDir.empty()) { result.errorMessage = "No output path"; return result; }
 
         std::string baseName = areas[0] ? ExtractAreaName(areas[0]->getPath()) : "terrain";
-        std::string jsonPath = outDir + "/" + baseName + ".wsterrain";
+
+        std::filesystem::create_directories(baseOutputDir);
+
+        std::string jsonPath = baseOutputDir + "/" + baseName + ".wsterrain";
+
+        std::string modelsDir = settings.sharedModelsPath.empty()
+            ? (baseOutputDir + "/models")
+            : settings.sharedModelsPath;
+        if (settings.exportPropModels)
+            std::filesystem::create_directories(modelsDir);
 
         ArchivePtr archive;
         for (const auto& a : areas) if (a && a->getArchive()) { archive = a->getArchive(); break; }
 
         std::set<uint32_t> uniqueLayerIds;
+        std::set<uint32_t> uniqueSkyIds;
+
         for (const auto& area : areas)
         {
             if (!area) continue;
             for (const auto& chunk : area->getChunks())
             {
                 if (!chunk) continue;
+
                 const uint32_t* ids = chunk->getWorldLayerIDs();
                 for (int i = 0; i < 4; i++) if (ids[i]) uniqueLayerIds.insert(ids[i]);
+
+                if (settings.exportSkybox && chunk->hasSkyData())
+                {
+                    const SkyCorner* corners = chunk->getSkyCorners();
+                    if (corners)
+                    {
+                        for (int c = 0; c < 4; c++)
+                        {
+                            for (int s = 0; s < 4; s++)
+                            {
+                                if (corners[c].worldSkyIDs[s] != 0)
+                                    uniqueSkyIds.insert(corners[c].worldSkyIDs[s]);
+                            }
+                        }
+                    }
+                }
             }
+        }
+
+        std::vector<std::tuple<std::string, std::string, glm::vec3, glm::quat, float>> propInstances;
+        std::set<std::string> uniqueModels;
+
+        if (settings.exportProps || settings.exportPropModels)
+        {
+            for (const auto& area : areas)
+            {
+                if (!area) continue;
+                glm::vec3 areaOffset = ToGlm(area->getWorldOffset());
+
+                const auto& props = area->getProps();
+                for (const auto& prop : props)
+                {
+                    if (prop.path.empty()) continue;
+
+                    glm::vec3 pos = prop.position + areaOffset;
+                    pos *= settings.scale;
+
+                    std::string modelRelPath = ExtractModelRelativePath(prop.path);
+                    propInstances.emplace_back(prop.path, modelRelPath, pos, prop.rotation, prop.scale);
+                    uniqueModels.insert(prop.path);
+                }
+            }
+        }
+
+        std::set<std::string> modelsToExport;
+        if (settings.exportPropModels)
+        {
+            for (const auto& modelPath : uniqueModels)
+            {
+                if (settings.exportedModels && settings.exportedModels->count(modelPath))
+                    continue;
+                modelsToExport.insert(modelPath);
+            }
+        }
+
+        int totalLayers = static_cast<int>(uniqueLayerIds.size());
+        int totalChunks = 0;
+        for (const auto& area : areas)
+            if (area) for (const auto& c : area->getChunks())
+                if (c && c->isFullyInitialized()) totalChunks++;
+        int totalModels = static_cast<int>(modelsToExport.size());
+        int totalSteps = totalLayers + totalChunks + totalModels;
+        int currentStep = 0;
+
+        if (settings.exportPropModels && archive && !modelsToExport.empty())
+        {
+            for (const auto& modelPath : modelsToExport)
+            {
+                if (progress) progress(currentStep, totalSteps, "Exporting model: " + ExtractModelFilename(modelPath));
+
+                try
+                {
+                    std::wstring wpath(modelPath.begin(), modelPath.end());
+                    auto entry = archive->getByPath(wpath);
+                    if (!entry)
+                    {
+                        if (wpath.find(L".m3") == std::wstring::npos)
+                            wpath += L".m3";
+                        entry = archive->getByPath(wpath);
+                    }
+
+                    if (entry)
+                    {
+                        std::vector<uint8_t> data;
+                        archive->getFileData(std::dynamic_pointer_cast<FileEntry>(entry), data);
+
+                        if (!data.empty())
+                        {
+                            M3ModelData modelData = M3Loader::Load(data);
+                            if (modelData.success)
+                            {
+                                auto render = std::make_unique<M3Render>(modelData, archive, true, true);
+
+                                // Get relative path and create subdirectories
+                                std::string relPath = ExtractModelRelativePath(modelPath);
+                                std::string modelOutputDir = modelsDir;
+
+                                // Extract directory part from relative path
+                                size_t lastSlash = relPath.rfind('/');
+                                if (lastSlash != std::string::npos)
+                                {
+                                    std::string subDir = relPath.substr(0, lastSlash);
+                                    modelOutputDir = modelsDir + "/" + subDir;
+                                    std::filesystem::create_directories(modelOutputDir);
+                                }
+
+                                M3Export::ExportSettings expSettings;
+                                expSettings.outputPath = modelOutputDir;
+                                expSettings.customName = ExtractModelFilename(modelPath);
+                                expSettings.scale = 1.0f;
+                                expSettings.exportTextures = true;
+                                expSettings.exportSkeleton = true;
+                                expSettings.exportAnimations = true;
+
+                                M3Export::ExportToFBX(render.get(), archive, expSettings, nullptr);
+
+                                if (settings.exportedModels)
+                                    settings.exportedModels->insert(modelPath);
+                            }
+                        }
+                    }
+                }
+                catch (...) {}
+
+                currentStep++;
+            }
+            result.propCount = static_cast<int>(modelsToExport.size());
         }
 
         auto& texMgr = TerrainTexture::Manager::Instance();
@@ -205,15 +372,14 @@ namespace TerrainExport
 
         out << std::fixed << std::setprecision(6);
         out << "{\n";
-        out << "\"version\": 2,\n";
+        out << "\"version\": 3,\n";
         out << "\"name\": \"" << baseName << "\",\n";
 
         out << "\"layers\": {\n";
         int layerIdx = 0;
-        int totalLayers = static_cast<int>(uniqueLayerIds.size());
         for (uint32_t layerId : uniqueLayerIds)
         {
-            if (progress) progress(layerIdx, totalLayers, "Exporting layer textures...");
+            if (progress) progress(currentStep, totalSteps, "Exporting layer textures...");
 
             const auto* entry = texMgr.GetLayerEntry(layerId);
             float scale = (entry && entry->scaleU > 0) ? entry->scaleU : 4.0f;
@@ -237,17 +403,27 @@ namespace TerrainExport
             }
             out << "\n}";
             layerIdx++;
+            currentStep++;
         }
         out << "\n},\n";
+
+        if (settings.exportSkybox && !uniqueSkyIds.empty())
+        {
+            out << "\"skyboxIds\": [";
+            bool firstSky = true;
+            for (uint32_t skyId : uniqueSkyIds)
+            {
+                if (!firstSky) out << ", ";
+                firstSky = false;
+                out << skyId;
+            }
+            out << "],\n";
+            result.skyboxCount = static_cast<int>(uniqueSkyIds.size());
+        }
 
         out << "\"chunks\": [\n";
 
         int chunkIdx = 0;
-        int totalChunks = 0;
-        for (const auto& area : areas)
-            if (area) for (const auto& c : area->getChunks())
-                if (c && c->isFullyInitialized()) totalChunks++;
-
         bool firstChunk = true;
         for (const auto& area : areas)
         {
@@ -260,7 +436,7 @@ namespace TerrainExport
                 const auto& verts = chunk->getVertices();
                 if (verts.empty()) continue;
 
-                if (progress) progress(chunkIdx, totalChunks, "Exporting chunks...");
+                if (progress) progress(currentStep, totalSteps, "Exporting chunks...");
 
                 if (!firstChunk) out << ",\n";
                 firstChunk = false;
@@ -269,14 +445,14 @@ namespace TerrainExport
                 out << "  \"index\": " << chunkIdx << ",\n";
 
                 const uint32_t* layerIds = chunk->getWorldLayerIDs();
-                out << "  \"layerIds\": [" << layerIds[0] << "," << layerIds[1] << "," << layerIds[2] << "," << layerIds[3] << "],\n";
+                out << "  \"layerIds\": [" << layerIds[0] << ", " << layerIds[1] << ", " << layerIds[2] << ", " << layerIds[3] << "],\n";
 
                 out << "  \"positions\": [";
                 for (size_t i = 0; i < verts.size(); i++)
                 {
                     const auto& v = verts[i];
-                    if (i > 0) out << ",";
-                    out << (v.x + offset.x) * settings.scale << "," << v.y * settings.scale << "," << (v.z + offset.z) * settings.scale;
+                    if (i > 0) out << ", ";
+                    out << (v.x + offset.x) * settings.scale << ", " << v.y * settings.scale << ", " << (v.z + offset.z) * settings.scale;
                 }
                 out << "],\n";
 
@@ -284,8 +460,8 @@ namespace TerrainExport
                 for (size_t i = 0; i < verts.size(); i++)
                 {
                     const auto& v = verts[i];
-                    if (i > 0) out << ",";
-                    out << v.nx << "," << v.ny << "," << v.nz;
+                    if (i > 0) out << ", ";
+                    out << v.nx << ", " << v.ny << ", " << v.nz;
                 }
                 out << "],\n";
 
@@ -293,8 +469,8 @@ namespace TerrainExport
                 for (size_t i = 0; i < verts.size(); i++)
                 {
                     const auto& v = verts[i];
-                    if (i > 0) out << ",";
-                    out << v.u << "," << v.v;
+                    if (i > 0) out << ", ";
+                    out << v.u << ", " << v.v;
                 }
                 out << "],\n";
 
@@ -308,8 +484,8 @@ namespace TerrainExport
                         uint32_t tr = y * 17 + x + 1;
                         uint32_t bl = (y + 1) * 17 + x;
                         uint32_t br = (y + 1) * 17 + x + 1;
-                        if (!firstIdx) out << ",";
-                        out << tl << "," << bl << "," << tr << "," << tr << "," << bl << "," << br;
+                        if (!firstIdx) out << ", ";
+                        out << tl << ", " << bl << ", " << tr << ", " << tr << ", " << bl << ", " << br;
                         firstIdx = false;
                     }
                 }
@@ -325,54 +501,56 @@ namespace TerrainExport
                     out << ",\n  \"colorMap\": {\"width\": 65, \"height\": 65, \"data\": \"" << EncodeImageBase64(colorRGBA, 65, 65, false) << "\"}";
                 }
 
+                if (settings.exportSkybox && chunk->hasSkyData())
+                {
+                    const SkyCorner* corners = chunk->getSkyCorners();
+                    if (corners)
+                    {
+                        out << ",\n  \"skyCorners\": [";
+                        for (int c = 0; c < 4; c++)
+                        {
+                            if (c > 0) out << ", ";
+                            out << "{\"ids\": [" << corners[c].worldSkyIDs[0] << ", " << corners[c].worldSkyIDs[1] << ", "
+                                << corners[c].worldSkyIDs[2] << ", " << corners[c].worldSkyIDs[3] << "], ";
+                            out << "\"weights\": [" << static_cast<int>(corners[c].worldSkyWeights[0]) << ", "
+                                << static_cast<int>(corners[c].worldSkyWeights[1]) << ", "
+                                << static_cast<int>(corners[c].worldSkyWeights[2]) << ", "
+                                << static_cast<int>(corners[c].worldSkyWeights[3]) << "]}";
+                        }
+                        out << "]";
+                    }
+                }
+
                 out << "\n}";
                 chunkIdx++;
+                currentStep++;
                 result.chunkCount++;
             }
         }
 
         out << "\n]";
 
-        if (settings.exportProps)
+        if (settings.exportProps && !propInstances.empty())
         {
-            std::vector<std::tuple<std::string, glm::vec3, glm::quat, float>> propInstances;
-
-            for (const auto& area : areas)
-            {
-                if (!area) continue;
-                glm::vec3 areaOffset = ToGlm(area->getWorldOffset());
-
-                const auto& props = area->getProps();
-                for (const auto& prop : props)
-                {
-                    if (prop.path.empty()) continue;
-
-                    glm::vec3 pos = prop.position + areaOffset;
-                    pos *= settings.scale;
-
-                    propInstances.emplace_back(prop.path, pos, prop.rotation, prop.scale);
-                }
-            }
-
             out << ",\n\"props\": [\n";
             bool firstProp = true;
-            for (const auto& [model, pos, rot, scale] : propInstances)
+            for (const auto& [modelPath, modelRelPath, pos, rot, scale] : propInstances)
             {
                 if (!firstProp) out << ",\n";
                 firstProp = false;
 
-                out << "  {\"model\": \"" << model << "\", ";
-                out << "\"position\": [" << pos.x << "," << pos.y << "," << pos.z << "], ";
-                out << "\"rotation\": [" << rot.x << "," << rot.y << "," << rot.z << "," << rot.w << "], ";
+                out << "  {\"model\": \"" << modelRelPath << "\", ";
+                out << "\"position\": [" << pos.x << ", " << pos.y << ", " << pos.z << "], ";
+                out << "\"rotation\": [" << rot.x << ", " << rot.y << ", " << rot.z << ", " << rot.w << "], ";
                 out << "\"scale\": " << scale << "}";
             }
             out << "\n]";
-
-            if (progress) progress(totalChunks, totalChunks, "Props exported: " + std::to_string(propInstances.size()));
         }
 
         out << "\n}\n";
         out.close();
+
+        if (progress) progress(totalSteps, totalSteps, "Export complete");
 
         result.success = true;
         result.outputFile = jsonPath;

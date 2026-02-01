@@ -43,6 +43,7 @@ const float AreaFile::GRID_SIZE = 512.0f;
 
 static int gReferenceTileX = -1;
 static int gReferenceTileY = -1;
+static std::mutex gReferenceTileMutex;  // Protects gReferenceTileX/Y
 static std::mutex gGeometryInitMutex;
 
 std::vector<uint32> AreaChunkRender::indices;
@@ -58,6 +59,7 @@ void AreaChunkRender::SetDevice(ID3D11Device* device, ID3D11DeviceContext* conte
 
 void ResetAreaReferencePosition()
 {
+    std::lock_guard<std::mutex> lock(gReferenceTileMutex);
     gReferenceTileX = -1;
     gReferenceTileY = -1;
 }
@@ -97,6 +99,8 @@ void AreaFile::parseTileXYFromFilename()
 
 void AreaFile::calculateWorldOffset()
 {
+    std::lock_guard<std::mutex> lock(gReferenceTileMutex);
+
     if (gReferenceTileX < 0 || gReferenceTileY < 0)
     {
         gReferenceTileX = mTileX;

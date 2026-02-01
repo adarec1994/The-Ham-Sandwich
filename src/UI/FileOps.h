@@ -29,6 +29,7 @@ namespace UI_ContentBrowser {
         int texHeight = 0;
         bool attemptedLoad = false;
         bool isLoadAllEntry = false;
+        bool isTextureMapEntry = false;
     };
 
     struct BnkWemEntry {
@@ -46,6 +47,8 @@ namespace UI_ContentBrowser {
         uint64_t generation;
         bool isComposite = false;
         std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> compositeAreaFiles;
+        bool isTextureComposite = false;
+        std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> compositeTexFiles;
     };
 
     struct ThumbnailResult {
@@ -137,6 +140,9 @@ namespace UI_ContentBrowser {
     void RefreshFileList(AppState& state);
     void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry);
     void LoadAllAreasInFolder(AppState& state);
+    void UpdateLoadAllAreas(AppState& state);
+    void DrawLoadAllProgress();
+    bool IsLoadAllInProgress();
     void LoadSingleM3(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry);
     void HandleFileOpen(AppState& state, const FileInfo& file);
     IFileSystemEntryPtr FindFolderByPath(const IFileSystemEntryPtr& root, const std::vector<std::string>& pathParts, size_t startIndex = 0);

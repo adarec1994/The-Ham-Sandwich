@@ -28,6 +28,7 @@
 #include <functional>
 #include <tuple>
 #include <unordered_set>
+#include <set>
 #include <d3d11.h>
 #include <thread>
 #include <mutex>
@@ -919,7 +920,7 @@ namespace UI_ContentBrowser {
                                 for (size_t j = 0; j < sCachedFiles.size(); j++)
                                 {
                                     const auto& f = sCachedFiles[j];
-                                    if (!f.isDirectory && f.extension == ".area" && !f.isLoadAllEntry)
+                                    if (!f.isDirectory && !f.isLoadAllEntry && !f.isTextureMapEntry && f.extension == ".area")
                                     {
                                         auto fe = std::dynamic_pointer_cast<FileEntry>(f.entry);
                                         if (fe)
@@ -945,7 +946,9 @@ namespace UI_ContentBrowser {
 
                             if (file.textureID)
                             {
+                                drawList->PushClipRect(contentMin, contentMin + ImVec2(iconSize, iconSize), true);
                                 drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                                drawList->PopClipRect();
                             }
                             else
                             {
@@ -1038,6 +1041,65 @@ namespace UI_ContentBrowser {
                             }
 
                             ImGui::PopStyleVar(2);
+                        }
+                        else if (file.isTextureMapEntry)
+                        {
+                            if (!file.attemptedLoad && !file.textureID)
+                            {
+                                file.attemptedLoad = true;
+
+                                std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> texFiles;
+                                for (size_t j = 0; j < sCachedFiles.size(); j++)
+                                {
+                                    const auto& f = sCachedFiles[j];
+                                    if (!f.isDirectory && !f.isLoadAllEntry && !f.isTextureMapEntry && f.extension == ".tex")
+                                    {
+                                        auto fe = std::dynamic_pointer_cast<FileEntry>(f.entry);
+                                        if (fe)
+                                            texFiles.push_back({f.archive, fe});
+                                    }
+                                }
+
+                                if (!texFiles.empty())
+                                {
+                                    ThumbnailRequest req;
+                                    req.isTextureComposite = true;
+                                    req.compositeTexFiles = std::move(texFiles);
+                                    req.fileIndex = static_cast<int>(i);
+                                    req.generation = sCurrentGeneration;
+
+                                    {
+                                        std::lock_guard<std::mutex> lock(sQueueMutex);
+                                        sLoadQueue.push_back(std::move(req));
+                                    }
+                                    sQueueCV.notify_one();
+                                }
+                            }
+
+                            if (file.textureID)
+                            {
+                                drawList->PushClipRect(contentMin, contentMin + ImVec2(iconSize, iconSize), true);
+                                drawList->AddImage(file.textureID, contentMin, contentMin + ImVec2(iconSize, iconSize));
+                                drawList->PopClipRect();
+                            }
+                            else
+                            {
+                                ImU32 bgColor = IM_COL32(100, 60, 120, 255);
+                                drawList->AddRectFilled(contentMin + ImVec2(5, 5), contentMin + ImVec2(iconSize - 5, iconSize - 5), bgColor, 8.0f);
+                                ImVec2 center = contentMin + ImVec2(iconSize * 0.5f, iconSize * 0.5f);
+                                float gridSize = iconSize * 0.15f;
+                                for (int gy = -1; gy <= 1; gy++)
+                                {
+                                    for (int gx = -1; gx <= 1; gx++)
+                                    {
+                                        ImVec2 gridPos = center + ImVec2(gx * gridSize * 1.2f, gy * gridSize * 1.2f);
+                                        drawList->AddRectFilled(
+                                            gridPos - ImVec2(gridSize * 0.4f, gridSize * 0.4f),
+                                            gridPos + ImVec2(gridSize * 0.4f, gridSize * 0.4f),
+                                            IM_COL32(200, 150, 220, 255), 2.0f);
+                                    }
+                                }
+                            }
                         }
                         else if (file.isDirectory && sFolderIcon)
                         {
@@ -1195,6 +1257,8 @@ namespace UI_ContentBrowser {
     void Draw(AppState& state)
     {
         EnsureWorkerStarted();
+        UpdateLoadAllAreas(state);
+        DrawLoadAllProgress();
 
         if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false))
         {
@@ -1672,20 +1736,42 @@ namespace UI_ContentBrowser {
                 auto areaFile = std::make_shared<AreaFile>(sExportArchive, sExportFileEntry);
                 if (areaFile->load())
                 {
-                    TerrainExport::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.scale = 1.0f;
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting terrain export...";
 
-                    auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings);
-                    sNotificationSuccess = result.success;
-                    sNotificationMessage = result.success ? "Terrain exported successfully!" : ("Export failed: " + result.errorMessage);
+                    std::thread([areaFile, dirPath]() {
+                        TerrainExport::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.scale = 1.0f;
+                        settings.exportProps = false;
+                        settings.exportSkybox = true;
+                        settings.exportPropModels = false;
+
+                        auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult.success = result.success;
+                            sExportResult.errorMessage = result.errorMessage;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
                 }
                 else
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "Failed to load area file";
+                    sNotificationTimer = 3.0f;
                 }
-                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -1699,21 +1785,42 @@ namespace UI_ContentBrowser {
                 auto areaFile = std::make_shared<AreaFile>(sExportArchive, sExportFileEntry);
                 if (areaFile->load())
                 {
-                    TerrainExport::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.scale = 1.0f;
-                    settings.exportProps = true;
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = 100;
+                    sExportStatus = "Starting terrain export with props...";
 
-                    auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings);
-                    sNotificationSuccess = result.success;
-                    sNotificationMessage = result.success ? "Terrain with props exported successfully!" : ("Export failed: " + result.errorMessage);
+                    std::thread([areaFile, dirPath]() {
+                        TerrainExport::ExportSettings settings;
+                        settings.outputPath = dirPath;
+                        settings.scale = 1.0f;
+                        settings.exportProps = true;
+                        settings.exportSkybox = true;
+                        settings.exportPropModels = true;
+
+                        auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings,
+                            [](int cur, int total, const std::string& status) {
+                                sExportProgress = cur;
+                                sExportTotal = total;
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = status;
+                            });
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult.success = result.success;
+                            sExportResult.errorMessage = result.errorMessage;
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
                 }
                 else
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "Failed to load area file";
+                    sNotificationTimer = 3.0f;
                 }
-                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -1724,39 +1831,77 @@ namespace UI_ContentBrowser {
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
 
-                std::vector<AreaFilePtr> areaFiles;
+                std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
                 {
                     if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
                     {
                         auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                         if (fe)
-                        {
-                            auto areaFile = std::make_shared<AreaFile>(file.archive, fe);
-                            if (areaFile->load())
-                                areaFiles.push_back(areaFile);
-                        }
+                            areaEntries.push_back({file.archive, fe});
                     }
                 }
 
-                if (!areaFiles.empty())
+                if (!areaEntries.empty())
                 {
-                    TerrainExport::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.scale = 1.0f;
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = (int)areaEntries.size();
+                    sExportStatus = "Exporting areas...";
 
-                    auto result = TerrainExport::ExportAreasToTerrain(areaFiles, settings);
-                    sNotificationSuccess = result.success;
-                    sNotificationMessage = result.success ?
-                        "Terrain exported: " + std::to_string(result.chunkCount) + " chunks" :
-                        ("Export failed: " + result.errorMessage);
+                    std::thread([areaEntries, dirPath]() {
+                        int successCount = 0;
+                        int totalChunks = 0;
+
+                        for (size_t i = 0; i < areaEntries.size(); ++i)
+                        {
+                            const auto& [archive, entry] = areaEntries[i];
+                            std::string areaName = wstring_to_utf8(entry->getEntryName());
+                            size_t dotPos = areaName.rfind('.');
+                            if (dotPos != std::string::npos)
+                                areaName = areaName.substr(0, dotPos);
+
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = "Exporting " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
+                            }
+                            sExportProgress = (int)i;
+
+                            auto areaFile = std::make_shared<AreaFile>(archive, entry);
+                            if (areaFile->load())
+                            {
+                                TerrainExport::ExportSettings settings;
+                                settings.outputPath = dirPath;
+                                settings.scale = 1.0f;
+                                settings.exportProps = false;
+                                settings.exportSkybox = true;
+                                settings.exportPropModels = false;
+
+                                auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings, nullptr);
+                                if (result.success)
+                                {
+                                    successCount++;
+                                    totalChunks += result.chunkCount;
+                                }
+                            }
+                        }
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult.success = successCount > 0;
+                            sExportResult.errorMessage = std::to_string(successCount) + "/" + std::to_string(areaEntries.size()) +
+                                " areas exported, " + std::to_string(totalChunks) + " chunks";
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
                 }
                 else
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "No area files found";
+                    sNotificationTimer = 3.0f;
                 }
-                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -1767,40 +1912,85 @@ namespace UI_ContentBrowser {
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
 
-                std::vector<AreaFilePtr> areaFiles;
+                std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
                 {
                     if (!file.isDirectory && file.extension == ".area" && !file.isLoadAllEntry)
                     {
                         auto fe = std::dynamic_pointer_cast<FileEntry>(file.entry);
                         if (fe)
-                        {
-                            auto areaFile = std::make_shared<AreaFile>(file.archive, fe);
-                            if (areaFile->load())
-                                areaFiles.push_back(areaFile);
-                        }
+                            areaEntries.push_back({file.archive, fe});
                     }
                 }
 
-                if (!areaFiles.empty())
+                if (!areaEntries.empty())
                 {
-                    TerrainExport::ExportSettings settings;
-                    settings.outputPath = dirPath;
-                    settings.scale = 1.0f;
-                    settings.exportProps = true;
+                    sExportInProgress = true;
+                    sExportProgress = 0;
+                    sExportTotal = (int)areaEntries.size();
+                    sExportStatus = "Exporting areas with props...";
 
-                    auto result = TerrainExport::ExportAreasToTerrain(areaFiles, settings);
-                    sNotificationSuccess = result.success;
-                    sNotificationMessage = result.success ?
-                        "Terrain with props exported: " + std::to_string(result.chunkCount) + " chunks" :
-                        ("Export failed: " + result.errorMessage);
+                    std::thread([areaEntries, dirPath]() {
+                        int successCount = 0;
+                        int totalChunks = 0;
+                        int totalProps = 0;
+                        std::set<std::string> exportedModels;
+
+                        std::string modelsPath = dirPath + "/models";
+                        std::filesystem::create_directories(modelsPath);
+
+                        for (size_t i = 0; i < areaEntries.size(); ++i)
+                        {
+                            const auto& [archive, entry] = areaEntries[i];
+                            std::string areaName = wstring_to_utf8(entry->getEntryName());
+                            size_t dotPos = areaName.rfind('.');
+                            if (dotPos != std::string::npos)
+                                areaName = areaName.substr(0, dotPos);
+
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = "Exporting " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
+                            }
+                            sExportProgress = (int)i;
+
+                            auto areaFile = std::make_shared<AreaFile>(archive, entry);
+                            if (areaFile->load())
+                            {
+                                TerrainExport::ExportSettings settings;
+                                settings.outputPath = dirPath;
+                                settings.sharedModelsPath = modelsPath;
+                                settings.scale = 1.0f;
+                                settings.exportProps = true;
+                                settings.exportSkybox = true;
+                                settings.exportPropModels = true;
+                                settings.exportedModels = &exportedModels;
+
+                                auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings, nullptr);
+                                if (result.success)
+                                {
+                                    successCount++;
+                                    totalChunks += result.chunkCount;
+                                    totalProps += result.propCount;
+                                }
+                            }
+                        }
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportResult.success = successCount > 0;
+                            sExportResult.errorMessage = std::to_string(successCount) + "/" + std::to_string(areaEntries.size()) +
+                                " areas, " + std::to_string(totalChunks) + " chunks, " + std::to_string(exportedModels.size()) + " models";
+                        }
+                        sExportInProgress = false;
+                        sShowExportResult = true;
+                    }).detach();
                 }
                 else
                 {
                     sNotificationSuccess = false;
                     sNotificationMessage = "No area files found";
+                    sNotificationTimer = 3.0f;
                 }
-                sNotificationTimer = 3.0f;
             }
             ImGuiFileDialog::Instance()->Close();
         }

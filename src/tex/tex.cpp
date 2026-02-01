@@ -663,6 +663,105 @@ namespace Tex
         return success;
     }
 
+    bool File::decodeThumbnailMipToRGBA(ImageRGBA& out, int maxSize) const
+    {
+        out = {};
+        if (failedReading) return false;
+        if (header.width <= 0 || header.height <= 0) return false;
+        if (mipData.empty()) return false;
+
+        int mipIndex = 0;
+        int w = header.width;
+        int h = header.height;
+
+        for (int i = (int)mipData.size() - 1; i >= 0; --i)
+        {
+            int mipW = (int)(header.width / std::pow(2.0, (double)((int)mipData.size() - 1 - i)));
+            int mipH = (int)(header.height / std::pow(2.0, (double)((int)mipData.size() - 1 - i)));
+            if (mipW < 1) mipW = 1;
+            if (mipH < 1) mipH = 1;
+
+            if (mipW <= maxSize && mipH <= maxSize)
+            {
+                mipIndex = i;
+                w = mipW;
+                h = mipH;
+                break;
+            }
+            mipIndex = i;
+            w = mipW;
+            h = mipH;
+        }
+
+        if (mipData[mipIndex].empty()) return false;
+
+        bool success = false;
+        bool preserveAlpha = false;
+
+        if (header.textureType == TextureType::DXT1)
+        {
+            out.width = w; out.height = h;
+            success = decodeDXT1(mipData[mipIndex].data(), w, h, out.rgba);
+        }
+        else if (header.textureType == TextureType::DXT3)
+        {
+            out.width = w; out.height = h;
+            success = decodeDXT3(mipData[mipIndex].data(), w, h, out.rgba);
+            preserveAlpha = true;
+        }
+        else if (header.textureType == TextureType::DXT5)
+        {
+            out.width = w; out.height = h;
+            success = decodeDXT5(mipData[mipIndex].data(), w, h, out.rgba);
+            preserveAlpha = true;
+        }
+        else if (header.textureType == TextureType::Jpeg1 ||
+            header.textureType == TextureType::Jpeg2 ||
+            header.textureType == TextureType::Jpeg3)
+        {
+            int mipLevel = (int)(header.imageSizesCount - 1) - mipIndex;
+            success = Jpeg::Decode(header, mipLevel, mipData[mipIndex], out.rgba, out.width, out.height);
+        }
+        else if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
+        {
+            const auto& buf = mipData[mipIndex];
+            if (buf.empty()) return false;
+            size_t expected = (size_t)w * (size_t)h * 4;
+            if (buf.size() < expected) return false;
+            out.width = w; out.height = h;
+            out.rgba.assign(buf.begin(), buf.begin() + expected);
+            for(size_t i=0; i<out.rgba.size(); i+=4) {
+                std::swap(out.rgba[i], out.rgba[i+2]);
+            }
+            success = true;
+        }
+        else if (header.textureType == TextureType::Argb16)
+        {
+            out.width = w; out.height = h;
+            success = decodeArgb16(mipData[mipIndex].data(), w, h, out.rgba);
+        }
+        else if (header.textureType == TextureType::Grayscale)
+        {
+            out.width = w; out.height = h;
+            success = decodeGrayscale(mipData[mipIndex].data(), w, h, out.rgba);
+        }
+        else if (header.textureType == TextureType::Garbage)
+        {
+            out.width = w; out.height = h;
+            success = decodeGarbage(mipData[mipIndex].data(), w, h, out.rgba);
+        }
+
+        if (success && !preserveAlpha)
+        {
+            for (size_t i = 3; i < out.rgba.size(); i += 4)
+            {
+                out.rgba[i] = 255;
+            }
+        }
+
+        return success;
+    }
+
     ComPtr<ID3D11ShaderResourceView> CreateSRVFromFile(const File& tf)
     {
         ID3D11Device* device = GetDevice();
