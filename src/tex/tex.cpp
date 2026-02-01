@@ -622,6 +622,7 @@ namespace Tex
         {
             int mipLevel = (int)(header.imageSizesCount - 1) - largestMipIndex;
             success = Jpeg::Decode(header, mipLevel, mipData[largestMipIndex], out.rgba, out.width, out.height);
+            preserveAlpha = true;
         }
         else if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
         {
@@ -721,6 +722,7 @@ namespace Tex
         {
             int mipLevel = (int)(header.imageSizesCount - 1) - mipIndex;
             success = Jpeg::Decode(header, mipLevel, mipData[mipIndex], out.rgba, out.width, out.height);
+            preserveAlpha = true;
         }
         else if (header.textureType == TextureType::Argb1 || header.textureType == TextureType::Argb2)
         {

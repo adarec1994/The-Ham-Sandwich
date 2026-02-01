@@ -313,12 +313,19 @@ namespace Tex
                                 int blk = ((r >= 8) ? 2 : 0) + ((c >= 8) ? 1 : 0);
                                 int lIdx = (r % 8) * 8 + (c % 8);
                                 int cIdx = (r / 2) * 8 + (c / 2);
-                                int pIdx = ((y * 16 + r) * w + (x * 16 + c)) * 4;
+                                int pIdx = ((y * 16 + r) * mipW + (x * 16 + c)) * 4;
                                 YCbCrToColor32(l0[blk][lIdx], l1[blk][lIdx], c0[cIdx], c1[cIdx], &data[pIdx]);
                             }
                         }
                     }
                 }
+
+                for (int row = 0; row < h; row++) {
+                    if (row * w * 4 + w * 4 <= (int)data.size() && row * mipW * 4 + w * 4 <= (int)data.size()) {
+                        memmove(&data[row * w * 4], &data[row * mipW * 4], w * 4);
+                    }
+                }
+                data.resize(w * h * 4);
             }
 
             void DecompressFormat1(int w, int h, BitStream& s, const Header& hdr, const int16_t* lq, std::vector<uint8_t>& data) {
@@ -328,27 +335,37 @@ namespace Tex
                 int mipH = ((h + 7) / 8) * 8;
                 data.resize(mipW * mipH * 4);
 
+                bool hasB = (hdr.layerInfos[2].hasReplacement == 0);
+                bool hasA = (hdr.layerInfos[3].hasReplacement == 0);
+
                 for (int y = 0; y < mipH / 8; y++) {
                     for (int x = 0; x < mipW / 8; x++) {
                         prevDc[0] = ProcessBlock(prevDc[0], s, dcLumLookup, acLumLookup, lq, true, l[0]);
                         prevDc[1] = ProcessBlock(prevDc[1], s, dcLumLookup, acLumLookup, lq + 64, true, l[1]);
-                        if (hdr.layerInfos[2].hasReplacement == 0)
+                        if (hasB)
                             prevDc[2] = ProcessBlock(prevDc[2], s, dcLumLookup, acLumLookup, lq + 128, true, l[2]);
-                        if (hdr.layerInfos[3].hasReplacement == 0)
+                        if (hasA)
                             prevDc[3] = ProcessBlock(prevDc[3], s, dcLumLookup, acLumLookup, lq + 192, true, l[3]);
 
                         for (int iy = 0; iy < 8; iy++) {
                             for (int ix = 0; ix < 8; ix++) {
                                 int idx = iy * 8 + ix;
-                                int pIdx = ((y * 8 + iy) * w + (x * 8 + ix)) * 4;
-                                data[pIdx + 0] = (uint8_t)l[2][idx];
+                                int pIdx = ((y * 8 + iy) * mipW + (x * 8 + ix)) * 4;
+                                data[pIdx + 0] = (uint8_t)l[0][idx];
                                 data[pIdx + 1] = (uint8_t)l[1][idx];
-                                data[pIdx + 2] = (uint8_t)l[3][idx];
-                                data[pIdx + 3] = (uint8_t)l[0][idx];
+                                data[pIdx + 2] = hasB ? (uint8_t)l[2][idx] : 255;
+                                data[pIdx + 3] = hasA ? (uint8_t)l[3][idx] : 255;
                             }
                         }
                     }
                 }
+
+                for (int row = 0; row < h; row++) {
+                    if (row * w * 4 + w * 4 <= (int)data.size() && row * mipW * 4 + w * 4 <= (int)data.size()) {
+                        memmove(&data[row * w * 4], &data[row * mipW * 4], w * 4);
+                    }
+                }
+                data.resize(w * h * 4);
             }
 
             void DecompressFormat2(int w, int h, BitStream& s, const Header& hdr, const int16_t* lq, const int16_t* cq, std::vector<uint8_t>& data) {
@@ -358,13 +375,14 @@ namespace Tex
                 int mipH = ((h + 7) / 8) * 8;
                 data.resize(mipW * mipH * 4);
 
+                bool hasL1 = (hdr.layerInfos[3].hasReplacement == 0);
+
                 for (int y = 0; y < mipH / 8; y++) {
                     for (int x = 0; x < mipW / 8; x++) {
                         prevDc[0] = ProcessBlock(prevDc[0], s, dcLumLookup, acLumLookup, lq, true, l0);
                         prevDc[1] = ProcessBlock(prevDc[1], s, dcChromLookup, acChromLookup, cq + 64, false, c0);
                         prevDc[2] = ProcessBlock(prevDc[2], s, dcChromLookup, acChromLookup, cq + 128, false, c1);
 
-                        bool hasL1 = (hdr.layerInfos[3].hasReplacement == 0);
                         if (hasL1)
                             prevDc[3] = ProcessBlock(prevDc[3], s, dcLumLookup, acLumLookup, lq + 192, true, l1);
 
@@ -374,12 +392,19 @@ namespace Tex
                                 if (x * 8 + c >= w) continue;
                                 int idx = r * 8 + c;
                                 int16_t alpha = hasL1 ? l1[idx] : 255;
-                                int pIdx = ((y * 8 + r) * w + (x * 8 + c)) * 4;
+                                int pIdx = ((y * 8 + r) * mipW + (x * 8 + c)) * 4;
                                 YCbCrToColor32(l0[idx], alpha, c0[idx], c1[idx], &data[pIdx]);
                             }
                         }
                     }
                 }
+
+                for (int row = 0; row < h; row++) {
+                    if (row * w * 4 + w * 4 <= (int)data.size() && row * mipW * 4 + w * 4 <= (int)data.size()) {
+                        memmove(&data[row * w * 4], &data[row * mipW * 4], w * 4);
+                    }
+                }
+                data.resize(w * h * 4);
             }
 
             bool Decompress(const Header& header, int mipLevel, const std::vector<uint8_t>& input, std::vector<uint8_t>& output, int& outW, int& outH) {
@@ -401,7 +426,8 @@ namespace Tex
                 outW = w; outH = h;
 
                 std::vector<uint8_t> data;
-                switch (header.compressionFormat) {
+                uint32_t format = header.compressionFormat;
+                switch (format) {
                 case 0: DecompressFormat0(w, h, bs, lq, cq, data); break;
                 case 1: DecompressFormat1(w, h, bs, header, lq, data); break;
                 case 2: DecompressFormat2(w, h, bs, header, lq, cq, data); break;
@@ -409,12 +435,16 @@ namespace Tex
                 }
 
                 output = std::move(data);
-                for (size_t i = 0; i < output.size(); i += 4) {
-                    uint8_t r = output[i];
-                    uint8_t b = output[i + 2];
-                    output[i] = b;
-                    output[i + 2] = r;
+
+                if (format != 1) {
+                    for (size_t i = 0; i < output.size(); i += 4) {
+                        uint8_t r = output[i];
+                        uint8_t b = output[i + 2];
+                        output[i] = b;
+                        output[i + 2] = r;
+                    }
                 }
+
                 return true;
             }
         };
