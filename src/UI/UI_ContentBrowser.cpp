@@ -1830,6 +1830,7 @@ namespace UI_ContentBrowser {
             if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string folderName = sExportDefaultName;
 
                 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
@@ -1846,12 +1847,11 @@ namespace UI_ContentBrowser {
                 {
                     sExportInProgress = true;
                     sExportProgress = 0;
-                    sExportTotal = (int)areaEntries.size();
-                    sExportStatus = "Exporting areas...";
+                    sExportTotal = (int)areaEntries.size() + 1;
+                    sExportStatus = "Loading areas...";
 
-                    std::thread([areaEntries, dirPath]() {
-                        int successCount = 0;
-                        int totalChunks = 0;
+                    std::thread([areaEntries, dirPath, folderName]() {
+                        std::vector<AreaFilePtr> loadedAreas;
 
                         for (size_t i = 0; i < areaEntries.size(); ++i)
                         {
@@ -1863,35 +1863,47 @@ namespace UI_ContentBrowser {
 
                             {
                                 std::lock_guard<std::mutex> lock(sExportMutex);
-                                sExportStatus = "Exporting " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
+                                sExportStatus = "Loading " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
                             }
                             sExportProgress = (int)i;
 
                             auto areaFile = std::make_shared<AreaFile>(archive, entry);
-                            if (areaFile->load())
-                            {
-                                TerrainExport::ExportSettings settings;
-                                settings.outputPath = dirPath;
-                                settings.scale = 1.0f;
-                                settings.exportProps = false;
-                                settings.exportSkybox = true;
-                                settings.exportPropModels = false;
+                            if (areaFile->loadForExport())
+                                loadedAreas.push_back(areaFile);
+                        }
 
-                                auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings, nullptr);
-                                if (result.success)
-                                {
-                                    successCount++;
-                                    totalChunks += result.chunkCount;
-                                }
+                        if (!loadedAreas.empty())
+                        {
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = "Writing combined .wsterrain...";
+                            }
+                            sExportProgress = (int)areaEntries.size();
+
+                            TerrainExport::ExportSettings settings;
+                            settings.outputPath = dirPath;
+                            settings.scale = 1.0f;
+                            settings.exportProps = false;
+                            settings.exportSkybox = true;
+                            settings.exportPropModels = false;
+
+                            auto result = TerrainExport::ExportAreasToTerrain(loadedAreas, settings, nullptr);
+
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportResult.success = result.success;
+                                sExportResult.errorMessage = result.success
+                                    ? (std::to_string(loadedAreas.size()) + " areas combined, " + std::to_string(result.chunkCount) + " chunks")
+                                    : result.errorMessage;
                             }
                         }
-
+                        else
                         {
                             std::lock_guard<std::mutex> lock(sExportMutex);
-                            sExportResult.success = successCount > 0;
-                            sExportResult.errorMessage = std::to_string(successCount) + "/" + std::to_string(areaEntries.size()) +
-                                " areas exported, " + std::to_string(totalChunks) + " chunks";
+                            sExportResult.success = false;
+                            sExportResult.errorMessage = "No areas loaded successfully";
                         }
+
                         sExportInProgress = false;
                         sShowExportResult = true;
                     }).detach();
@@ -1911,6 +1923,7 @@ namespace UI_ContentBrowser {
             if (ImGuiFileDialog::Instance()->IsOk() && sSelectedArchive)
             {
                 std::string dirPath = ImGuiFileDialog::Instance()->GetCurrentPath();
+                std::string folderName = sExportDefaultName;
 
                 std::vector<std::pair<ArchivePtr, std::shared_ptr<FileEntry>>> areaEntries;
                 for (const auto& file : sCachedFiles)
@@ -1927,17 +1940,11 @@ namespace UI_ContentBrowser {
                 {
                     sExportInProgress = true;
                     sExportProgress = 0;
-                    sExportTotal = (int)areaEntries.size();
-                    sExportStatus = "Exporting areas with props...";
+                    sExportTotal = (int)areaEntries.size() + 1;
+                    sExportStatus = "Loading areas with props...";
 
-                    std::thread([areaEntries, dirPath]() {
-                        int successCount = 0;
-                        int totalChunks = 0;
-                        int totalProps = 0;
-                        std::set<std::string> exportedModels;
-
-                        std::string modelsPath = dirPath + "/models";
-                        std::filesystem::create_directories(modelsPath);
+                    std::thread([areaEntries, dirPath, folderName]() {
+                        std::vector<AreaFilePtr> loadedAreas;
 
                         for (size_t i = 0; i < areaEntries.size(); ++i)
                         {
@@ -1949,38 +1956,54 @@ namespace UI_ContentBrowser {
 
                             {
                                 std::lock_guard<std::mutex> lock(sExportMutex);
-                                sExportStatus = "Exporting " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
+                                sExportStatus = "Loading " + areaName + " (" + std::to_string(i + 1) + "/" + std::to_string(areaEntries.size()) + ")";
                             }
                             sExportProgress = (int)i;
 
                             auto areaFile = std::make_shared<AreaFile>(archive, entry);
-                            if (areaFile->load())
-                            {
-                                TerrainExport::ExportSettings settings;
-                                settings.outputPath = dirPath;
-                                settings.sharedModelsPath = modelsPath;
-                                settings.scale = 1.0f;
-                                settings.exportProps = true;
-                                settings.exportSkybox = true;
-                                settings.exportPropModels = true;
-                                settings.exportedModels = &exportedModels;
+                            if (areaFile->loadForExport())
+                                loadedAreas.push_back(areaFile);
+                        }
 
-                                auto result = TerrainExport::ExportAreaToTerrain(areaFile, settings, nullptr);
-                                if (result.success)
-                                {
-                                    successCount++;
-                                    totalChunks += result.chunkCount;
-                                    totalProps += result.propCount;
-                                }
+                        if (!loadedAreas.empty())
+                        {
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportStatus = "Writing combined .wsterrain with props...";
+                            }
+                            sExportProgress = (int)areaEntries.size();
+
+                            std::string modelsPath = dirPath + "/models";
+                            std::filesystem::create_directories(modelsPath);
+
+                            std::set<std::string> exportedModels;
+
+                            TerrainExport::ExportSettings settings;
+                            settings.outputPath = dirPath;
+                            settings.sharedModelsPath = modelsPath;
+                            settings.scale = 1.0f;
+                            settings.exportProps = true;
+                            settings.exportSkybox = true;
+                            settings.exportPropModels = true;
+                            settings.exportedModels = &exportedModels;
+
+                            auto result = TerrainExport::ExportAreasToTerrain(loadedAreas, settings, nullptr);
+
+                            {
+                                std::lock_guard<std::mutex> lock(sExportMutex);
+                                sExportResult.success = result.success;
+                                sExportResult.errorMessage = result.success
+                                    ? (std::to_string(loadedAreas.size()) + " areas combined, " + std::to_string(result.chunkCount) + " chunks, " + std::to_string(exportedModels.size()) + " models")
+                                    : result.errorMessage;
                             }
                         }
-
+                        else
                         {
                             std::lock_guard<std::mutex> lock(sExportMutex);
-                            sExportResult.success = successCount > 0;
-                            sExportResult.errorMessage = std::to_string(successCount) + "/" + std::to_string(areaEntries.size()) +
-                                " areas, " + std::to_string(totalChunks) + " chunks, " + std::to_string(exportedModels.size()) + " models";
+                            sExportResult.success = false;
+                            sExportResult.errorMessage = "No areas loaded successfully";
                         }
+
                         sExportInProgress = false;
                         sShowExportResult = true;
                     }).detach();

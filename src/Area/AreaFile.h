@@ -297,6 +297,7 @@ public:
     AreaFile(ArchivePtr archive, FileEntryPtr file);
     ~AreaFile();
     bool load();
+    bool loadForExport();
     bool loadFromParsed(ParsedArea&& parsed);
 
     void setTileXY(int tx, int ty) { mTileX = tx; mTileY = ty; calculateWorldOffset(); }

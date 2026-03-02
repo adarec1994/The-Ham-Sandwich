@@ -80,6 +80,17 @@ namespace TerrainExport
         return result;
     }
 
+    static std::string ExtractTextureName(const std::string& path)
+    {
+        if (path.empty()) return "";
+        size_t lastSlash = path.rfind('/');
+        if (lastSlash == std::string::npos) lastSlash = path.rfind('\\');
+        std::string filename = (lastSlash != std::string::npos) ? path.substr(lastSlash + 1) : path;
+        size_t dot = filename.rfind('.');
+        if (dot != std::string::npos) filename = filename.substr(0, dot);
+        return filename;
+    }
+
     static std::string Base64Encode(const uint8_t* data, size_t len)
     {
         static const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -294,7 +305,7 @@ namespace TerrainExport
         int totalChunks = 0;
         for (const auto& area : areas)
             if (area) for (const auto& c : area->getChunks())
-                if (c && c->isFullyInitialized()) totalChunks++;
+                if (c && !c->getVertices().empty()) totalChunks++;
         int totalModels = static_cast<int>(modelsToExport.size());
         int totalSteps = totalLayers + totalChunks + totalModels;
         int currentStep = 0;
@@ -390,15 +401,25 @@ namespace TerrainExport
             if (archive && entry)
             {
                 TerrainTexture::RawTextureData raw;
-                if (!entry->diffusePath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->diffusePath, raw))
+                if (!entry->diffusePath.empty())
                 {
-                    out << ",\n  \"diffuse\": {\"width\": " << raw.width << ", \"height\": " << raw.height
-                        << ", \"data\": \"" << EncodeImageBase64(raw.rgba, raw.width, raw.height, true) << "\"}";
+                    std::string diffuseName = ExtractTextureName(entry->diffusePath);
+                    out << ",\n  \"diffuseName\": \"" << diffuseName << "\"";
+                    if (texMgr.LoadRawTextureFromPath(archive, entry->diffusePath, raw))
+                    {
+                        out << ",\n  \"diffuse\": {\"width\": " << raw.width << ", \"height\": " << raw.height
+                            << ", \"data\": \"" << EncodeImageBase64(raw.rgba, raw.width, raw.height, true) << "\"}";
+                    }
                 }
-                if (!entry->normalPath.empty() && texMgr.LoadRawTextureFromPath(archive, entry->normalPath, raw))
+                if (!entry->normalPath.empty())
                 {
-                    out << ",\n  \"normal\": {\"width\": " << raw.width << ", \"height\": " << raw.height
-                        << ", \"data\": \"" << EncodeImageBase64(raw.rgba, raw.width, raw.height, true) << "\"}";
+                    std::string normalName = ExtractTextureName(entry->normalPath);
+                    out << ",\n  \"normalName\": \"" << normalName << "\"";
+                    if (texMgr.LoadRawTextureFromPath(archive, entry->normalPath, raw))
+                    {
+                        out << ",\n  \"normal\": {\"width\": " << raw.width << ", \"height\": " << raw.height
+                            << ", \"data\": \"" << EncodeImageBase64(raw.rgba, raw.width, raw.height, true) << "\"}";
+                    }
                 }
             }
             out << "\n}";
@@ -432,7 +453,7 @@ namespace TerrainExport
 
             for (const auto& chunk : area->getChunks())
             {
-                if (!chunk || !chunk->isFullyInitialized()) continue;
+                if (!chunk || chunk->getVertices().empty()) continue;
                 const auto& verts = chunk->getVertices();
                 if (verts.empty()) continue;
 

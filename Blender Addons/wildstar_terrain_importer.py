@@ -101,7 +101,7 @@ def load_image_from_base64(name, b64_data, flip_v=False):
     return img
 
 
-def create_splatmap_material(chunk_name, chunk_data, layers_data, layer_images, blend_images, color_images):
+def create_splatmap_material(chunk_name, chunk_data, layers_data, layer_images, blend_images, color_images, layer_names=None):
     mat = bpy.data.materials.new(name=f"{chunk_name}_Mat")
     mat.use_nodes = True
     mat.blend_method = 'OPAQUE'
@@ -174,6 +174,8 @@ def create_splatmap_material(chunk_name, chunk_data, layers_data, layer_images, 
         tex.location = (-1000, y_offset)
         tex.image = diffuse_img
         tex.interpolation = 'Linear'
+        if layer_names and str(layer_id) in layer_names:
+            tex.label = layer_names[str(layer_id)]
         links.new(mapping.outputs['Vector'], tex.inputs['Vector'])
         return tex.outputs['Color']
 
@@ -186,6 +188,8 @@ def create_splatmap_material(chunk_name, chunk_data, layers_data, layer_images, 
         tex.location = (-600, y_offset)
         tex.image = normal_img
         tex.interpolation = 'Linear'
+        if layer_names and str(layer_id) in layer_names:
+            tex.label = layer_names[str(layer_id)] + "_n"
         links.new(mapping.outputs['Vector'], tex.inputs['Vector'])
         return tex.outputs['Color']
 
@@ -592,17 +596,22 @@ def import_terrain(context, filepath, import_terrain_mesh=True, import_props=Tru
         fallback_normal = None
 
         layer_images = {}
+        layer_names = {}
         for layer_id, layer_info in layers_data.items():
+            diffuse_name = layer_info.get('diffuseName', f"layer_{layer_id}")
+            normal_name = layer_info.get('normalName', f"layer_{layer_id}_normal")
+            layer_names[layer_id] = diffuse_name
+
             if 'diffuse' in layer_info and 'data' in layer_info['diffuse']:
                 img = load_image_from_base64(
-                    f"layer_{layer_id}_diffuse",
+                    diffuse_name,
                     layer_info['diffuse']['data']
                 )
                 layer_images[f"layer_{layer_id}_diffuse"] = img
 
             if 'normal' in layer_info and 'data' in layer_info['normal']:
                 img = load_image_from_base64(
-                    f"layer_{layer_id}_normal",
+                    normal_name,
                     layer_info['normal']['data']
                 )
                 layer_images[f"layer_{layer_id}_normal"] = img
@@ -648,7 +657,7 @@ def import_terrain(context, filepath, import_terrain_mesh=True, import_props=Tru
             if obj:
                 terrain_collection.objects.link(obj)
                 mat = create_splatmap_material(
-                    chunk_name, chunk_data, layers_data, layer_images, blend_images, color_images
+                    chunk_name, chunk_data, layers_data, layer_images, blend_images, color_images, layer_names
                 )
                 obj.data.materials.append(mat)
 

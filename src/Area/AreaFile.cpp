@@ -45,6 +45,7 @@ static int gReferenceTileX = -1;
 static int gReferenceTileY = -1;
 static std::mutex gReferenceTileMutex;  // Protects gReferenceTileX/Y
 static std::mutex gGeometryInitMutex;
+static thread_local bool tSkipGPUUpload = false;
 
 std::vector<uint32> AreaChunkRender::indices;
 ComPtr<ID3D11Buffer> AreaChunkRender::sIndexBuffer;
@@ -305,6 +306,149 @@ bool AreaFile::load()
     {
     }
 
+    return true;
+}
+
+bool AreaFile::loadForExport()
+{
+    tSkipGPUUpload = true;
+    if (mContent.size() < 8) { tSkipGPUUpload = false; return false; }
+    struct R
+    {
+        const uint8* p; const uint8* e;
+        bool can(size_t n) const { return static_cast<size_t>(e - p) >= n; }
+        uint32 u32le()
+        {
+            uint32 v = static_cast<uint32>(p[0]) | (static_cast<uint32>(p[1]) << 8) |
+                      (static_cast<uint32>(p[2]) << 16) | (static_cast<uint32>(p[3]) << 24);
+            p += 4; return v;
+        }
+        void bytes(void* out, size_t n) { memcpy(out, p, n); p += n; }
+        void skip(size_t n) { p += n; }
+    };
+    const uint8* base = mContent.data();
+    R r{ base, base + mContent.size() };
+    uint32 sig = r.u32le();
+    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) { tSkipGPUUpload = false; return false; }
+    r.u32le();
+    std::vector<uint8> chnkData, propData, curtData;
+    while (r.can(8))
+    {
+        uint32 magic = r.u32le();
+        uint32 size = r.u32le();
+        if (!r.can(size)) break;
+        switch (magic)
+        {
+            case AreaChunkID::CHNK: chnkData.resize(size); r.bytes(chnkData.data(), size); break;
+            case AreaChunkID::PROp: propData.resize(size); r.bytes(propData.data(), size); break;
+            case AreaChunkID::CURT: curtData.resize(size); r.bytes(curtData.data(), size); break;
+            default: r.skip(size); break;
+        }
+    }
+
+    if (!propData.empty())
+        ParsePropsChunk(propData.data(), propData.size(), mProps, mPropLookup);
+    if (!curtData.empty())
+        ParseCurtsChunk(curtData.data(), curtData.size(), mCurts);
+
+    if (chnkData.empty())
+    {
+        mMinBounds = XMFLOAT3(0, 0, 0);
+        mMaxBounds = XMFLOAT3(512, 50, 512);
+        tSkipGPUUpload = false;
+        return true;
+    }
+
+    struct ChunkJob { uint32 index; uint32 cellX; uint32 cellY; std::vector<uint8> data; };
+    std::vector<ChunkJob> jobs;
+    const uint8* cptr = chnkData.data();
+    const uint8* cend = cptr + chnkData.size();
+    uint32 lastIndex = 0;
+
+    while (static_cast<size_t>(cend - cptr) >= 4)
+    {
+        uint32 cellInfo = static_cast<uint32>(cptr[0]) | (static_cast<uint32>(cptr[1]) << 8) |
+                         (static_cast<uint32>(cptr[2]) << 16) | (static_cast<uint32>(cptr[3]) << 24);
+        cptr += 4;
+        uint32 idxDelta = (cellInfo >> 24) & 0xFF;
+        uint32 size = cellInfo & 0x00FFFFFF;
+        uint32 index = idxDelta + lastIndex;
+        lastIndex = index + 1;
+        if (index >= 256) break;
+        if (static_cast<size_t>(cend - cptr) < size) break;
+        if (size < 4) { cptr += size; continue; }
+        ChunkJob job;
+        job.index = index;
+        job.cellX = index % 16;
+        job.cellY = index / 16;
+        job.data.resize(size);
+        memcpy(job.data.data(), cptr, size);
+        cptr += size;
+        jobs.push_back(std::move(job));
+    }
+
+    std::vector<ParsedChunk> parsedChunks(256);
+    size_t numThreads = std::max(1u, std::thread::hardware_concurrency());
+
+    std::vector<std::thread> threads;
+    std::atomic<size_t> jobIndex{0};
+
+    for (size_t t = 0; t < numThreads; t++)
+    {
+        threads.emplace_back([&]()
+        {
+            while (true)
+            {
+                size_t i = jobIndex.fetch_add(1);
+                if (i >= jobs.size()) break;
+                auto& job = jobs[i];
+                parsedChunks[job.index] = AreaChunkRender::parseChunkData(job.data, job.cellX, job.cellY);
+            }
+        });
+    }
+    for (auto& t : threads) t.join();
+
+    mChunks.assign(256, nullptr);
+    uint32 validCount = 0;
+    float totalH = 0.0f;
+    for (size_t i = 0; i < 256; i++)
+    {
+        if (!parsedChunks[i].valid) continue;
+        auto chunk = std::make_shared<AreaChunkRender>(std::move(parsedChunks[i]), mArchive);
+        mChunks[i] = chunk;
+        if (chunk && !chunk->getVertices().empty())
+        {
+            totalH += chunk->getAverageHeight();
+            validCount++;
+            mMaxHeight = std::max(mMaxHeight, chunk->getMaxHeight());
+            XMFLOAT3 cmin = chunk->getMinBounds();
+            XMFLOAT3 cmax = chunk->getMaxBounds();
+            mMinBounds.x = std::min(mMinBounds.x, cmin.x);
+            mMinBounds.y = std::min(mMinBounds.y, cmin.y);
+            mMinBounds.z = std::min(mMinBounds.z, cmin.z);
+            mMaxBounds.x = std::max(mMaxBounds.x, cmax.x);
+            mMaxBounds.y = std::max(mMaxBounds.y, cmax.y);
+            mMaxBounds.z = std::max(mMaxBounds.z, cmax.z);
+        }
+    }
+
+    if (validCount > 0) mAverageHeight = totalH / static_cast<float>(validCount);
+    else { mMinBounds = XMFLOAT3(0, 0, 0); mMaxBounds = XMFLOAT3(512, 50, 512); }
+
+    mPropsAreWorldCoords = false;
+    if (!mProps.empty())
+    {
+        float tileWorldX = static_cast<float>(mTileY - WORLD_GRID_ORIGIN) * GRID_SIZE;
+        float tileWorldZ = static_cast<float>(mTileX - WORLD_GRID_ORIGIN) * GRID_SIZE;
+
+        for (auto& prop : mProps)
+        {
+            prop.position.x -= tileWorldX;
+            prop.position.z -= tileWorldZ;
+        }
+    }
+
+    tSkipGPUUpload = false;
     return true;
 }
 
@@ -874,7 +1018,7 @@ void AreaChunkRender::calcTangentBitangent()
 
 void AreaChunkRender::uploadGPU()
 {
-    if (!sDevice || mVertices.empty()) return;
+    if (tSkipGPUUpload || !sDevice || mVertices.empty()) return;
 
     geometryInit();
     calcTangentBitangent();
