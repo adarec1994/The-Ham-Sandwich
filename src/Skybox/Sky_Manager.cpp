@@ -417,6 +417,7 @@ M3Render* Manager::getSkyboxM3(size_t index)
 void Manager::render(const glm::mat4& view, const glm::mat4& proj, const glm::vec3& cameraPos)
 {
     std::lock_guard<std::mutex> lock(mMutex);
+    (void)cameraPos;
 
     if (mSkyboxM3s.empty()) return;
 
@@ -428,7 +429,7 @@ void Manager::render(const glm::mat4& view, const glm::mat4& proj, const glm::ve
         }
     }
 
-    glm::mat4 skyModel = glm::translate(glm::mat4(1.0f), cameraPos);
+    glm::mat4 skyModel = glm::mat4(1.0f);
 
     const File* activeSky = nullptr;
     if (mActiveSkyIndex >= 0 && mActiveSkyIndex < static_cast<int>(mLoadedSkies.size()))

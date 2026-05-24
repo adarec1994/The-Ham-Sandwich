@@ -16,6 +16,8 @@
 #include <DirectXMath.h>
 #include <wrl/client.h>
 #include <fstream>
+#include <algorithm>
+#include <cmath>
 
 using Microsoft::WRL::ComPtr;
 
@@ -43,6 +45,77 @@ static inline DirectX::XMMATRIX ToDXMatrix(const glm::mat4& m)
         m[0][2], m[1][2], m[2][2], m[3][2],
         m[0][3], m[1][3], m[2][3], m[3][3]
     );
+}
+
+static float Dot(const DirectX::XMFLOAT3& a, const DirectX::XMFLOAT3& b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static bool BoundsVisibleForCamera(const AreaRenderCulling& culling,
+                                   const DirectX::XMFLOAT3& minBounds,
+                                   const DirectX::XMFLOAT3& maxBounds)
+{
+    if (minBounds.x > maxBounds.x || minBounds.y > maxBounds.y || minBounds.z > maxBounds.z)
+        return true;
+
+    DirectX::XMFLOAT3 center(
+        (minBounds.x + maxBounds.x) * 0.5f,
+        (minBounds.y + maxBounds.y) * 0.5f,
+        (minBounds.z + maxBounds.z) * 0.5f
+    );
+
+    const float ex = std::max((maxBounds.x - minBounds.x) * 0.5f, 1.0f);
+    const float ey = std::max((maxBounds.y - minBounds.y) * 0.5f, 1.0f);
+    const float ez = std::max((maxBounds.z - minBounds.z) * 0.5f, 1.0f);
+    const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
+
+    DirectX::XMFLOAT3 toCenter(
+        center.x - culling.cameraPosition.x,
+        center.y - culling.cameraPosition.y,
+        center.z - culling.cameraPosition.z
+    );
+
+    const float forwardDist = Dot(toCenter, culling.cameraForward);
+    if (forwardDist < -radius || forwardDist > culling.farDistance + radius)
+        return false;
+
+    const float depth = std::max(forwardDist, 0.0f);
+    const float rightDist = std::abs(Dot(toCenter, culling.cameraRight));
+    if (rightDist > depth * culling.tanHalfFovX + radius)
+        return false;
+
+    const float upDist = std::abs(Dot(toCenter, culling.cameraUp));
+    if (upDist > depth * culling.tanHalfFovY + radius)
+        return false;
+
+    return true;
+}
+
+static bool SphereVisibleForCamera(const AreaRenderCulling& culling,
+                                   const glm::vec3& center,
+                                   float radius)
+{
+    DirectX::XMFLOAT3 toCenter(
+        center.x - culling.cameraPosition.x,
+        center.y - culling.cameraPosition.y,
+        center.z - culling.cameraPosition.z
+    );
+
+    const float forwardDist = Dot(toCenter, culling.cameraForward);
+    if (forwardDist < -radius || forwardDist > culling.farDistance + radius)
+        return false;
+
+    const float depth = std::max(forwardDist, 0.0f);
+    const float rightDist = std::abs(Dot(toCenter, culling.cameraRight));
+    if (rightDist > depth * culling.tanHalfFovX + radius)
+        return false;
+
+    const float upDist = std::abs(Dot(toCenter, culling.cameraUp));
+    if (upDist > depth * culling.tanHalfFovY + radius)
+        return false;
+
+    return true;
 }
 
 static ComPtr<ID3D11Buffer> gHighlightVB;
@@ -309,6 +382,20 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
     DirectX::XMMATRIX dxView = ToDXMatrix(view);
     DirectX::XMMATRIX dxProj = ToDXMatrix(projection);
 
+    static constexpr float FovYDegrees = 45.0f;
+    static constexpr float TerrainDrawDistance = 4096.0f;
+    const float tanHalfFovY = std::tan(glm::radians(FovYDegrees) * 0.5f);
+    const float aspect = static_cast<float>(display_w) / static_cast<float>(display_h);
+
+    AreaRenderCulling culling;
+    culling.cameraPosition = ToDX3(state.camera.Position);
+    culling.cameraForward = ToDX3(state.camera.Front);
+    culling.cameraRight = ToDX3(state.camera.Right);
+    culling.cameraUp = ToDX3(state.camera.Up);
+    culling.tanHalfFovY = tanHalfFovY;
+    culling.tanHalfFovX = tanHalfFovY * aspect;
+    culling.farDistance = TerrainDrawDistance;
+
     if (gLoadedModel)
     {
         gLoadedModel->updateAnimation(ImGui::GetIO().DeltaTime);
@@ -348,6 +435,8 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
             {
                 const auto& area = gLoadedAreas[i];
                 if (!area) continue;
+                if (!BoundsVisibleForCamera(culling, area->getWorldMinBounds(), area->getWorldMaxBounds()))
+                    continue;
 
                 bool hasValidChunks = false;
                 for (const auto& chunk : area->getChunks())
@@ -361,7 +450,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
                 if (!hasValidChunks) continue;
 
                 bool isSelected = (static_cast<int>(i) == gSelectedAreaIndex && gSelectedPropID == 0);
-                area->render(gContext, dxView, dxProj, gAreaRender.getConstantBuffer(), isSelected);
+                area->render(gContext, dxView, dxProj, gAreaRender.getConstantBuffer(), &culling, isSelected);
                 areasRendered++;
             }
         }
@@ -390,6 +479,10 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
                         prop.position.y + worldOffset.y,
                         prop.position.z + worldOffset.z
                     );
+
+                    const float propRadius = std::max(prop.scale * 20.0f, 32.0f);
+                    if (!SphereVisibleForCamera(culling, pos, propRadius))
+                        continue;
 
                     glm::mat4 glmModel = glm::mat4(1.0f);
                     glmModel = glm::translate(glmModel, pos);

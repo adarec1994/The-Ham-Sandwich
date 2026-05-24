@@ -14,10 +14,12 @@
 #include "../Audio/AudioPlayer.h"
 #include "../Audio/AudioPlayerWidget.h"
 #include "../BNK/BNK_hirc.h"
+#include "../Utils/DebugLog.h"
 #include <algorithm>
 #include <filesystem>
 #include <d3d11.h>
 #include <cstring>
+#include <exception>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
@@ -99,7 +101,12 @@ namespace UI_ContentBrowser {
     static AppState* sLoadAllState = nullptr;
     static std::thread sLoadAllThread;
     static std::mutex sLoadAllMutex;
-    static std::vector<std::shared_ptr<AreaFile>> sLoadAllResults;
+    struct LoadAllParsedResult
+    {
+        ArchivePtr archive;
+        ParsedArea parsed;
+    };
+    static std::deque<LoadAllParsedResult> sLoadAllResults;
 
     static std::shared_ptr<FileEntry> FindFileRecursive(const IFileSystemEntryPtr& entry, const std::string& targetLower)
     {
@@ -781,7 +788,12 @@ namespace UI_ContentBrowser {
     {
         if (!arc || !fileEntry) return;
 
+        const std::string areaName = wstring_to_utf8(fileEntry->getEntryName());
+        DebugLog::Write("AreaLoad", "single begin " + areaName);
+
+        DebugLog::Write("PropLoader", "shutdown before single area clear");
         PropLoader::Instance().ClearPendingWork();
+        PropLoader::Instance().Shutdown();
         UI_Details::Reset();
 
         ResetAreaReferencePosition();
@@ -794,8 +806,27 @@ namespace UI_ContentBrowser {
         gLoadedModel = nullptr;
 
         auto af = std::make_shared<AreaFile>(arc, fileEntry);
-        if (af->load())
+        bool loaded = false;
+        try
         {
+            loaded = af->load();
+        }
+        catch (const std::exception& e)
+        {
+            DebugLog::Write("AreaLoad", "single failed " + areaName);
+            DebugLog::WriteException("AreaLoad", e);
+        }
+        catch (...)
+        {
+            DebugLog::Write("AreaLoad", "single failed " + areaName);
+            DebugLog::WriteUnknownException("AreaLoad");
+        }
+
+        if (loaded)
+        {
+            DebugLog::Write("AreaLoad", "single loaded " + areaName +
+                " chunks=" + std::to_string(af->getChunks().size()) +
+                " props=" + std::to_string(af->getPropCount()));
             gLoadedAreas.push_back(af);
             state.currentArea = af;
             SnapCameraToLoaded(state);
@@ -805,6 +836,7 @@ namespace UI_ContentBrowser {
         }
         else
         {
+            DebugLog::Write("AreaLoad", "single returned false " + areaName);
             state.currentArea.reset();
         }
     }
@@ -839,7 +871,12 @@ namespace UI_ContentBrowser {
         sLoadAllResults.clear();
         sLoadAllInProgress = true;
 
+        DebugLog::Write("LoadAll", "start folder=" + sLoadAllFolderName +
+            " areas=" + std::to_string(sLoadAllTotal.load()));
+
+        DebugLog::Write("PropLoader", "shutdown before load-all clear");
         PropLoader::Instance().ClearPendingWork();
+        PropLoader::Instance().Shutdown();
         UI_Details::Reset();
         ResetAreaReferencePosition();
 
@@ -853,22 +890,60 @@ namespace UI_ContentBrowser {
         state.currentArea.reset();
 
         sLoadAllThread = std::thread([]() {
-            for (size_t i = 0; i < sLoadAllAreaFiles.size(); i++)
+            try
             {
-                const auto& [arc, fileEntry] = sLoadAllAreaFiles[i];
-
+                for (size_t i = 0; i < sLoadAllAreaFiles.size(); i++)
                 {
-                    std::lock_guard<std::mutex> lock(sLoadAllMutex);
-                    sLoadAllCurrentAreaName = wstring_to_utf8(fileEntry->getEntryName());
-                }
+                    const auto& [arc, fileEntry] = sLoadAllAreaFiles[i];
+                    std::string areaName = fileEntry ? wstring_to_utf8(fileEntry->getEntryName()) : "(null)";
 
-                auto af = std::make_shared<AreaFile>(arc, fileEntry);
-                if (af->load())
-                {
-                    std::lock_guard<std::mutex> lock(sLoadAllMutex);
-                    sLoadAllResults.push_back(af);
+                    {
+                        std::lock_guard<std::mutex> lock(sLoadAllMutex);
+                        sLoadAllCurrentAreaName = areaName;
+                    }
+
+                    DebugLog::Write("LoadAll", "parse begin " + areaName);
+
+                    try
+                    {
+                        ParsedArea parsed = AreaFile::parseAreaFile(arc, fileEntry);
+                        if (parsed.valid)
+                        {
+                            DebugLog::Write("LoadAll", "parse ok " + areaName +
+                                " props=" + std::to_string(parsed.props.size()) +
+                                " chunks=" + std::to_string(parsed.chunks.size()));
+
+                            std::lock_guard<std::mutex> lock(sLoadAllMutex);
+                            sLoadAllResults.push_back({arc, std::move(parsed)});
+                        }
+                        else
+                        {
+                            DebugLog::Write("LoadAll", "parse invalid " + areaName);
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        DebugLog::Write("LoadAll", "parse exception " + areaName);
+                        DebugLog::WriteException("LoadAll", e);
+                    }
+                    catch (...)
+                    {
+                        DebugLog::Write("LoadAll", "parse unknown exception " + areaName);
+                        DebugLog::WriteUnknownException("LoadAll");
+                    }
+
+                    sLoadAllCurrent++;
                 }
-                sLoadAllCurrent++;
+            }
+            catch (const std::exception& e)
+            {
+                DebugLog::WriteException("LoadAllThread", e);
+                sLoadAllCurrent = sLoadAllTotal.load();
+            }
+            catch (...)
+            {
+                DebugLog::WriteUnknownException("LoadAllThread");
+                sLoadAllCurrent = sLoadAllTotal.load();
             }
         });
     }
@@ -877,14 +952,65 @@ namespace UI_ContentBrowser {
     {
         if (!sLoadAllInProgress) return;
 
+        int uploadedThisFrame = 0;
+        constexpr int MaxAreaUploadsPerFrame = 1;
+
+        while (uploadedThisFrame < MaxAreaUploadsPerFrame)
         {
-            std::lock_guard<std::mutex> lock(sLoadAllMutex);
-            for (auto& af : sLoadAllResults)
-                gLoadedAreas.push_back(std::move(af));
-            sLoadAllResults.clear();
+            LoadAllParsedResult result;
+            bool hasResult = false;
+
+            {
+                std::lock_guard<std::mutex> lock(sLoadAllMutex);
+                if (!sLoadAllResults.empty())
+                {
+                    result = std::move(sLoadAllResults.front());
+                    sLoadAllResults.pop_front();
+                    hasResult = true;
+                }
+            }
+
+            if (!hasResult)
+                break;
+
+            std::string areaName = result.parsed.file ? wstring_to_utf8(result.parsed.file->getEntryName()) : "(unknown)";
+            DebugLog::Write("LoadAll", "gpu upload begin " + areaName);
+
+            try
+            {
+                auto af = std::make_shared<AreaFile>(result.archive, result.parsed.file);
+                if (af->loadFromParsed(std::move(result.parsed)))
+                {
+                    DebugLog::Write("LoadAll", "gpu upload ok " + areaName +
+                        " props=" + std::to_string(af->getPropCount()));
+                    gLoadedAreas.push_back(std::move(af));
+                }
+                else
+                {
+                    DebugLog::Write("LoadAll", "gpu upload returned false " + areaName);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                DebugLog::Write("LoadAll", "gpu upload exception " + areaName);
+                DebugLog::WriteException("LoadAll", e);
+            }
+            catch (...)
+            {
+                DebugLog::Write("LoadAll", "gpu upload unknown exception " + areaName);
+                DebugLog::WriteUnknownException("LoadAll");
+            }
+
+            uploadedThisFrame++;
         }
 
-        if (sLoadAllCurrent >= sLoadAllTotal)
+        bool noPendingUploads = false;
+        {
+            std::lock_guard<std::mutex> lock(sLoadAllMutex);
+            noPendingUploads = sLoadAllResults.empty();
+        }
+
+        if (sLoadAllCurrent >= sLoadAllTotal && noPendingUploads)
         {
             if (sLoadAllThread.joinable())
                 sLoadAllThread.join();
@@ -902,6 +1028,7 @@ namespace UI_ContentBrowser {
             sLoadAllAreaFiles.clear();
             sLoadAllAreaFiles.shrink_to_fit();
             sLoadAllCurrentAreaName.clear();
+            DebugLog::Write("LoadAll", "finished loadedAreas=" + std::to_string(gLoadedAreas.size()));
         }
     }
 

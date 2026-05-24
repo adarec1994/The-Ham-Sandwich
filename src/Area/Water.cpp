@@ -76,7 +76,7 @@ float4 PSMain(PSInput input) : SV_TARGET
 {
     if (debugColor.w > 0.5)
     {
-        return float4(debugColor.rgb, 0.7);
+        return float4(debugColor.rgb, 1.0);
     }
 
     float3 waterColor = input.color.rgb;
@@ -90,7 +90,7 @@ float4 PSMain(PSInput input) : SV_TARGET
     float fresnel = saturate(1.0 - abs(input.normal.y));
     waterColor = lerp(waterColor, float3(0.8, 0.9, 1.0), fresnel * 0.3);
 
-    return float4(waterColor, 0.6);
+    return float4(waterColor, 1.0);
 }
 )";
 
@@ -311,7 +311,7 @@ bool Initialize(ID3D11Device* device)
     if (FAILED(hr)) return false;
 
     D3D11_BLEND_DESC blendDesc = {};
-    blendDesc.RenderTarget[0].BlendEnable = TRUE;
+    blendDesc.RenderTarget[0].BlendEnable = FALSE;
     blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
     blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
     blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;

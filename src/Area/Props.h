@@ -289,6 +289,7 @@ private:
     FileEntryPtr FindPropFile(const std::string& path);
     bool RegisterPendingModelWaiter(const std::string& normalizedPath, Prop* prop);
     void CompletePendingModel(const std::string& normalizedPath, Prop* fallbackProp, const std::shared_ptr<M3Render>& render, bool success);
+    void DecrementPendingCount();
 
     ArchivePtr mArchive;
     mutable std::mutex mArchiveMutex;

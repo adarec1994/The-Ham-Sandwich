@@ -9,6 +9,7 @@
 #include "Area/TerrainTexture.h"
 #include "models/M3Render.h"
 #include "Skybox/Sky_Manager.h"
+#include "Utils/DebugLog.h"
 
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -130,6 +131,9 @@ static bool LoadCharacterIcon()
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    DebugLog::Init();
+    DebugLog::Write("App", "WinMain start");
+
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW;

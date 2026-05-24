@@ -19,6 +19,17 @@ typedef XMMATRIX Matrix;
 typedef XMFLOAT3 Vector3;
 typedef XMFLOAT4 Vector4;
 
+struct AreaRenderCulling
+{
+    XMFLOAT3 cameraPosition = XMFLOAT3(0.0f, 0.0f, 0.0f);
+    XMFLOAT3 cameraForward = XMFLOAT3(0.0f, 0.0f, 1.0f);
+    XMFLOAT3 cameraRight = XMFLOAT3(1.0f, 0.0f, 0.0f);
+    XMFLOAT3 cameraUp = XMFLOAT3(0.0f, 1.0f, 0.0f);
+    float tanHalfFovX = 1.0f;
+    float tanHalfFovY = 1.0f;
+    float farDistance = 4096.0f;
+};
+
 #pragma pack(push, 1)
 struct AreaVertex
 {
@@ -305,6 +316,7 @@ public:
     [[nodiscard]] int getTileY() const { return mTileY; }
 
     void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, bool highlightAll = false);
+    void render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaRenderCulling* culling, bool highlightAll = false);
     void renderGlm(ID3D11DeviceContext* context, const glm::mat4& matView, const glm::mat4& matProj, ID3D11Buffer* constantBuffer, bool highlightAll = false);
     void renderProps(const Matrix& matView, const Matrix& matProj);
     void renderPropsGlm(const glm::mat4& matView, const glm::mat4& matProj);

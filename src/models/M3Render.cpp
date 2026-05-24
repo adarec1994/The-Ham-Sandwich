@@ -97,7 +97,6 @@ ComPtr<ID3D11SamplerState> M3Render::sSharedSampler;
 ComPtr<ID3D11RasterizerState> M3Render::sRasterState;
 ComPtr<ID3D11DepthStencilState> M3Render::sDepthState;
 ComPtr<ID3D11BlendState> M3Render::sBlendState;
-ComPtr<ID3D11BlendState> M3Render::sAlphaBlendState;
 bool M3Render::sShadersInitialized = false;
 std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> M3Render::sTextureSRVCache;
 std::mutex M3Render::sTextureCacheMutex;
@@ -198,7 +197,7 @@ float4 main(PSInput input) : SV_TARGET {
         texColor = diffTexture.Sample(samplerState, input.texCoord);
     }
 
-    if (texColor.a < 0.5) discard;
+    texColor.a = 1.0;
     float3 baseColor = texColor.rgb * diff;
     float3 finalColor = lerp(baseColor, highlightColor, highlightMix);
     return float4(finalColor, 1.0);
@@ -322,17 +321,6 @@ void M3Render::InitSharedResources() {
     bd.RenderTarget[0].BlendEnable = FALSE;
     bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
     sDevice->CreateBlendState(&bd, &sBlendState);
-
-    D3D11_BLEND_DESC abd = {};
-    abd.RenderTarget[0].BlendEnable = TRUE;
-    abd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
-    abd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
-    abd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
-    abd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-    abd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
-    abd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-    abd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-    sDevice->CreateBlendState(&abd, &sAlphaBlendState);
 
     sShadersInitialized = true;
 }
@@ -761,12 +749,18 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
         return nullptr;
     }
 
+    for (size_t i = 3; i < img.rgba.size(); i += 4) {
+        img.rgba[i] = 255;
+    }
+
     bool detectedAlpha = false;
-    size_t pixelCount = img.rgba.size() / 4;
-    size_t step = std::max((size_t)1, pixelCount / 1000);
-    for (size_t i = 0; i < pixelCount && !detectedAlpha; i += step) {
-        if (img.rgba[i * 4 + 3] < 250) {
-            detectedAlpha = true;
+    if (outHasAlpha) {
+        size_t pixelCount = img.rgba.size() / 4;
+        size_t step = std::max((size_t)1, pixelCount / 1000);
+        for (size_t i = 0; i < pixelCount && !detectedAlpha; i += step) {
+            if (img.rgba[i * 4 + 3] < 250) {
+                detectedAlpha = true;
+            }
         }
     }
 
@@ -857,29 +851,6 @@ ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, i
         warnOnce("texture index " + std::to_string(idx) + " out of range (max " + std::to_string(mTextureSRVs.size()) + ")");
     }
     return mFallbackWhiteSRV.Get();
-}
-
-bool M3Render::materialUsesAlpha(uint16_t materialId, int variant) const {
-    if (materialId >= materials.size()) return false;
-    const auto& m = materials[materialId];
-    if (m.variants.empty()) return false;
-
-    int v = std::clamp(variant, 0, (int)m.variants.size() - 1);
-    int idx = m.variants[v].textureIndexA;
-
-    if (idx < 0) {
-        for (size_t i = 0; i < m.variants.size(); ++i) {
-            if (m.variants[i].textureIndexA >= 0) {
-                idx = m.variants[i].textureIndexA;
-                break;
-            }
-        }
-    }
-
-    if (idx >= 0 && idx < (int)textures.size()) {
-        return textures[idx].hasAlpha;
-    }
-    return false;
 }
 
 // Resolve up to 4 texture layers for layer blending
@@ -1023,13 +994,6 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
             variant = submeshVariantOverride[i];
         } else if (sm.materialID < materialSelectedVariant.size()) {
             variant = materialSelectedVariant[sm.materialID];
-        }
-
-        bool useAlpha = materialUsesAlpha(sm.materialID, variant);
-        if (useAlpha) {
-            sContext->OMSetBlendState(sAlphaBlendState.Get(), blendFactor, 0xFFFFFFFF);
-        } else {
-            sContext->OMSetBlendState(sBlendState.Get(), blendFactor, 0xFFFFFFFF);
         }
 
         // Resolve texture layers for this material
@@ -1520,15 +1484,11 @@ bool M3Render::uploadNextTexture(const ArchivePtr& arc) {
     if (!archive) return false;
 
     const std::string& path = pendingTexturePaths[nextTextureToLoad];
-    bool hasAlpha = false;
-    auto srv = loadTextureFromArchive(archive, path, &hasAlpha);
+    auto srv = loadTextureFromArchive(archive, path);
 
     if (nextTextureToLoad < mTextureSRVs.size()) {
         if (srv) {
             mTextureSRVs[nextTextureToLoad] = srv;
-            if (nextTextureToLoad < textures.size()) {
-                textures[nextTextureToLoad].hasAlpha = hasAlpha;
-            }
         } else {
 
             mTextureSRVs[nextTextureToLoad] = mFallbackWhiteSRV;

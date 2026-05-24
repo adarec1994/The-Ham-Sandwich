@@ -128,7 +128,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
     
     float3 texNormal = UnpackNormalMap(normalData);
     
-    if (colorData.a < 0.5) discard;
+    colorData.a = 1.0;
     
     float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
     float diff = max(dot(normalize(input.Normal), lightDir), 0.3);

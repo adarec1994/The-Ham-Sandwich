@@ -47,7 +47,7 @@ PSInput VSMain(VSInput input) {
 
 float4 PSMain(PSInput input) : SV_TARGET {
     float4 color = input.Color;
-    color.a = 0.7;
+    color.a = 1.0;
     return color;
 }
 )";

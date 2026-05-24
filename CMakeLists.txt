@@ -336,6 +336,8 @@ set(HAM_SANDWICH_SOURCES
         src/UI/UI_Utils.h
 
         src/Utils/BinStream.h
+        src/Utils/DebugLog.cpp
+        src/Utils/DebugLog.h
         src/Utils/ParallelAreaLoader.cpp
         src/Utils/ParallelAreaLoader.h
 

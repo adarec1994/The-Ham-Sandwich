@@ -5,6 +5,7 @@
 #include "../models/M3Loader.h"
 #include "../models/M3Render.h"
 #include "../Skybox/Sky_Manager.h"
+#include "../Utils/DebugLog.h"
 #include <cmath>
 #include <algorithm>
 #include <string>
@@ -36,6 +37,61 @@ static std::string NormalizePropPath(const std::string& path)
     while (!result.empty() && result[0] == '/')
         result.erase(0, 1);
     return result;
+}
+
+static std::string WideToDebugString(const std::wstring& text)
+{
+    std::string result;
+    result.reserve(text.size());
+    for (wchar_t c : text)
+        result.push_back(c >= 32 && c < 127 ? static_cast<char>(c) : '?');
+    return result;
+}
+
+static float Dot(const XMFLOAT3& a, const XMFLOAT3& b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static bool BoundsVisibleForCamera(const AreaRenderCulling& culling,
+                                   const XMFLOAT3& minBounds,
+                                   const XMFLOAT3& maxBounds,
+                                   const XMFLOAT3& worldOffset)
+{
+    if (minBounds.x > maxBounds.x || minBounds.y > maxBounds.y || minBounds.z > maxBounds.z)
+        return true;
+
+    XMFLOAT3 center(
+        (minBounds.x + maxBounds.x) * 0.5f + worldOffset.x,
+        (minBounds.y + maxBounds.y) * 0.5f + worldOffset.y,
+        (minBounds.z + maxBounds.z) * 0.5f + worldOffset.z
+    );
+
+    const float ex = std::max((maxBounds.x - minBounds.x) * 0.5f, 1.0f);
+    const float ey = std::max((maxBounds.y - minBounds.y) * 0.5f, 1.0f);
+    const float ez = std::max((maxBounds.z - minBounds.z) * 0.5f, 1.0f);
+    const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
+
+    XMFLOAT3 toCenter(
+        center.x - culling.cameraPosition.x,
+        center.y - culling.cameraPosition.y,
+        center.z - culling.cameraPosition.z
+    );
+
+    const float forwardDist = Dot(toCenter, culling.cameraForward);
+    if (forwardDist < -radius || forwardDist > culling.farDistance + radius)
+        return false;
+
+    const float depth = std::max(forwardDist, 0.0f);
+    const float rightDist = std::abs(Dot(toCenter, culling.cameraRight));
+    if (rightDist > depth * culling.tanHalfFovX + radius)
+        return false;
+
+    const float upDist = std::abs(Dot(toCenter, culling.cameraUp));
+    if (upDist > depth * culling.tanHalfFovY + radius)
+        return false;
+
+    return true;
 }
 
 const float AreaFile::UnitSize = 2.0f;
@@ -150,7 +206,15 @@ XMFLOAT3 AreaFile::getWorldMaxBounds() const
 
 bool AreaFile::load()
 {
-    if (mContent.size() < 8) return false;
+    const std::string debugPath = WideToDebugString(mPath);
+    DebugLog::Write("AreaFile", "load begin " + debugPath +
+        " bytes=" + std::to_string(mContent.size()));
+
+    if (mContent.size() < 8)
+    {
+        DebugLog::Write("AreaFile", "load fail small file " + debugPath);
+        return false;
+    }
     struct R
     {
         const uint8* p; const uint8* e;
@@ -167,7 +231,11 @@ bool AreaFile::load()
     const uint8* base = mContent.data();
     R r{ base, base + mContent.size() };
     uint32 sig = r.u32le();
-    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA) return false;
+    if (sig != AreaChunkID::area && sig != AreaChunkID::AREA)
+    {
+        DebugLog::Write("AreaFile", "load fail invalid signature " + debugPath);
+        return false;
+    }
     r.u32le();
     std::vector<uint8> chnkData, propData, curtData;
     while (r.can(8))
@@ -198,6 +266,8 @@ bool AreaFile::load()
     {
         mMinBounds = XMFLOAT3(0, 0, 0);
         mMaxBounds = XMFLOAT3(512, 50, 512);
+        DebugLog::Write("AreaFile", "load ok no chunks " + debugPath +
+            " props=" + std::to_string(mProps.size()));
         return true;
     }
 
@@ -239,12 +309,23 @@ bool AreaFile::load()
     {
         threads.emplace_back([&]()
         {
-            while (true)
+            try
             {
-                size_t i = jobIndex.fetch_add(1);
-                if (i >= jobs.size()) break;
-                auto& job = jobs[i];
-                parsedChunks[job.index] = AreaChunkRender::parseChunkData(job.data, job.cellX, job.cellY);
+                while (true)
+                {
+                    size_t i = jobIndex.fetch_add(1);
+                    if (i >= jobs.size()) break;
+                    auto& job = jobs[i];
+                    parsedChunks[job.index] = AreaChunkRender::parseChunkData(job.data, job.cellX, job.cellY);
+                }
+            }
+            catch (const std::exception& e)
+            {
+                DebugLog::WriteException("AreaFileChunkThread", e);
+            }
+            catch (...)
+            {
+                DebugLog::WriteUnknownException("AreaFileChunkThread");
             }
         });
     }
@@ -304,7 +385,13 @@ bool AreaFile::load()
     }
     catch (...)
     {
+        DebugLog::WriteUnknownException("AreaFileSky");
     }
+
+    DebugLog::Write("AreaFile", "load ok " + debugPath +
+        " jobs=" + std::to_string(jobs.size()) +
+        " validChunks=" + std::to_string(validCount) +
+        " props=" + std::to_string(mProps.size()));
 
     return true;
 }
@@ -513,6 +600,11 @@ bool AreaFile::loadFromParsed(ParsedArea&& parsed)
 
 void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, bool highlightAll)
 {
+    render(context, matView, matProj, constantBuffer, nullptr, highlightAll);
+}
+
+void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const Matrix& matProj, ID3D11Buffer* constantBuffer, const AreaRenderCulling* culling, bool highlightAll)
+{
     if (!context || !constantBuffer) return;
 
     XMVECTOR offsetVec = XMLoadFloat3(&mWorldOffset);
@@ -536,9 +628,13 @@ void AreaFile::render(ID3D11DeviceContext* context, const Matrix& matView, const
     worldModel = XMMatrixMultiply(worldModel, XMMatrixTranslationFromVector(XMVectorNegate(centerVec)));
 
     int chunkCount = 0;
+    const bool canCullChunks = culling && mGlobalRotation == 0.0f && !mMirrorX && !mMirrorZ;
     for (auto& c : mChunks)
     {
         if (!c || !c->isFullyInitialized()) continue;
+        if (canCullChunks && !BoundsVisibleForCamera(*culling, c->getMinBounds(), c->getMaxBounds(), mWorldOffset))
+            continue;
+
         chunkCount++;
         c->loadTextures(mArchive);
 

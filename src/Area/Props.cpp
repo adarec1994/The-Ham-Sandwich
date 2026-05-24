@@ -4,6 +4,7 @@
 #include "../models/M3Loader.h"
 #include "../models/M3LoaderV95.h"
 #include "../models/M3Render.h"
+#include "../Utils/DebugLog.h"
 #include <cstring>
 #include <algorithm>
 #include <iostream>
@@ -52,8 +53,8 @@ void PrintFailedTextures()
 }
 
 static void PropDebugLog(const std::string&) {}
-static void PropDebugLogWarning(const std::string&) {}
-static void PropDebugLogError(const std::string&) {}
+static void PropDebugLogWarning(const std::string& message) { DebugLog::Write("PropLoader", "WARN " + message); }
+static void PropDebugLogError(const std::string& message) { DebugLog::Write("PropLoader", "ERROR " + message); }
 
 void PrintPropTextureDebugSummary()
 {
@@ -279,6 +280,12 @@ void PropLoader::Shutdown()
     }
     mWorkers.clear();
 
+    {
+        std::lock_guard<std::mutex> lock(mWorkMutex);
+        std::queue<Prop*> empty;
+        std::swap(mWorkQueue, empty);
+    }
+
     std::lock_guard<std::mutex> uploadLock(mUploadMutex);
     while (!mPendingUploads.empty())
     {
@@ -286,6 +293,13 @@ void PropLoader::Shutdown()
         delete upload.modelData;
         mPendingUploads.pop();
     }
+
+    {
+        std::lock_guard<std::mutex> lock(mPendingModelMutex);
+        mPendingModelWaiters.clear();
+    }
+
+    mPendingCount.store(0, std::memory_order_relaxed);
 }
 
 void PropLoader::SetArchive(const ArchivePtr& archive)
@@ -325,9 +339,9 @@ void PropLoader::ClearPendingWork()
 
     {
         std::lock_guard<std::mutex> lock(mPendingModelMutex);
-        for (auto& [path, waiters] : mPendingModelWaiters)
+        for (auto& entry : mPendingModelWaiters)
         {
-            for (Prop* prop : waiters)
+            for (Prop* prop : entry.second)
             {
                 if (prop && !prop->loaded.load(std::memory_order_acquire))
                     prop->loadRequested.store(false, std::memory_order_release);
@@ -380,6 +394,20 @@ void PropLoader::CompletePendingModel(
 
         std::atomic_thread_fence(std::memory_order_release);
         prop->loaded.store(true, std::memory_order_release);
+    }
+}
+
+void PropLoader::DecrementPendingCount()
+{
+    size_t current = mPendingCount.load(std::memory_order_relaxed);
+    while (current > 0)
+    {
+        if (mPendingCount.compare_exchange_weak(
+                current,
+                current - 1,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed))
+            return;
     }
 }
 
@@ -711,7 +739,7 @@ void PropLoader::WorkerThread()
 
         if (!prop)
         {
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             continue;
         }
 
@@ -732,7 +760,7 @@ void PropLoader::WorkerThread()
 
             CompletePendingModel(normalized, prop, cachedRender, cachedRender != nullptr);
 
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             continue;
         }
 
@@ -749,7 +777,7 @@ void PropLoader::WorkerThread()
         else
         {
             CompletePendingModel(NormalizePath(prop->path), prop, nullptr, false);
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
         }
     }
 }
@@ -778,7 +806,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             PropDebugLogWarning("Skipping upload - null prop or modelData for path: " + upload.path);
             CompletePendingModel(NormalizePath(upload.path), upload.prop, nullptr, false);
             delete upload.modelData;
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             continue;
         }
 
@@ -797,7 +825,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             PropDebugLog("Using cached render for: " + normalized);
             CompletePendingModel(normalized, upload.prop, existingRender, true);
             delete upload.modelData;
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             processed++;
             continue;
         }
@@ -819,7 +847,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             PropDebugLogError("Exception creating M3Render for " + upload.path + ": " + e.what());
             CompletePendingModel(normalized, upload.prop, nullptr, false);
             delete upload.modelData;
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             processed++;
             continue;
         }
@@ -828,7 +856,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
             PropDebugLogError("Unknown exception creating M3Render for " + upload.path);
             CompletePendingModel(normalized, upload.prop, nullptr, false);
             delete upload.modelData;
-            mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+            DecrementPendingCount();
             processed++;
             continue;
         }
@@ -838,7 +866,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         CompletePendingModel(normalized, upload.prop, render, true);
 
         delete upload.modelData;
-        mPendingCount.fetch_sub(1, std::memory_order_relaxed);
+        DecrementPendingCount();
         processed++;
     }
 

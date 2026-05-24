@@ -122,7 +122,7 @@ PSOutput PSMain(PSInput input)
 
     float3 color = colorData.rgb;
 
-    output.diffuse = colorData;
+    output.diffuse = float4(colorData.rgb, 1.0);
     output.specular = float4(0, 0, 0, 1);
     output.normal = float4(normal.xyz, 1.0);
     output.unknown = float4(0, 0, 0, 0);
