@@ -242,10 +242,487 @@ namespace M3Export
     static int64_t gFbxIdCounter = 1000000000;
     static int64_t GenFbxId() { return gFbxIdCounter++; }
     static std::string FbxF(double v) {
+        if (std::isnan(v) || std::isinf(v)) return "0";
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(6) << v;
         return oss.str();
     }
+
+    static void WriteBoneDebugReport(const std::string& path, M3Render* render)
+    {
+        std::ofstream out(path);
+        if (!out) return;
+        const auto& bones = render->getAllBones();
+        const auto& animations = render->getAllAnimations();
+        out << std::fixed << std::setprecision(4);
+        out << "=== Bone Debug Report ===\n";
+        out << "Total bones: " << bones.size() << "\n\n";
+        for (size_t i = 0; i < bones.size(); ++i) {
+            const auto& bone = bones[i];
+            std::string name = bone.name.empty() ? ("Bone_" + std::to_string(i)) : bone.name;
+            glm::mat4 localMatrix = bone.globalMatrix;
+            if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
+                localMatrix = bones[bone.parentId].inverseGlobalMatrix * bone.globalMatrix;
+            }
+            float localDet = glm::determinant(glm::mat3(localMatrix));
+            float globalDet = glm::determinant(glm::mat3(bone.globalMatrix));
+            bool mirrored = localDet < 0.0f;
+            glm::vec3 globalPos = glm::vec3(bone.globalMatrix[3]);
+            glm::vec3 localPos = glm::vec3(localMatrix[3]);
+            glm::vec3 lScale, lTrans, lSkew; glm::quat lRot; glm::vec4 lPersp;
+            glm::decompose(localMatrix, lScale, lRot, lTrans, lSkew, lPersp);
+            out << "[" << i << "] \"" << name << "\" parent=" << bone.parentId
+                << " mirror=" << (mirrored ? "YES" : "no ")
+                << " localDet=" << localDet
+                << " globalDet=" << globalDet << "\n";
+            out << "     globalPos=(" << globalPos.x << "," << globalPos.y << "," << globalPos.z << ")"
+                << " localPos=(" << localPos.x << "," << localPos.y << "," << localPos.z << ")\n";
+            out << "     localScale=(" << lScale.x << "," << lScale.y << "," << lScale.z << ")"
+                << " localRot=(w=" << lRot.w << ",x=" << lRot.x << ",y=" << lRot.y << ",z=" << lRot.z << ")\n";
+            for (int t = 0; t < 8; ++t) {
+                if (bone.tracks[t].keyframes.empty()) continue;
+                size_t nkf = bone.tracks[t].keyframes.size();
+                const auto& kf0 = bone.tracks[t].keyframes[0];
+                const char* role = "?";
+                if (t <= 2) role = "scale";
+                else if (t == 4 || t == 5) role = "rot  ";
+                else if (t == 6) role = "trans";
+                out << "     track" << t << " (" << role << "): " << nkf << " kf"
+                    << "  t0=" << kf0.timestamp
+                    << " s=(" << kf0.scale.x << "," << kf0.scale.y << "," << kf0.scale.z << ")"
+                    << " r=(w=" << kf0.rotation.w << ",x=" << kf0.rotation.x << ",y=" << kf0.rotation.y << ",z=" << kf0.rotation.z << ")"
+                    << " t=(" << kf0.translation.x << "," << kf0.translation.y << "," << kf0.translation.z << ")"
+                    << "\n";
+            }
+        }
+        out << "\n=== Animations ===\n";
+        for (size_t i = 0; i < animations.size(); ++i) {
+            const auto& anim = animations[i];
+            out << "[" << i << "] seq=" << anim.sequenceId
+                << " start=" << anim.timestampStart
+                << " end=" << anim.timestampEnd
+                << " duration=" << (anim.timestampEnd - anim.timestampStart) << "ms\n";
+        }
+    }
+
+    // =========================================================================
+    // Runtime-faithful bone state helpers.
+    //
+    // The renderer (M3Render) does several things that the export must mirror
+    // EXACTLY, otherwise the exported bind pose / animations diverge from what
+    // the runtime produces. The two main subtleties are:
+    //
+    //   1. AT_ORIGIN bones (those whose globalMatrix has translation 0) get
+    //      their bind pose reconstructed from track 6 translation + track 4/5
+    //      rotation + track 0/1/2 scale, composed as T*R*S. The previous
+    //      exporter only used the track 6 TRANSLATION, dropping rotation
+    //      and scale - this caused incorrect bind poses for ~45 bones in
+    //      typical character models.
+    //
+    //   2. MIRRORED bones (negative-determinant local matrix, e.g. left-side
+    //      bones in a humanoid) are composed at runtime as T*S*R, NOT the
+    //      standard T*R*S that glTF/FBX use. To export this correctly we
+    //      must bake the runtime composition at every keyframe and decompose
+    //      back into TRS that, with T*R*S order, produces the same matrix.
+    // =========================================================================
+
+    struct BoneRuntimeState {
+        glm::mat4 effectiveBindGlobal{1.0f};
+        glm::mat4 inverseEffectiveBindGlobal{1.0f};
+        glm::mat4 bindLocalMatrix{1.0f};
+        glm::vec3 bindLocalScale{1.0f};
+        glm::quat bindLocalRotation{1.0f, 0.0f, 0.0f, 0.0f};
+        glm::vec3 bindLocalTranslation{0.0f};
+        bool boneAtOrigin = false;
+        bool boneMirrored = false;
+    };
+
+    // Forward declaration - defined further down.
+    static void DecomposeForExport(const glm::mat4& m, glm::vec3& outT, glm::quat& outR, glm::vec3& outS);
+
+    // Safe matrix inverse - returns identity for singular / non-finite matrices
+    // rather than propagating NaN through the rest of the pipeline.
+    static glm::mat4 SafeInverse(const glm::mat4& m) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                if (!std::isfinite(m[c][r])) return glm::mat4(1.0f);
+        float det = glm::determinant(m);
+        if (!std::isfinite(det) || std::abs(det) < 1e-12f) return glm::mat4(1.0f);
+        glm::mat4 inv = glm::inverse(m);
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                if (!std::isfinite(inv[c][r])) return glm::mat4(1.0f);
+        return inv;
+    }
+
+    // Mirrors M3Render::precomputeBoneData() exactly. Bones must already be
+    // in topological order (parents before children), which the loader guarantees.
+    static void PrecomputeBoneStates(const std::vector<M3Bone>& bones,
+                                     std::vector<BoneRuntimeState>& states)
+    {
+        size_t n = bones.size();
+        states.assign(n, BoneRuntimeState{});
+
+        // Pass 1: compute effectiveBindGlobal in hierarchy order
+        for (size_t i = 0; i < n; ++i) {
+            const auto& bone = bones[i];
+            bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)n);
+            bool atOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
+            states[i].boneAtOrigin = atOrigin;
+
+            if (atOrigin && !bone.tracks[6].keyframes.empty()) {
+                glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
+
+                float origDet = glm::determinant(glm::mat3(bone.globalMatrix));
+                bool needNegativeDet = (origDet < 0.0f);
+
+                glm::vec3 bindScale(1.0f);
+                bool foundMatchingScale = false;
+                for (int t = 0; t <= 2; ++t) {
+                    if (bone.tracks[t].keyframes.empty()) continue;
+                    glm::vec3 ts = bone.tracks[t].keyframes[0].scale;
+                    bool tNeg = (ts.x * ts.y * ts.z) < 0.0f;
+                    if (tNeg == needNegativeDet) {
+                        bindScale = ts;
+                        foundMatchingScale = true;
+                        break;
+                    }
+                }
+                if (!foundMatchingScale) {
+                    for (int t = 0; t <= 2; ++t) {
+                        if (bone.tracks[t].keyframes.empty()) continue;
+                        bindScale = bone.tracks[t].keyframes[0].scale;
+                        float scaleDet = bindScale.x * bindScale.y * bindScale.z;
+                        if ((scaleDet < 0.0f) != needNegativeDet)
+                            bindScale.x = -bindScale.x;
+                        break;
+                    }
+                }
+
+                glm::quat bindRot(1.0f, 0.0f, 0.0f, 0.0f);
+                for (int t = 4; t <= 5; ++t) {
+                    if (!bone.tracks[t].keyframes.empty()) {
+                        bindRot = bone.tracks[t].keyframes[0].rotation;
+                        // Guard against zero / degenerate quaternions in source data
+                        float qL2 = bindRot.x*bindRot.x + bindRot.y*bindRot.y +
+                                    bindRot.z*bindRot.z + bindRot.w*bindRot.w;
+                        if (!std::isfinite(qL2) || qL2 < 1e-12f)
+                            bindRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                        else
+                            bindRot = bindRot * (1.0f / std::sqrt(qL2));
+                        break;
+                    }
+                }
+
+                glm::mat4 T = glm::translate(glm::mat4(1.0f), track6Pos);
+                glm::mat4 R = glm::mat4_cast(bindRot);
+                glm::mat4 S = glm::scale(glm::mat4(1.0f), bindScale);
+                glm::mat4 localT = T * R * S;
+
+                if (!isRoot)
+                    states[i].effectiveBindGlobal = states[bone.parentId].effectiveBindGlobal * localT;
+                else
+                    states[i].effectiveBindGlobal = localT;
+            } else {
+                states[i].effectiveBindGlobal = bone.globalMatrix;
+            }
+
+            states[i].inverseEffectiveBindGlobal = SafeInverse(states[i].effectiveBindGlobal);
+        }
+
+        // Pass 2: bindLocalMatrix and decomposition (mirrors renderer's pass 2).
+        // We use DecomposeForExport instead of glm::decompose because the latter
+        // can fail (or assert in MSVC debug builds) on negative-determinant
+        // matrices, which our fix actively produces for AT_ORIGIN bones with
+        // mirrored scale tracks.
+        for (size_t i = 0; i < n; ++i) {
+            const auto& bone = bones[i];
+            bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)n);
+
+            if (isRoot)
+                states[i].bindLocalMatrix = states[i].effectiveBindGlobal;
+            else
+                states[i].bindLocalMatrix = states[bone.parentId].inverseEffectiveBindGlobal * states[i].effectiveBindGlobal;
+
+            float det = glm::determinant(glm::mat3(states[i].bindLocalMatrix));
+            states[i].boneMirrored = (det < 0);
+
+            DecomposeForExport(states[i].bindLocalMatrix,
+                               states[i].bindLocalTranslation,
+                               states[i].bindLocalRotation,
+                               states[i].bindLocalScale);
+            // DecomposeForExport already guarantees:
+            //  - rotation is a valid normalized quaternion with w >= 0
+            //  - for negative-det matrices, scale.x is negated so scale's det
+            //    matches the matrix's det (this is what SelectTracksForBone
+            //    relies on for its determinant-matching logic)
+        }
+    }
+
+    // Track interpolation - matches renderer's interpolateScale/Rotation/Translation
+    static glm::vec3 InterpScaleAt(const M3AnimationTrack& tr, float tMs) {
+        if (tr.keyframes.empty()) return glm::vec3(1.0f);
+        if (tr.keyframes.size() == 1) return tr.keyframes[0].scale;
+        if (tMs <= tr.keyframes.front().timestamp) return tr.keyframes.front().scale;
+        if (tMs >= tr.keyframes.back().timestamp) return tr.keyframes.back().scale;
+        size_t idx = 0;
+        for (size_t i = 0; i + 1 < tr.keyframes.size(); ++i) {
+            if (tr.keyframes[i].timestamp <= tMs && tr.keyframes[i+1].timestamp > tMs) { idx = i; break; }
+        }
+        const auto& a = tr.keyframes[idx];
+        const auto& b = tr.keyframes[idx+1];
+        float d = (float)(b.timestamp - a.timestamp);
+        if (d <= 0.0f) return a.scale;
+        float t = glm::clamp((tMs - (float)a.timestamp) / d, 0.0f, 1.0f);
+        return glm::mix(a.scale, b.scale, t);
+    }
+
+    // Safe quaternion normalize: returns identity for zero / NaN inputs.
+    static glm::quat SafeNormalize(const glm::quat& q) {
+        float l2 = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+        if (!std::isfinite(l2) || l2 < 1e-12f)
+            return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        float inv = 1.0f / std::sqrt(l2);
+        return glm::quat(q.w * inv, q.x * inv, q.y * inv, q.z * inv);
+    }
+
+    static glm::quat InterpRotationAt(const M3AnimationTrack& tr, float tMs) {
+        if (tr.keyframes.empty()) return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        if (tr.keyframes.size() == 1) return SafeNormalize(tr.keyframes[0].rotation);
+        if (tMs <= tr.keyframes.front().timestamp) return SafeNormalize(tr.keyframes.front().rotation);
+        if (tMs >= tr.keyframes.back().timestamp) return SafeNormalize(tr.keyframes.back().rotation);
+        size_t idx = 0;
+        for (size_t i = 0; i + 1 < tr.keyframes.size(); ++i) {
+            if (tr.keyframes[i].timestamp <= tMs && tr.keyframes[i+1].timestamp > tMs) { idx = i; break; }
+        }
+        const auto& a = tr.keyframes[idx];
+        const auto& b = tr.keyframes[idx+1];
+        float d = (float)(b.timestamp - a.timestamp);
+        glm::quat q0 = SafeNormalize(a.rotation), q1 = SafeNormalize(b.rotation);
+        if (d <= 0.0f) return q0;
+        float t = glm::clamp((tMs - (float)a.timestamp) / d, 0.0f, 1.0f);
+        if (glm::dot(q0, q1) < 0.0f) q1 = -q1;
+        return SafeNormalize(glm::slerp(q0, q1, t));
+    }
+
+    static glm::vec3 InterpTranslationAt(const M3AnimationTrack& tr, float tMs) {
+        if (tr.keyframes.empty()) return glm::vec3(0.0f);
+        if (tr.keyframes.size() == 1) return tr.keyframes[0].translation;
+        if (tMs <= tr.keyframes.front().timestamp) return tr.keyframes.front().translation;
+        if (tMs >= tr.keyframes.back().timestamp) return tr.keyframes.back().translation;
+        size_t idx = 0;
+        for (size_t i = 0; i + 1 < tr.keyframes.size(); ++i) {
+            if (tr.keyframes[i].timestamp <= tMs && tr.keyframes[i+1].timestamp > tMs) { idx = i; break; }
+        }
+        const auto& a = tr.keyframes[idx];
+        const auto& b = tr.keyframes[idx+1];
+        float d = (float)(b.timestamp - a.timestamp);
+        if (d <= 0.0f) return a.translation;
+        float t = glm::clamp((tMs - (float)a.timestamp) / d, 0.0f, 1.0f);
+        return glm::mix(a.translation, b.translation, t);
+    }
+
+    // Per-bone selection of which tracks to use - locked once per (anim, bone)
+    // so that the chosen track stays consistent across the entire animation.
+    struct BoneTrackSel {
+        const M3AnimationTrack* scaleTrack = nullptr;
+        const M3AnimationTrack* rotTrack   = nullptr;
+        const M3AnimationTrack* transTrack = nullptr;
+        bool flipScaleX = false;
+    };
+
+    static BoneTrackSel SelectTracksForBone(const M3Bone& bone, const BoneRuntimeState& st)
+    {
+        BoneTrackSel sel;
+
+        // Scale: prefer track with matching determinant sign vs. bind pose
+        float bindScaleDet = st.bindLocalScale.x * st.bindLocalScale.y * st.bindLocalScale.z;
+        bool needNegativeDet = (bindScaleDet < 0.0f);
+        for (int t = 0; t <= 2; ++t) {
+            if (bone.tracks[t].keyframes.empty()) continue;
+            const glm::vec3& s0 = bone.tracks[t].keyframes[0].scale;
+            bool tNeg = (s0.x * s0.y * s0.z) < 0.0f;
+            if (tNeg == needNegativeDet) { sel.scaleTrack = &bone.tracks[t]; break; }
+        }
+        if (!sel.scaleTrack) {
+            for (int t = 0; t <= 2; ++t) {
+                if (bone.tracks[t].keyframes.empty()) continue;
+                sel.scaleTrack = &bone.tracks[t];
+                const glm::vec3& s0 = sel.scaleTrack->keyframes[0].scale;
+                bool tNeg = (s0.x * s0.y * s0.z) < 0.0f;
+                if (tNeg != needNegativeDet) sel.flipScaleX = true;
+                break;
+            }
+        }
+        // Rotation: first non-empty of track 4, 5
+        for (int t = 4; t <= 5; ++t) {
+            if (!bone.tracks[t].keyframes.empty()) { sel.rotTrack = &bone.tracks[t]; break; }
+        }
+        // Translation: track 6 only if AT_ORIGIN (matches renderer's runtime)
+        if (st.boneAtOrigin && !bone.tracks[6].keyframes.empty())
+            sel.transTrack = &bone.tracks[6];
+
+        return sel;
+    }
+
+    // Compute the local matrix at time tMs using the EXACT runtime composition rule.
+    // This is the heart of the fix - mirrored bones use T*S*R, others use T*R*S.
+    static glm::mat4 ComputeRuntimeLocalAt(const M3Bone& bone, const BoneRuntimeState& st,
+                                           const BoneTrackSel& sel, float tMs)
+    {
+        glm::vec3 scale = st.bindLocalScale;
+        if (sel.scaleTrack) {
+            scale = InterpScaleAt(*sel.scaleTrack, tMs);
+            if (sel.flipScaleX) scale.x = -scale.x;
+        }
+        glm::quat rotation = st.bindLocalRotation;
+        if (sel.rotTrack) rotation = InterpRotationAt(*sel.rotTrack, tMs);
+        glm::vec3 translation = st.bindLocalTranslation;
+        if (sel.transTrack) translation = InterpTranslationAt(*sel.transTrack, tMs);
+
+        glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
+        glm::mat4 R = glm::mat4_cast(SafeNormalize(rotation));
+        glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
+        return st.boneMirrored ? (T * S * R) : (T * R * S);
+    }
+
+    // Decompose a 4x4 matrix into T, R, S such that T * R * S exactly equals
+    // the input. For matrices with negative determinant (mirrors), scale.x
+    // is made negative and R remains a proper rotation (positive determinant).
+    // This is what glTF/FBX expect for clean re-composition.
+    // Robust against NaN / inf / degenerate inputs - returns identity TRS for
+    // bad input rather than propagating NaN further.
+    static void DecomposeForExport(const glm::mat4& m, glm::vec3& outT, glm::quat& outR, glm::vec3& outS)
+    {
+        // Sanity check the entire matrix for non-finite values up front.
+        for (int c = 0; c < 4; ++c) {
+            for (int r = 0; r < 4; ++r) {
+                if (!std::isfinite(m[c][r])) {
+                    outT = glm::vec3(0.0f);
+                    outR = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+                    outS = glm::vec3(1.0f);
+                    return;
+                }
+            }
+        }
+
+        outT = glm::vec3(m[3]);
+
+        // glm matrices are column-major, so m[0], m[1], m[2] are columns.
+        glm::vec3 c0(m[0]); glm::vec3 c1(m[1]); glm::vec3 c2(m[2]);
+
+        float sx = glm::length(c0);
+        float sy = glm::length(c1);
+        float sz = glm::length(c2);
+
+        const float EPS = 1e-8f;
+        glm::vec3 r0, r1, r2;
+        if (sx < EPS) { sx = EPS; r0 = glm::vec3(1.0f, 0.0f, 0.0f); } else r0 = c0 / sx;
+        if (sy < EPS) { sy = EPS; r1 = glm::vec3(0.0f, 1.0f, 0.0f); } else r1 = c1 / sy;
+        if (sz < EPS) { sz = EPS; r2 = glm::vec3(0.0f, 0.0f, 1.0f); } else r2 = c2 / sz;
+
+        // Detect reflection - if r0,r1,r2 form a left-handed basis we have a mirror
+        if (glm::dot(r0, glm::cross(r1, r2)) < 0.0f) {
+            sx = -sx;
+            r0 = -r0;
+        }
+
+        outS = glm::vec3(sx, sy, sz);
+
+        glm::mat3 rotMat(r0, r1, r2);
+        glm::quat q = glm::quat_cast(rotMat);
+        // Defensive: if the basis was non-orthogonal due to skew/numerical error,
+        // quat_cast can produce a non-unit or NaN quaternion.
+        float qLen2 = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
+        if (!std::isfinite(qLen2) || qLen2 < 1e-12f) {
+            q = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        } else {
+            q = q * (1.0f / std::sqrt(qLen2));
+        }
+        if (q.w < 0.0f) q = -q;
+        outR = q;
+    }
+
+    // Result of baking one bone's animation. Keyframes are in MILLISECONDS
+    // relative to the start of the file, matching the input track timestamps.
+    struct BakedBoneAnim {
+        std::vector<uint32_t> times;
+        std::vector<glm::vec3> translations;
+        std::vector<glm::quat> rotations;
+        std::vector<glm::vec3> scales;
+        bool hasTranslation = false;
+        bool hasRotation    = false;
+        bool hasScale       = false;
+    };
+
+    // Bake an animation for one bone. We sample at the union of all relevant
+    // track keyframe times (clamped to anim range) so that we don't lose any
+    // keyframe information. Mirrored bones get T*S*R applied per sample, then
+    // decomposed into TRS that re-composes to the same matrix with T*R*S.
+    static BakedBoneAnim BakeBoneAnimation(const M3Bone& bone, const BoneRuntimeState& st,
+                                           uint32_t startMs, uint32_t endMs)
+    {
+        BakedBoneAnim out;
+        BoneTrackSel sel = SelectTracksForBone(bone, st);
+        if (!sel.scaleTrack && !sel.rotTrack && !sel.transTrack) return out;
+
+        // Gather unique timestamps from used tracks within [startMs, endMs]
+        std::vector<uint32_t> times;
+        auto addTimes = [&](const M3AnimationTrack* tr) {
+            if (!tr) return;
+            for (const auto& kf : tr->keyframes) {
+                if (kf.timestamp >= startMs && kf.timestamp <= endMs)
+                    times.push_back(kf.timestamp);
+            }
+        };
+        addTimes(sel.scaleTrack);
+        addTimes(sel.rotTrack);
+        addTimes(sel.transTrack);
+        // Always anchor the start and end so the animation has well-defined endpoints
+        times.push_back(startMs);
+        times.push_back(endMs);
+        std::sort(times.begin(), times.end());
+        times.erase(std::unique(times.begin(), times.end()), times.end());
+        if (times.size() < 2) return out;
+
+        out.times.reserve(times.size());
+        out.translations.reserve(times.size());
+        out.rotations.reserve(times.size());
+        out.scales.reserve(times.size());
+
+        glm::quat prevR(1.0f, 0.0f, 0.0f, 0.0f);
+        bool hasPrev = false;
+
+        for (uint32_t t : times) {
+            glm::mat4 local = ComputeRuntimeLocalAt(bone, st, sel, (float)t);
+            glm::vec3 T_, S_;
+            glm::quat R_;
+            DecomposeForExport(local, T_, R_, S_);
+
+            // Maintain quaternion continuity across keyframes (avoid 360 flips)
+            if (hasPrev && glm::dot(prevR, R_) < 0.0f) R_ = -R_;
+            prevR = R_;
+            hasPrev = true;
+
+            out.times.push_back(t);
+            out.translations.push_back(T_);
+            out.rotations.push_back(R_);
+            out.scales.push_back(S_);
+        }
+        // Each bone always has all three since we baked them; the export side
+        // can choose to skip channels that are constant if it wants to.
+        out.hasTranslation = (sel.transTrack != nullptr);
+        out.hasRotation    = (sel.rotTrack != nullptr);
+        out.hasScale       = (sel.scaleTrack != nullptr);
+        // For mirrored bones we MUST emit all three channels because the
+        // composition order is non-standard: missing channels would let the
+        // target app fall back to the node's bind TRS, which assumes T*R*S.
+        if (st.boneMirrored) {
+            out.hasTranslation = out.hasRotation = out.hasScale = true;
+        }
+        return out;
+    }
+
     ExportResult ExportToFBX(M3Render* render, const ArchivePtr& archive, const ExportSettings& settings, ProgressCallback progress)
     {
         ExportResult result;
@@ -255,6 +732,8 @@ namespace M3Export
         std::filesystem::create_directories(outputDir);
         std::string baseName = settings.customName.empty() ? ExtractModelName(render->getModelName()) : SanitizeFilename(settings.customName);
         std::string fbxPath = outputDir + "/" + baseName + ".fbx";
+        std::string debugPath = outputDir + "/" + baseName + "_bones.txt";
+        WriteBoneDebugReport(debugPath, render);
         const float SCALE = 100.0f;
         if (progress) progress(0, 100, "Collecting geometry...");
         const auto& allVertices = render->getVertices();
@@ -263,24 +742,14 @@ namespace M3Export
         const auto& bones = render->getAllBones();
         const auto& materials = render->getAllMaterials();
         const auto& textures = render->getAllTextures();
-        const auto& animations = render->getAllAnimations();
+
+        // FIX: Use runtime-faithful bone states instead of just translation
+        // (was dropping rotation+scale from tracks for AT_ORIGIN bones)
+        std::vector<BoneRuntimeState> boneStates;
+        PrecomputeBoneStates(bones, boneStates);
         std::vector<glm::mat4> effectiveBindGlobal(bones.size());
-        for (size_t i = 0; i < bones.size(); ++i) {
-            const auto& bone = bones[i];
-            bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-            bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
-            if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
-                glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
-                glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
-                if (!isRootBone) {
-                    effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
-                } else {
-                    effectiveBindGlobal[i] = localT;
-                }
-            } else {
-                effectiveBindGlobal[i] = bone.globalMatrix;
-            }
-        }
+        for (size_t i = 0; i < bones.size(); ++i)
+            effectiveBindGlobal[i] = boneStates[i].effectiveBindGlobal;
         struct SubmeshData {
             std::vector<glm::vec3> positions;
             std::vector<glm::vec3> normals;
@@ -328,9 +797,8 @@ namespace M3Export
         result.vertexCount = static_cast<int>(totalVerts);
         result.triangleCount = static_cast<int>(totalTris);
         result.boneCount = static_cast<int>(bones.size());
-        result.animationCount = settings.exportAnimations ? static_cast<int>(animations.size()) : 0;
+        result.animationCount = settings.exportAnimations ? static_cast<int>(render->getAllAnimations().size()) : 0;
         bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
-        bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
         if (progress) progress(10, 100, "Loading textures...");
         struct FbxTexture { std::string name; std::vector<uint8_t> data; int64_t texId; int64_t vidId; };
         std::vector<FbxTexture> fbxTextures;
@@ -391,18 +859,35 @@ namespace M3Export
             for (size_t m = 0; m < meshList.size(); ++m)
                 for (size_t b = 0; b < bones.size(); ++b) clusterIds.push_back(GenFbxId());
         }
+        if (progress) progress(30, 100, "Preparing skeleton...");
+
+        const auto& animations = render->getAllAnimations();
+        bool hasAnimations = hasSkeleton && settings.exportAnimations && !animations.empty();
+
         struct FbxAnimCurve { int64_t id; std::vector<int64_t> times; std::vector<float> values; };
         struct FbxAnimCurveNode { int64_t id; std::string prop; int64_t curveX, curveY, curveZ; size_t boneIdx; };
         struct FbxAnimLayer { int64_t id; std::vector<FbxAnimCurveNode> curveNodes; std::vector<FbxAnimCurve> curves; };
         struct FbxAnimStack { int64_t id; std::string name; int64_t layerId; int64_t startTime; int64_t endTime; FbxAnimLayer layer; };
         std::vector<FbxAnimStack> animStacks;
+
         auto QuatToEulerXYZ = [](const glm::quat& q) -> glm::vec3 {
-            glm::mat3 m = glm::mat3_cast(q);
+            glm::mat3 m = glm::mat3_cast(SafeNormalize(q));
             float rx = atan2(m[1][2], m[2][2]) * 57.2957795f;
             float ry = atan2(-m[0][2], sqrt(m[1][2]*m[1][2] + m[2][2]*m[2][2])) * 57.2957795f;
             float rz = atan2(m[0][1], m[0][0]) * 57.2957795f;
+            if (!std::isfinite(rx)) rx = 0.0f;
+            if (!std::isfinite(ry)) ry = 0.0f;
+            if (!std::isfinite(rz)) rz = 0.0f;
             return glm::vec3(rx, ry, rz);
         };
+
+        // Continuous unwrap of Euler angles to avoid 360-degree pops between keyframes
+        auto UnwrapEuler = [](float prev, float current) -> float {
+            while (current - prev >  180.0f) current -= 360.0f;
+            while (current - prev < -180.0f) current += 360.0f;
+            return current;
+        };
+
         if (hasAnimations) {
             for (size_t ai = 0; ai < animations.size(); ++ai) {
                 const auto& anim = animations[ai];
@@ -416,97 +901,66 @@ namespace M3Export
                 stack.startTime = 0;
                 stack.endTime = (int64_t)((durationMs / 1000.0f) * 46186158000.0);
                 stack.layer.id = stack.layerId;
+
                 for (size_t bi = 0; bi < bones.size(); ++bi) {
                     const auto& bone = bones[bi];
-                    bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
-                    const M3AnimationTrack* transTrack = nullptr;
-                    const M3AnimationTrack* rotTrack = nullptr;
-                    const M3AnimationTrack* scaleTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty() && boneAtOrigin) {
-                        transTrack = &bone.tracks[6];
-                    }
-                    for (int t = 4; t <= 5; ++t) if (!bone.tracks[t].keyframes.empty()) { rotTrack = &bone.tracks[t]; break; }
-                    for (int t = 0; t <= 2; ++t) if (!bone.tracks[t].keyframes.empty()) { scaleTrack = &bone.tracks[t]; break; }
-                    if (transTrack && !transTrack->keyframes.empty()) {
+
+                    // FIX: bake the runtime composition (T*S*R for mirrored,
+                    // T*R*S otherwise) at every keyframe time, then decompose
+                    // for FBX (which always uses T*R*S).
+                    BakedBoneAnim baked = BakeBoneAnimation(bone, boneStates[bi],
+                                                            anim.timestampStart, anim.timestampEnd);
+                    if (baked.times.size() < 2) continue;
+
+                    auto emitChannel = [&](const std::string& prop, auto extractValue) {
                         FbxAnimCurveNode node;
                         node.id = GenFbxId();
-                        node.prop = "Lcl Translation";
+                        node.prop = prop;
                         node.boneIdx = bi;
                         FbxAnimCurve cx, cy, cz;
                         cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
-                        for (const auto& kf : transTrack->keyframes) {
-                            float ktMs = (float)kf.timestamp;
-                            if (ktMs >= startMs && ktMs <= endMs) {
-                                float relativeMs = ktMs - startMs;
-                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
-                                cx.times.push_back(fbxTime); cx.values.push_back(kf.translation.x);
-                                cy.times.push_back(fbxTime); cy.values.push_back(kf.translation.y);
-                                cz.times.push_back(fbxTime); cz.values.push_back(kf.translation.z);
-                            }
+                        for (size_t k = 0; k < baked.times.size(); ++k) {
+                            int64_t fbxTime = (int64_t)((((float)baked.times[k] - startMs) / 1000.0f) * 46186158000.0);
+                            glm::vec3 v = extractValue(k);
+                            cx.times.push_back(fbxTime); cx.values.push_back(v.x);
+                            cy.times.push_back(fbxTime); cy.values.push_back(v.y);
+                            cz.times.push_back(fbxTime); cz.values.push_back(v.z);
                         }
-                        if (cx.times.size() >= 2) {
-                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
-                            stack.layer.curveNodes.push_back(node);
-                            stack.layer.curves.push_back(std::move(cx));
-                            stack.layer.curves.push_back(std::move(cy));
-                            stack.layer.curves.push_back(std::move(cz));
-                        }
+                        node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
+                        stack.layer.curveNodes.push_back(node);
+                        stack.layer.curves.push_back(std::move(cx));
+                        stack.layer.curves.push_back(std::move(cy));
+                        stack.layer.curves.push_back(std::move(cz));
+                    };
+
+                    if (baked.hasTranslation) {
+                        emitChannel("Lcl Translation", [&](size_t k) { return baked.translations[k]; });
                     }
-                    if (rotTrack && !rotTrack->keyframes.empty()) {
-                        FbxAnimCurveNode node;
-                        node.id = GenFbxId();
-                        node.prop = "Lcl Rotation";
-                        node.boneIdx = bi;
-                        FbxAnimCurve cx, cy, cz;
-                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
-                        for (const auto& kf : rotTrack->keyframes) {
-                            float ktMs = (float)kf.timestamp;
-                            if (ktMs >= startMs && ktMs <= endMs) {
-                                float relativeMs = ktMs - startMs;
-                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
-                                glm::vec3 euler = QuatToEulerXYZ(kf.rotation);
-                                cx.times.push_back(fbxTime); cx.values.push_back(euler.x);
-                                cy.times.push_back(fbxTime); cy.values.push_back(euler.y);
-                                cz.times.push_back(fbxTime); cz.values.push_back(euler.z);
+                    if (baked.hasRotation) {
+                        // Convert each baked quaternion to Euler XYZ with continuity.
+                        std::vector<glm::vec3> eulers(baked.times.size());
+                        glm::vec3 prev(0.0f);
+                        for (size_t k = 0; k < baked.times.size(); ++k) {
+                            glm::vec3 e = QuatToEulerXYZ(baked.rotations[k]);
+                            if (k > 0) {
+                                e.x = UnwrapEuler(prev.x, e.x);
+                                e.y = UnwrapEuler(prev.y, e.y);
+                                e.z = UnwrapEuler(prev.z, e.z);
                             }
+                            eulers[k] = e;
+                            prev = e;
                         }
-                        if (cx.times.size() >= 2) {
-                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
-                            stack.layer.curveNodes.push_back(node);
-                            stack.layer.curves.push_back(std::move(cx));
-                            stack.layer.curves.push_back(std::move(cy));
-                            stack.layer.curves.push_back(std::move(cz));
-                        }
+                        emitChannel("Lcl Rotation", [&](size_t k) { return eulers[k]; });
                     }
-                    if (scaleTrack && !scaleTrack->keyframes.empty()) {
-                        FbxAnimCurveNode node;
-                        node.id = GenFbxId();
-                        node.prop = "Lcl Scaling";
-                        node.boneIdx = bi;
-                        FbxAnimCurve cx, cy, cz;
-                        cx.id = GenFbxId(); cy.id = GenFbxId(); cz.id = GenFbxId();
-                        for (const auto& kf : scaleTrack->keyframes) {
-                            float ktMs = (float)kf.timestamp;
-                            if (ktMs >= startMs && ktMs <= endMs) {
-                                float relativeMs = ktMs - startMs;
-                                int64_t fbxTime = (int64_t)((relativeMs / 1000.0f) * 46186158000.0);
-                                cx.times.push_back(fbxTime); cx.values.push_back(kf.scale.x);
-                                cy.times.push_back(fbxTime); cy.values.push_back(kf.scale.y);
-                                cz.times.push_back(fbxTime); cz.values.push_back(kf.scale.z);
-                            }
-                        }
-                        if (cx.times.size() >= 2) {
-                            node.curveX = cx.id; node.curveY = cy.id; node.curveZ = cz.id;
-                            stack.layer.curveNodes.push_back(node);
-                            stack.layer.curves.push_back(std::move(cx));
-                            stack.layer.curves.push_back(std::move(cy));
-                            stack.layer.curves.push_back(std::move(cz));
-                        }
+                    if (baked.hasScale) {
+                        emitChannel("Lcl Scaling", [&](size_t k) { return baked.scales[k]; });
                     }
                 }
+
                 if (!stack.layer.curveNodes.empty()) animStacks.push_back(std::move(stack));
             }
         }
+
         int animStackCount = (int)animStacks.size();
         int animLayerCount = animStackCount;
         int animCurveNodeCount = 0, animCurveCount = 0;
@@ -514,6 +968,7 @@ namespace M3Export
             animCurveNodeCount += (int)stack.layer.curveNodes.size();
             animCurveCount += (int)stack.layer.curves.size();
         }
+
         std::ostringstream fbx;
         fbx << std::fixed << std::setprecision(6);
         fbx << "; FBX 7.5.0 project file\n; Created by WildStar M3 Exporter\n";
@@ -596,19 +1051,24 @@ namespace M3Export
                 std::string boneName = bone.name.empty() ? ("Bone_" + std::to_string(bi)) : bone.name;
                 glm::mat4 localMat;
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size()) {
-                    glm::mat4 parentEffectiveInv = glm::inverse(effectiveBindGlobal[bone.parentId]);
+                    glm::mat4 parentEffectiveInv = SafeInverse(effectiveBindGlobal[bone.parentId]);
                     localMat = parentEffectiveInv * effectiveBindGlobal[bi];
                 } else {
                     localMat = effectiveBindGlobal[bi];
                 }
-                glm::vec3 scale, translation, skew;
+                // Use DecomposeForExport (not glm::decompose) so that mirrored
+                // bind matrices (negative determinant) are handled by negating
+                // X scale rather than producing NaN in the rotation quaternion.
+                glm::vec3 translation, scale;
                 glm::quat rotation;
-                glm::vec4 perspective;
-                glm::decompose(localMat, scale, rotation, translation, skew, perspective);
-                glm::mat3 rm = glm::mat3_cast(rotation);
+                DecomposeForExport(localMat, translation, rotation, scale);
+                glm::mat3 rm = glm::mat3_cast(SafeNormalize(rotation));
                 float rx = atan2(rm[1][2], rm[2][2]) * 57.2957795f;
                 float ry = atan2(-rm[0][2], sqrt(rm[1][2]*rm[1][2] + rm[2][2]*rm[2][2])) * 57.2957795f;
                 float rz = atan2(rm[0][1], rm[0][0]) * 57.2957795f;
+                if (!std::isfinite(rx)) rx = 0.0f;
+                if (!std::isfinite(ry)) ry = 0.0f;
+                if (!std::isfinite(rz)) rz = 0.0f;
                 fbx << "\tModel: " << boneIds[bi] << ", \"Model::" << boneName << "\", \"LimbNode\" {\n";
                 fbx << "\t\tVersion: 232\n\t\tProperties70:  {\n";
                 fbx << "\t\t\tP: \"Lcl Translation\", \"Lcl Translation\", \"\", \"A\", " << FbxF(translation.x) << "," << FbxF(translation.y) << "," << FbxF(translation.z) << "\n";
@@ -745,7 +1205,7 @@ namespace M3Export
                         }
                         fbx << "\n\t\t}\n";
                     }
-                    glm::mat4 ibm = glm::inverse(effectiveBindGlobal[bi]);
+                    glm::mat4 ibm = SafeInverse(effectiveBindGlobal[bi]);
                     fbx << "\t\tTransform: *16 {\n\t\t\ta: ";
                     for (int c = 0; c < 4; ++c) {
                         for (int r = 0; r < 4; ++r) {
@@ -776,14 +1236,9 @@ namespace M3Export
             fbx << "\t\t}\n\t}\n";
             fbx << "\tAnimationLayer: " << stack.layer.id << ", \"AnimLayer::" << stack.name << "_Layer\", \"\" {\n\t}\n";
             for (const auto& node : stack.layer.curveNodes) {
-                std::string boneName = bones[node.boneIdx].name.empty() ? ("Bone_" + std::to_string(node.boneIdx)) : bones[node.boneIdx].name;
                 fbx << "\tAnimationCurveNode: " << node.id << ", \"AnimCurveNode::" << node.prop << "\", \"\" {\n";
                 fbx << "\t\tProperties70:  {\n";
-                if (node.prop == "Lcl Translation") {
-                    fbx << "\t\t\tP: \"d|X\", \"Number\", \"\", \"A\",0\n";
-                    fbx << "\t\t\tP: \"d|Y\", \"Number\", \"\", \"A\",0\n";
-                    fbx << "\t\t\tP: \"d|Z\", \"Number\", \"\", \"A\",0\n";
-                } else if (node.prop == "Lcl Rotation") {
+                if (node.prop == "Lcl Translation" || node.prop == "Lcl Rotation") {
                     fbx << "\t\t\tP: \"d|X\", \"Number\", \"\", \"A\",0\n";
                     fbx << "\t\t\tP: \"d|Y\", \"Number\", \"\", \"A\",0\n";
                     fbx << "\t\t\tP: \"d|Z\", \"Number\", \"\", \"A\",0\n";
@@ -1045,22 +1500,11 @@ namespace M3Export
         std::vector<MeshData> meshes;
         const auto& bones = render->getAllBones();
         bool hasSkeleton = !bones.empty() && settings.exportSkeleton;
+        std::vector<BoneRuntimeState> boneStates;
+        PrecomputeBoneStates(bones, boneStates);
         std::vector<glm::mat4> effectiveBindGlobal(bones.size());
         for (size_t i = 0; i < bones.size(); ++i) {
-            const auto& bone = bones[i];
-            bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)bones.size());
-            bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
-            if (boneAtOrigin && !bone.tracks[6].keyframes.empty()) {
-                glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
-                glm::mat4 localT = glm::translate(glm::mat4(1.0f), track6Pos);
-                if (!isRootBone) {
-                    effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
-                } else {
-                    effectiveBindGlobal[i] = localT;
-                }
-            } else {
-                effectiveBindGlobal[i] = bone.globalMatrix;
-            }
+            effectiveBindGlobal[i] = boneStates[i].effectiveBindGlobal;
         }
         for (const auto& se : exportList)
         {
@@ -1157,9 +1601,9 @@ namespace M3Export
         if (hasSkeleton)
         {
             size_t ibmOff = bin.size();
-            for (const auto& bone : bones)
+            for (size_t bi = 0; bi < bones.size(); ++bi)
             {
-                glm::mat4 ibm = glm::inverse(bone.globalMatrix);
+                glm::mat4 ibm = SafeInverse(effectiveBindGlobal[bi]);
                 for (int c = 0; c < 4; ++c)
                 {
                     for (int r = 0; r < 4; ++r)
@@ -1186,140 +1630,80 @@ namespace M3Export
             for (size_t animIdx = 0; animIdx < animations.size(); ++animIdx)
             {
                 const auto& anim = animations[animIdx];
-                float startTime = anim.timestampStart / 1000.0f;
-                float endTime = anim.timestampEnd / 1000.0f;
-                float duration = endTime - startTime;
-                if (duration <= 0.0f) continue;
+                if (anim.timestampEnd <= anim.timestampStart) continue;
                 AnimData animData;
                 animData.name = "Animation_" + std::to_string(anim.sequenceId);
+
                 for (size_t boneIdx = 0; boneIdx < bones.size(); ++boneIdx)
                 {
                     const auto& bone = bones[boneIdx];
-                    bool boneAtOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
-                    const M3AnimationTrack* scaleTrack = nullptr;
-                    for (int t = 0; t <= 2; ++t) {
-                        if (!bone.tracks[t].keyframes.empty()) { scaleTrack = &bone.tracks[t]; break; }
+                    BakedBoneAnim baked = BakeBoneAnimation(bone, boneStates[boneIdx],
+                                                            anim.timestampStart, anim.timestampEnd);
+                    if (baked.times.size() < 2) continue;
+
+                    // Build a single shared input (time) accessor for this bone+anim:
+                    // all three channels share the same set of sample times.
+                    std::vector<float> times;
+                    times.reserve(baked.times.size());
+                    for (uint32_t ms : baked.times) {
+                        times.push_back((ms - anim.timestampStart) / 1000.0f);
                     }
-                    const M3AnimationTrack* rotTrack = nullptr;
-                    for (int t = 4; t <= 5; ++t) {
-                        if (!bone.tracks[t].keyframes.empty()) { rotTrack = &bone.tracks[t]; break; }
-                    }
-                    const M3AnimationTrack* transTrack = nullptr;
-                    if (!bone.tracks[6].keyframes.empty() && boneAtOrigin)
+                    float minT = times.front();
+                    float maxT = times.back();
+
+                    size_t timeOff = bin.size();
+                    for (float t : times) WriteF32(bin, t);
+                    Pad(bin, 4);
+                    views.push_back({timeOff, times.size() * 4, 0});
+                    int timeAcc = static_cast<int>(accessors.size());
+                    accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
+                        glm::vec3(minT), glm::vec3(maxT), true});
+
+                    if (baked.hasTranslation)
                     {
-                        transTrack = &bone.tracks[6];
+                        size_t valOff = bin.size();
+                        for (const auto& v : baked.translations)
+                        {
+                            WriteF32(bin, v.x);
+                            WriteF32(bin, v.y);
+                            WriteF32(bin, v.z);
+                        }
+                        Pad(bin, 4);
+                        views.push_back({valOff, baked.translations.size() * 12, 0});
+                        int valAcc = static_cast<int>(accessors.size());
+                        accessors.push_back({(int)views.size() - 1, 5126, (int)baked.translations.size(), "VEC3", {}, {}, false});
+                        animData.channels.push_back({(int)boneIdx, "translation", timeAcc, valAcc});
                     }
-                    if (transTrack && !transTrack->keyframes.empty())
+                    if (baked.hasRotation)
                     {
-                        std::vector<float> times;
-                        std::vector<glm::vec3> values;
-                        for (const auto& kf : transTrack->keyframes)
+                        size_t valOff = bin.size();
+                        for (const auto& q : baked.rotations)
                         {
-                            float t = kf.timestamp / 1000.0f - startTime;
-                            if (t >= 0.0f && t <= duration)
-                            {
-                                times.push_back(t);
-                                values.push_back(kf.translation);
-                            }
+                            WriteF32(bin, q.x);
+                            WriteF32(bin, q.y);
+                            WriteF32(bin, q.z);
+                            WriteF32(bin, q.w);
                         }
-                        if (times.size() >= 2)
-                        {
-                            size_t timeOff = bin.size();
-                            float minT = times.front(), maxT = times.back();
-                            for (float t : times) WriteF32(bin, t);
-                            Pad(bin, 4);
-                            views.push_back({timeOff, times.size() * 4, 0});
-                            int timeAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
-                                glm::vec3(minT), glm::vec3(maxT), true});
-                            size_t valOff = bin.size();
-                            for (const auto& v : values)
-                            {
-                                WriteF32(bin, v.x);
-                                WriteF32(bin, v.y);
-                                WriteF32(bin, v.z);
-                            }
-                            Pad(bin, 4);
-                            views.push_back({valOff, values.size() * 12, 0});
-                            int valAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
-                            animData.channels.push_back({(int)boneIdx, "translation", timeAcc, valAcc});
-                        }
+                        Pad(bin, 4);
+                        views.push_back({valOff, baked.rotations.size() * 16, 0});
+                        int valAcc = static_cast<int>(accessors.size());
+                        accessors.push_back({(int)views.size() - 1, 5126, (int)baked.rotations.size(), "VEC4", {}, {}, false});
+                        animData.channels.push_back({(int)boneIdx, "rotation", timeAcc, valAcc});
                     }
-                    if (rotTrack && !rotTrack->keyframes.empty())
+                    if (baked.hasScale)
                     {
-                        std::vector<float> times;
-                        std::vector<glm::quat> values;
-                        for (const auto& kf : rotTrack->keyframes)
+                        size_t valOff = bin.size();
+                        for (const auto& v : baked.scales)
                         {
-                            float t = kf.timestamp / 1000.0f - startTime;
-                            if (t >= 0.0f && t <= duration)
-                            {
-                                times.push_back(t);
-                                values.push_back(kf.rotation);
-                            }
+                            WriteF32(bin, v.x);
+                            WriteF32(bin, v.y);
+                            WriteF32(bin, v.z);
                         }
-                        if (times.size() >= 2)
-                        {
-                            size_t timeOff = bin.size();
-                            float minT = times.front(), maxT = times.back();
-                            for (float t : times) WriteF32(bin, t);
-                            Pad(bin, 4);
-                            views.push_back({timeOff, times.size() * 4, 0});
-                            int timeAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
-                                glm::vec3(minT), glm::vec3(maxT), true});
-                            size_t valOff = bin.size();
-                            for (const auto& q : values)
-                            {
-                                WriteF32(bin, q.x);
-                                WriteF32(bin, q.y);
-                                WriteF32(bin, q.z);
-                                WriteF32(bin, q.w);
-                            }
-                            Pad(bin, 4);
-                            views.push_back({valOff, values.size() * 16, 0});
-                            int valAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC4", {}, {}, false});
-                            animData.channels.push_back({(int)boneIdx, "rotation", timeAcc, valAcc});
-                        }
-                    }
-                    if (scaleTrack && !scaleTrack->keyframes.empty())
-                    {
-                        std::vector<float> times;
-                        std::vector<glm::vec3> values;
-                        for (const auto& kf : scaleTrack->keyframes)
-                        {
-                            float t = kf.timestamp / 1000.0f - startTime;
-                            if (t >= 0.0f && t <= duration)
-                            {
-                                times.push_back(t);
-                                values.push_back(kf.scale);
-                            }
-                        }
-                        if (times.size() >= 2)
-                        {
-                            size_t timeOff = bin.size();
-                            float minT = times.front(), maxT = times.back();
-                            for (float t : times) WriteF32(bin, t);
-                            Pad(bin, 4);
-                            views.push_back({timeOff, times.size() * 4, 0});
-                            int timeAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)times.size(), "SCALAR",
-                                glm::vec3(minT), glm::vec3(maxT), true});
-                            size_t valOff = bin.size();
-                            for (const auto& v : values)
-                            {
-                                WriteF32(bin, v.x);
-                                WriteF32(bin, v.y);
-                                WriteF32(bin, v.z);
-                            }
-                            Pad(bin, 4);
-                            views.push_back({valOff, values.size() * 12, 0});
-                            int valAcc = static_cast<int>(accessors.size());
-                            accessors.push_back({(int)views.size() - 1, 5126, (int)values.size(), "VEC3", {}, {}, false});
-                            animData.channels.push_back({(int)boneIdx, "scale", timeAcc, valAcc});
-                        }
+                        Pad(bin, 4);
+                        views.push_back({valOff, baked.scales.size() * 12, 0});
+                        int valAcc = static_cast<int>(accessors.size());
+                        accessors.push_back({(int)views.size() - 1, 5126, (int)baked.scales.size(), "VEC3", {}, {}, false});
+                        animData.channels.push_back({(int)boneIdx, "scale", timeAcc, valAcc});
                     }
                 }
                 if (!animData.channels.empty())
@@ -1387,23 +1771,23 @@ namespace M3Export
                 glm::mat4 localMatrix;
                 if (bone.parentId >= 0 && bone.parentId < (int)bones.size())
                 {
-                    glm::mat4 parentEffectiveInv = glm::inverse(effectiveBindGlobal[bone.parentId]);
+                    glm::mat4 parentEffectiveInv = SafeInverse(effectiveBindGlobal[bone.parentId]);
                     localMatrix = parentEffectiveInv * effectiveBindGlobal[i];
                 }
                 else
                 {
                     localMatrix = effectiveBindGlobal[i];
                 }
-                json += ",\"matrix\":[";
-                for (int c = 0; c < 4; ++c)
-                {
-                    for (int r = 0; r < 4; ++r)
-                    {
-                        if (c > 0 || r > 0) json += ",";
-                        json += FloatStr(localMatrix[c][r]);
-                    }
-                }
-                json += "]";
+                // glTF requires TRS (not matrix) for nodes that get animated.
+                // Decompose handles negative-determinant (mirrored) matrices by
+                // negating X scale and producing a proper rotation, so the TRS
+                // re-composes to the same matrix under T*R*S.
+                glm::vec3 nodeT, nodeS;
+                glm::quat nodeR;
+                DecomposeForExport(localMatrix, nodeT, nodeR, nodeS);
+                json += ",\"translation\":[" + FloatStr(nodeT.x) + "," + FloatStr(nodeT.y) + "," + FloatStr(nodeT.z) + "]";
+                json += ",\"rotation\":[" + FloatStr(nodeR.x) + "," + FloatStr(nodeR.y) + "," + FloatStr(nodeR.z) + "," + FloatStr(nodeR.w) + "]";
+                json += ",\"scale\":[" + FloatStr(nodeS.x) + "," + FloatStr(nodeS.y) + "," + FloatStr(nodeS.z) + "]";
                 if (!boneChildren[i].empty())
                 {
                     json += ",\"children\":[";
@@ -1526,8 +1910,15 @@ namespace M3Export
             json += ",\"type\":\"" + a.type + "\"";
             if (a.hasMinMax)
             {
-                json += ",\"min\":[" + FloatStr(a.minV.x) + "," + FloatStr(a.minV.y) + "," + FloatStr(a.minV.z) + "]";
-                json += ",\"max\":[" + FloatStr(a.maxV.x) + "," + FloatStr(a.maxV.y) + "," + FloatStr(a.maxV.z) + "]";
+                int comps = (a.type == "SCALAR") ? 1 : (a.type == "VEC2" ? 2 : (a.type == "VEC4" ? 4 : 3));
+                json += ",\"min\":[" + FloatStr(a.minV.x);
+                if (comps >= 2) json += "," + FloatStr(a.minV.y);
+                if (comps >= 3) json += "," + FloatStr(a.minV.z);
+                json += "]";
+                json += ",\"max\":[" + FloatStr(a.maxV.x);
+                if (comps >= 2) json += "," + FloatStr(a.maxV.y);
+                if (comps >= 3) json += "," + FloatStr(a.maxV.z);
+                json += "]";
             }
             json += "}";
         }

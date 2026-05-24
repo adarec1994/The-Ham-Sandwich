@@ -323,9 +323,64 @@ void PropLoader::ClearPendingWork()
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(mPendingModelMutex);
+        for (auto& [path, waiters] : mPendingModelWaiters)
+        {
+            for (Prop* prop : waiters)
+            {
+                if (prop && !prop->loaded.load(std::memory_order_acquire))
+                    prop->loadRequested.store(false, std::memory_order_release);
+            }
+        }
+        mPendingModelWaiters.clear();
+    }
+
     mPendingCount.store(0, std::memory_order_relaxed);
 
     mWorkCondition.notify_all();
+}
+
+bool PropLoader::RegisterPendingModelWaiter(const std::string& normalizedPath, Prop* prop)
+{
+    std::lock_guard<std::mutex> lock(mPendingModelMutex);
+
+    auto [it, inserted] = mPendingModelWaiters.try_emplace(normalizedPath);
+    it->second.push_back(prop);
+    return !inserted;
+}
+
+void PropLoader::CompletePendingModel(
+    const std::string& normalizedPath,
+    Prop* fallbackProp,
+    const std::shared_ptr<M3Render>& render,
+    bool success)
+{
+    std::vector<Prop*> waiters;
+
+    {
+        std::lock_guard<std::mutex> lock(mPendingModelMutex);
+        auto it = mPendingModelWaiters.find(normalizedPath);
+        if (it != mPendingModelWaiters.end())
+        {
+            waiters = std::move(it->second);
+            mPendingModelWaiters.erase(it);
+        }
+    }
+
+    if (waiters.empty() && fallbackProp)
+        waiters.push_back(fallbackProp);
+
+    for (Prop* prop : waiters)
+    {
+        if (!prop) continue;
+
+        if (success && render)
+            prop->render = render;
+
+        std::atomic_thread_fence(std::memory_order_release);
+        prop->loaded.store(true, std::memory_order_release);
+    }
 }
 
 std::shared_ptr<M3Render> PropLoader::GetCachedModel(const std::string& path)
@@ -435,6 +490,12 @@ void PropLoader::QueueProp(Prop* prop)
         return;
     }
 
+    if (RegisterPendingModelWaiter(normalized, prop))
+    {
+        PropDebugLog("Prop ID " + std::to_string(prop->uniqueID) + " waiting on pending model: " + normalized);
+        return;
+    }
+
     PropDebugLog("Queuing prop ID " + std::to_string(prop->uniqueID) + " path: " + normalized);
     mPendingCount.fetch_add(1, std::memory_order_relaxed);
 
@@ -458,6 +519,7 @@ void PropLoader::QueueProps(std::vector<Prop*>& props)
     int skippedUnsupportedType = 0;
     int skippedEmptyPath = 0;
     int usedCache = 0;
+    int joinedPendingModel = 0;
 
     for (Prop* prop : props)
     {
@@ -498,12 +560,19 @@ void PropLoader::QueueProps(std::vector<Prop*>& props)
             continue;
         }
 
+        if (RegisterPendingModelWaiter(normalized, prop))
+        {
+            joinedPendingModel++;
+            continue;
+        }
+
         toQueue.push_back(prop);
     }
 
     PropDebugLog("QueueProps: " + std::to_string(props.size()) + " total, " +
                  std::to_string(toQueue.size()) + " queued, " +
                  std::to_string(usedCache) + " from cache, " +
+                 std::to_string(joinedPendingModel) + " joined pending model, " +
                  std::to_string(skippedUnsupportedType) + " unsupported type, " +
                  std::to_string(skippedEmptyPath) + " empty path");
 
@@ -651,9 +720,9 @@ void PropLoader::WorkerThread()
         if (result.fromCache)
         {
             std::shared_ptr<M3Render> cachedRender;
+            std::string normalized = NormalizePath(prop->path);
             {
                 std::lock_guard<std::mutex> lock(mCacheMutex);
-                std::string normalized = NormalizePath(prop->path);
                 auto it = mModelCache.find(normalized);
                 if (it != mModelCache.end() && it->second.valid)
                 {
@@ -661,12 +730,7 @@ void PropLoader::WorkerThread()
                 }
             }
 
-            if (cachedRender)
-            {
-                prop->render = cachedRender;
-                std::atomic_thread_fence(std::memory_order_release);
-            }
-            prop->loaded.store(true, std::memory_order_release);
+            CompletePendingModel(normalized, prop, cachedRender, cachedRender != nullptr);
 
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
             continue;
@@ -684,7 +748,7 @@ void PropLoader::WorkerThread()
         }
         else
         {
-            prop->loaded.store(true, std::memory_order_release);
+            CompletePendingModel(NormalizePath(prop->path), prop, nullptr, false);
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
         }
     }
@@ -712,6 +776,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         if (!upload.prop || !upload.modelData)
         {
             PropDebugLogWarning("Skipping upload - null prop or modelData for path: " + upload.path);
+            CompletePendingModel(NormalizePath(upload.path), upload.prop, nullptr, false);
             delete upload.modelData;
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
             continue;
@@ -730,9 +795,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         if (existingRender)
         {
             PropDebugLog("Using cached render for: " + normalized);
-            upload.prop->render = existingRender;
-            std::atomic_thread_fence(std::memory_order_release);
-            upload.prop->loaded.store(true, std::memory_order_release);
+            CompletePendingModel(normalized, upload.prop, existingRender, true);
             delete upload.modelData;
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
             processed++;
@@ -754,8 +817,8 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         catch (const std::exception& e)
         {
             PropDebugLogError("Exception creating M3Render for " + upload.path + ": " + e.what());
+            CompletePendingModel(normalized, upload.prop, nullptr, false);
             delete upload.modelData;
-            upload.prop->loaded.store(true, std::memory_order_release);
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
             processed++;
             continue;
@@ -763,8 +826,8 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
         catch (...)
         {
             PropDebugLogError("Unknown exception creating M3Render for " + upload.path);
+            CompletePendingModel(normalized, upload.prop, nullptr, false);
             delete upload.modelData;
-            upload.prop->loaded.store(true, std::memory_order_release);
             mPendingCount.fetch_sub(1, std::memory_order_relaxed);
             processed++;
             continue;
@@ -772,9 +835,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
 
         CacheModel(upload.path, render);
 
-        upload.prop->render = render;
-        std::atomic_thread_fence(std::memory_order_release);
-        upload.prop->loaded.store(true, std::memory_order_release);
+        CompletePendingModel(normalized, upload.prop, render, true);
 
         delete upload.modelData;
         mPendingCount.fetch_sub(1, std::memory_order_relaxed);

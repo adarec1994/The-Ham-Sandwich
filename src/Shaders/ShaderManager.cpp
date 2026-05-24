@@ -260,7 +260,7 @@ bool ShaderManager::CompileShaderFromFile(const std::wstring& path, const std::s
                                            const std::string& vsEntry, const std::string& psEntry,
                                            const InputLayoutDesc& layoutDesc, ShaderProgram& outProgram)
 {
-    std::ifstream file(path);
+    std::ifstream file(path.c_str());
     if (!file.is_open())
     {
         std::cerr << "ShaderManager: Could not open file: " << name << "\n";

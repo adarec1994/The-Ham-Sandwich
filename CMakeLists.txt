@@ -4,6 +4,13 @@ project(The_Ham_Sandwich VERSION 1.0.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_options(
+            $<$<COMPILE_LANG_AND_ID:C,MSVC>:/FS>
+            $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/FS>
+    )
+endif()
+
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 set(CMAKE_WARN_DEPRECATED OFF)

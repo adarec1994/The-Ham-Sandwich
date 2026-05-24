@@ -287,6 +287,8 @@ private:
     void WorkerThread();
     PropLoadResult LoadPropData(Prop* prop);
     FileEntryPtr FindPropFile(const std::string& path);
+    bool RegisterPendingModelWaiter(const std::string& normalizedPath, Prop* prop);
+    void CompletePendingModel(const std::string& normalizedPath, Prop* fallbackProp, const std::shared_ptr<M3Render>& render, bool success);
 
     ArchivePtr mArchive;
     mutable std::mutex mArchiveMutex;
@@ -313,6 +315,9 @@ private:
     mutable std::mutex mFileCacheMutex;
 
     std::mutex mArchiveAccessMutex;
+
+    std::unordered_map<std::string, std::vector<Prop*>> mPendingModelWaiters;
+    mutable std::mutex mPendingModelMutex;
 
     std::atomic<size_t> mPendingCount{0};
 
