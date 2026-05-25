@@ -6,8 +6,45 @@
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <limits>
 
-static bool g_M3DebugBonesOnLoad = true;
+static bool g_M3DebugBonesOnLoad = false;
+static constexpr size_t kM3HeaderSize = 1584;
+
+static_assert(sizeof(M3MetaDef) == 16, "M3MetaDef must match the on-disk descriptor layout");
+static_assert(sizeof(M3TrackDef) == 24, "M3TrackDef must match the on-disk track descriptor layout");
+
+static size_t Align16(size_t value) {
+    return (value + 15u) & ~size_t(15u);
+}
+
+static bool CheckedMul(size_t a, size_t b, size_t& out) {
+    if (a != 0 && b > (std::numeric_limits<size_t>::max)() / a) return false;
+    out = a * b;
+    return true;
+}
+
+static bool CheckedAdd(size_t a, size_t b, size_t& out) {
+    if (b > (std::numeric_limits<size_t>::max)() - a) return false;
+    out = a + b;
+    return true;
+}
+
+static bool ResolveRange(size_t fileSize, size_t base, int64_t relativeOffset, size_t byteCount, size_t& outOffset) {
+    if (relativeOffset < 0) return false;
+
+    size_t rel = static_cast<size_t>(relativeOffset);
+    size_t start = 0;
+    if (!CheckedAdd(base, rel, start)) return false;
+    if (start > fileSize || byteCount > fileSize - start) return false;
+
+    outOffset = start;
+    return true;
+}
+
+static bool ResolveHeaderDataRange(size_t fileSize, int64_t relativeOffset, size_t byteCount, size_t& outOffset) {
+    return ResolveRange(fileSize, kM3HeaderSize, relativeOffset, byteCount, outOffset);
+}
 
 static void DebugPrintBonesOnLoad(const M3ModelData& model) {
     if (!g_M3DebugBonesOnLoad || model.bones.empty()) return;
@@ -60,21 +97,18 @@ static void DebugPrintBonesOnLoad(const M3ModelData& model) {
         }
         if (hasAnyTrack) {
             std::cout << "      Tracks:    ";
-            for (int t = 0; t <= 2; ++t) {
-                if (!bone.tracks[t].keyframes.empty()) {
-                    auto& kf = bone.tracks[t].keyframes[0];
-                    std::cout << "S" << t << "=(" << kf.scale.x << "," << kf.scale.y << "," << kf.scale.z << ") ";
+            for (int t = 0; t < 8; ++t) {
+                if (bone.tracks[t].keyframes.empty()) continue;
+                const auto& track = bone.tracks[t];
+                const auto& kf = track.keyframes[0];
+                std::cout << track.name << "=";
+                if (track.valueSize == 6) {
+                    std::cout << "(" << kf.scale.x << "," << kf.scale.y << "," << kf.scale.z << ") ";
+                } else if (track.valueSize == 8) {
+                    std::cout << "(w=" << kf.rotation.w << ",xyz=" << kf.rotation.x << "," << kf.rotation.y << "," << kf.rotation.z << ") ";
+                } else if (track.valueSize == 12) {
+                    std::cout << "(" << kf.translation.x << "," << kf.translation.y << "," << kf.translation.z << ") ";
                 }
-            }
-            for (int t = 4; t <= 5; ++t) {
-                if (!bone.tracks[t].keyframes.empty()) {
-                    auto& kf = bone.tracks[t].keyframes[0];
-                    std::cout << "R" << t << "=(w=" << kf.rotation.w << ",xyz=" << kf.rotation.x << "," << kf.rotation.y << "," << kf.rotation.z << ") ";
-                }
-            }
-            if (!bone.tracks[6].keyframes.empty()) {
-                auto& kf = bone.tracks[6].keyframes[0];
-                std::cout << "T=(" << kf.translation.x << "," << kf.translation.y << "," << kf.translation.z << ")";
             }
             std::cout << "\n";
         }
@@ -127,10 +161,20 @@ glm::vec3 M3Loader::ReadVertexV3(const uint8_t* data, uint8_t type, size_t& offs
     } else if (type == 3) {
         uint8_t x = data[offset];
         uint8_t y = data[offset + 1];
-        float fx = (x - 127.0f) / 127.0f;
-        float fy = (y - 127.0f) / 127.0f;
-        float fz = std::sqrt(std::max(1.0f - fx*fx - fy*fy, 0.0f));
-        res = glm::vec3(fx, fy, fz);
+        float fx = (static_cast<float>(x) / 255.0f) * 2.0f - 1.0f;
+        float fy = (static_cast<float>(y) / 255.0f) * 2.0f - 1.0f;
+        float fz = 1.0f - std::abs(fx) - std::abs(fy);
+
+        if (fz < 0.0f) {
+            float oldX = fx;
+            float oldY = fy;
+            fx = (1.0f - std::abs(oldY)) * (oldX >= 0.0f ? 1.0f : -1.0f);
+            fy = (1.0f - std::abs(oldX)) * (oldY >= 0.0f ? 1.0f : -1.0f);
+        }
+
+        glm::vec3 decoded(fx, fy, fz);
+        float len2 = glm::dot(decoded, decoded);
+        res = len2 > 0.000001f ? decoded / std::sqrt(len2) : glm::vec3(0.0f, 0.0f, 1.0f);
         offset += 2;
     }
     return res;
@@ -307,7 +351,7 @@ void M3Loader::ReadLUTs(const uint8_t* ptr, size_t size, M3ModelData& model) {
 
 void M3Loader::ReadTextures(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.textures.count <= 0) return;
+    if (h.textures.count == 0) return;
 
     size_t tableStart = HEADER_SIZE + h.textures.offset;
     size_t dataStart = tableStart + h.textures.count * TEX_ENTRY_SIZE;
@@ -349,7 +393,7 @@ void M3Loader::ReadTextures(const uint8_t* ptr, size_t size, M3ModelData& model)
 
 void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.materials.count <= 0) return;
+    if (h.materials.count == 0) return;
 
     size_t tableStart = HEADER_SIZE + h.materials.offset;
     size_t dataStart = tableStart + h.materials.count * MAT_ENTRY_SIZE;
@@ -458,62 +502,84 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
     }
 }
 
-void M3Loader::ReadBoneAnimationTrack(const uint8_t* ptr, size_t animStart, M3AnimationTrack& track) {
-    if (track.duration <= 0) return;
+void M3Loader::ReadBoneAnimationTrack(const uint8_t* ptr, size_t size, size_t animStart, M3AnimationTrack& track) {
+    if (track.duration == 0 || track.valueSize == 0) return;
+
+    size_t timeBytes = 0;
+    size_t valueBytes = 0;
+    size_t timeOfs = 0;
+    size_t valOfs = 0;
+    if (!CheckedMul(track.duration, sizeof(uint32_t), timeBytes) ||
+        !CheckedMul(track.duration, track.valueSize, valueBytes) ||
+        !ResolveRange(size, animStart, track.timeOffset, timeBytes, timeOfs) ||
+        !ResolveRange(size, animStart, track.valueOffset, valueBytes, valOfs)) {
+        track.duration = 0;
+        track.keyframes.clear();
+        return;
+    }
 
     track.keyframes.resize(track.duration);
 
-    size_t timeOfs = animStart + track.timeOffset;
-    for (int64_t i = 0; i < track.duration; i++) {
-        track.keyframes[i].timestamp = Read<uint32_t>(ptr, timeOfs + i * 4);
+    for (uint32_t i = 0; i < track.duration; i++) {
+        track.keyframes[i].timestamp = Read<uint32_t>(ptr, timeOfs + i * sizeof(uint32_t));
     }
 
-    size_t valOfs = animStart + track.valueOffset;
-    int type = track.trackType;
-
-    if (type >= 1 && type <= 3) {
-        for (int64_t i = 0; i < track.duration; i++) {
+    switch (track.valueSize) {
+    case 6:
+        for (uint32_t i = 0; i < track.duration; i++) {
             uint16_t h[3];
             std::memcpy(h, ptr + valOfs + i * 6, 6);
             track.keyframes[i].scale = glm::vec3(HalfToFloat(h[0]), HalfToFloat(h[1]), HalfToFloat(h[2]));
         }
-    } else if (type == 5 || type == 6) {
-        for (int64_t i = 0; i < track.duration; i++) {
+        break;
+    case 8:
+        for (uint32_t i = 0; i < track.duration; i++) {
             int16_t q[4];
             std::memcpy(q, ptr + valOfs + i * 8, 8);
-            track.keyframes[i].rotation = glm::quat(
+            track.keyframes[i].rotation = glm::normalize(glm::quat(
                 Int16ToFloat(q[3]), Int16ToFloat(q[0]), Int16ToFloat(q[1]), Int16ToFloat(q[2])
-            );
+            ));
         }
-    } else if (type == 7) {
-        for (int64_t i = 0; i < track.duration; i++) {
+        break;
+    case 12:
+        for (uint32_t i = 0; i < track.duration; i++) {
             std::memcpy(&track.keyframes[i].translation, ptr + valOfs + i * 12, 12);
         }
-    } else if (type == 8) {
-        for (int64_t i = 0; i < track.duration; i++) {
-            int16_t v[4];
-            std::memcpy(v, ptr + valOfs + i * 8, 8);
-            track.keyframes[i].unknown = glm::vec4(
-                Int16ToFloat(v[0]), Int16ToFloat(v[1]), Int16ToFloat(v[2]), Int16ToFloat(v[3])
-            );
-        }
-    } else {
-        for (int64_t i = 0; i < track.duration; i++) {
-            uint16_t h[4];
-            std::memcpy(h, ptr + valOfs + i * 8, 8);
-            track.keyframes[i].unknown = glm::vec4(
-                HalfToFloat(h[0]), HalfToFloat(h[1]), HalfToFloat(h[2]), HalfToFloat(h[3])
-            );
-        }
+        break;
+    default:
+        track.duration = 0;
+        track.keyframes.clear();
+        break;
     }
 }
 
 void M3Loader::ReadBones(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.bones.count <= 0) return;
+    if (h.bones.count == 0) return;
 
-    size_t tableStart = HEADER_SIZE + h.bones.offset;
-    size_t animStart = tableStart + h.bones.count * BONE_SIZE;
+    static constexpr uint8_t kBoneTrackValueSizes[8] = {6, 6, 6, 6, 8, 8, 12, 12};
+    static constexpr const char* kBoneTrackNames[8] = {
+        "scale",
+        "scaleSecondary",
+        "scaleDivisor",
+        "scaleSecondaryDivisor",
+        "rotation",
+        "rotationSecondary",
+        "translation",
+        "translationSecondary"
+    };
+
+    size_t tableBytes = 0;
+    size_t tableStart = 0;
+    if (!CheckedMul(h.bones.count, BONE_SIZE, tableBytes) ||
+        !ResolveHeaderDataRange(size, h.bones.offset, tableBytes, tableStart)) {
+        return;
+    }
+
+    size_t animStart = 0;
+    if (!CheckedAdd(tableStart, Align16(tableBytes), animStart) || animStart > size) {
+        return;
+    }
 
     model.bones.resize(h.bones.count);
     for (int64_t i = 0; i < h.bones.count; i++) {
@@ -536,10 +602,13 @@ void M3Loader::ReadBones(const uint8_t* ptr, size_t size, M3ModelData& model) {
 
         size_t trackOfs = ofs + 16;
         for (int t = 0; t < 8; t++) {
-            bone.tracks[t].duration = Read<int64_t>(ptr, trackOfs);
+            bone.tracks[t].duration = Read<uint32_t>(ptr, trackOfs);
+            bone.tracks[t].flags = Read<uint32_t>(ptr, trackOfs + 4);
             bone.tracks[t].timeOffset = Read<int64_t>(ptr, trackOfs + 8);
             bone.tracks[t].valueOffset = Read<int64_t>(ptr, trackOfs + 16);
-            bone.tracks[t].trackType = t + 1;
+            bone.tracks[t].valueSize = kBoneTrackValueSizes[t];
+            bone.tracks[t].trackType = t;
+            bone.tracks[t].name = kBoneTrackNames[t];
             trackOfs += 24;
         }
 
@@ -560,12 +629,11 @@ void M3Loader::ReadBones(const uint8_t* ptr, size_t size, M3ModelData& model) {
         std::memcpy(&bone.position, ptr + ofs + 0x150, 12);
 
         for (int t = 0; t < 8; t++) {
-            ReadBoneAnimationTrack(ptr, animStart, bone.tracks[t]);
+            ReadBoneAnimationTrack(ptr, size, animStart, bone.tracks[t]);
         }
     }
 
     BuildBonePaths(model);
-    FixMirroredBones(model);
 }
 
 void M3Loader::FixMirroredBones(M3ModelData& model) {
@@ -619,9 +687,76 @@ void M3Loader::BuildBonePaths(M3ModelData& model) {
     }
 }
 
+static bool KeyFrameValueDiffers(const M3AnimationTrack& track, const M3KeyFrame& a, const M3KeyFrame& b) {
+    constexpr float kVecEpsilon = 0.0001f;
+    constexpr float kQuatDotEpsilon = 0.9999f;
+
+    if (track.trackType >= 4 && track.trackType <= 5) {
+        return std::abs(glm::dot(glm::normalize(a.rotation), glm::normalize(b.rotation))) < kQuatDotEpsilon;
+    }
+
+    const glm::vec3& av = (track.trackType >= 6) ? a.translation : a.scale;
+    const glm::vec3& bv = (track.trackType >= 6) ? b.translation : b.scale;
+    return std::abs(av.x - bv.x) > kVecEpsilon ||
+           std::abs(av.y - bv.y) > kVecEpsilon ||
+           std::abs(av.z - bv.z) > kVecEpsilon;
+}
+
+static bool TrackHasAnimatedKeysInRange(const M3AnimationTrack& track, uint32_t startTime, uint32_t endTime) {
+    if (track.keyframes.size() < 2 || endTime <= startTime) return false;
+
+    const M3KeyFrame* firstInRange = nullptr;
+    for (const auto& keyframe : track.keyframes) {
+        if (keyframe.timestamp < startTime || keyframe.timestamp > endTime) continue;
+
+        if (!firstInRange) {
+            firstInRange = &keyframe;
+            continue;
+        }
+
+        if (KeyFrameValueDiffers(track, *firstInRange, keyframe)) {
+            return true;
+        }
+    }
+
+    const M3KeyFrame* beforeOrAtStart = nullptr;
+    const M3KeyFrame* afterOrAtEnd = nullptr;
+    for (const auto& keyframe : track.keyframes) {
+        if (keyframe.timestamp <= startTime) {
+            beforeOrAtStart = &keyframe;
+        }
+        if (keyframe.timestamp >= endTime) {
+            afterOrAtEnd = &keyframe;
+            break;
+        }
+    }
+
+    return beforeOrAtStart &&
+           afterOrAtEnd &&
+           beforeOrAtStart != afterOrAtEnd &&
+           KeyFrameValueDiffers(track, *beforeOrAtStart, *afterOrAtEnd);
+}
+
+static bool AnimationHasAnimatedBoneTracks(const M3ModelData& model, const M3ModelAnimation& animation) {
+    for (const auto& bone : model.bones) {
+        for (const auto& track : bone.tracks) {
+            if (TrackHasAnimatedKeysInRange(track, animation.timestampStart, animation.timestampEnd)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void MarkAnimatedSequences(M3ModelData& model) {
+    for (auto& animation : model.animations) {
+        animation.hasAnimatedTracks = AnimationHasAnimatedBoneTracks(model, animation);
+    }
+}
+
 void M3Loader::ReadAnimations(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.animationsMeta.count <= 0) return;
+    if (h.animationsMeta.count == 0) return;
 
     size_t tableStart = HEADER_SIZE + h.animationsMeta.offset;
 
@@ -656,6 +791,8 @@ void M3Loader::ReadAnimations(const uint8_t* ptr, size_t size, M3ModelData& mode
         anim.unk28 = Read<uint64_t>(ptr, ofs + 96);
         anim.unk29 = Read<uint64_t>(ptr, ofs + 104);
     }
+
+    MarkAnimatedSequences(model);
 }
 
 void M3Loader::ReadGeometry(const uint8_t* ptr, size_t size, M3ModelData& model) {
@@ -670,6 +807,7 @@ void M3Loader::ReadGeometry(const uint8_t* ptr, size_t size, M3ModelData& model)
     geo.vertexSize = Read<uint16_t>(ptr, geomOfs + 0x1C);
     geo.vertexFlags = Read<int16_t>(ptr, geomOfs + 0x1E);
     std::memcpy(geo.fieldTypes.data(), ptr + geomOfs + 0x20, 11);
+    std::memcpy(geo.fieldOffsets.data(), ptr + geomOfs + 0x2B, 11);
     geo.nrIndices = Read<uint32_t>(ptr, geomOfs + 0x68);
     geo.indexFlags = Read<int16_t>(ptr, geomOfs + 0x6C);
     geo.ofsIndices = Read<uint32_t>(ptr, geomOfs + 0x78);
@@ -682,30 +820,59 @@ void M3Loader::ReadGeometry(const uint8_t* ptr, size_t size, M3ModelData& model)
     for (uint32_t i = 0; i < geo.nrVertices; i++) {
         const uint8_t* vData = ptr + vertexStart + i * geo.vertexSize;
         auto& v = geo.vertices[i];
-        size_t localOfs = 0;
 
-        if (geo.vertexFlags & 0x0001) v.position = ReadVertexV3(vData, geo.fieldTypes[0], localOfs);
-        if (geo.vertexFlags & 0x0002) v.tangent = ReadVertexV3(vData, geo.fieldTypes[1], localOfs);
-        if (geo.vertexFlags & 0x0004) v.normal = ReadVertexV3(vData, geo.fieldTypes[2], localOfs);
-        if (geo.vertexFlags & 0x0008) v.bitangent = ReadVertexV3(vData, geo.fieldTypes[3], localOfs);
+        if (geo.vertexFlags & 0x0001) {
+            size_t fieldOfs = geo.fieldOffsets[0];
+            if (fieldOfs < geo.vertexSize) v.position = ReadVertexV3(vData, geo.fieldTypes[0], fieldOfs);
+        }
+        if (geo.vertexFlags & 0x0002) {
+            size_t fieldOfs = geo.fieldOffsets[1];
+            if (fieldOfs < geo.vertexSize) v.tangent = ReadVertexV3(vData, geo.fieldTypes[1], fieldOfs);
+        }
+        if (geo.vertexFlags & 0x0004) {
+            size_t fieldOfs = geo.fieldOffsets[2];
+            if (fieldOfs < geo.vertexSize) v.normal = ReadVertexV3(vData, geo.fieldTypes[2], fieldOfs);
+        }
+        if (geo.vertexFlags & 0x0008) {
+            size_t fieldOfs = geo.fieldOffsets[3];
+            if (fieldOfs < geo.vertexSize) v.bitangent = ReadVertexV3(vData, geo.fieldTypes[3], fieldOfs);
+        }
         if (geo.vertexFlags & 0x0010) {
-            glm::vec4 bi = ReadVertexV4(vData, geo.fieldTypes[4], localOfs);
-            v.boneIndices = glm::uvec4(uint32_t(bi.x), uint32_t(bi.y), uint32_t(bi.z), uint32_t(bi.w));
+            size_t fieldOfs = geo.fieldOffsets[4];
+            if (fieldOfs < geo.vertexSize) {
+                glm::vec4 bi = ReadVertexV4(vData, geo.fieldTypes[4], fieldOfs);
+                v.boneIndices = glm::uvec4(uint32_t(bi.x), uint32_t(bi.y), uint32_t(bi.z), uint32_t(bi.w));
+            }
         }
         if (geo.vertexFlags & 0x0020) {
-            glm::vec4 bw = ReadVertexV4(vData, geo.fieldTypes[5], localOfs);
-            v.boneWeights = bw / 255.0f;
+            size_t fieldOfs = geo.fieldOffsets[5];
+            if (fieldOfs < geo.vertexSize) {
+                glm::vec4 bw = ReadVertexV4(vData, geo.fieldTypes[5], fieldOfs);
+                v.boneWeights = bw / 255.0f;
+            }
         }
         if (geo.vertexFlags & 0x0040) {
-            glm::vec4 col = ReadVertexV4(vData, geo.fieldTypes[6], localOfs);
-            v.color = col / 255.0f;
+            size_t fieldOfs = geo.fieldOffsets[6];
+            if (fieldOfs < geo.vertexSize) {
+                glm::vec4 col = ReadVertexV4(vData, geo.fieldTypes[6], fieldOfs);
+                v.color = col / 255.0f;
+            }
         }
         if (geo.vertexFlags & 0x0080) {
-            glm::vec4 bl = ReadVertexV4(vData, geo.fieldTypes[7], localOfs);
-            v.blend = bl / 255.0f;  // Normalize blend weights from 0-255 to 0-1
+            size_t fieldOfs = geo.fieldOffsets[7];
+            if (fieldOfs < geo.vertexSize) {
+                glm::vec4 bl = ReadVertexV4(vData, geo.fieldTypes[7], fieldOfs);
+                v.blend = bl / 255.0f;  // Normalize blend weights from 0-255 to 0-1
+            }
         }
-        if (geo.vertexFlags & 0x0100) v.uv1 = ReadVertexV2(vData, geo.fieldTypes[8], localOfs);
-        if (geo.vertexFlags & 0x0200) v.uv2 = ReadVertexV2(vData, geo.fieldTypes[9], localOfs);
+        if (geo.vertexFlags & 0x0100) {
+            size_t fieldOfs = geo.fieldOffsets[8];
+            if (fieldOfs < geo.vertexSize) v.uv1 = ReadVertexV2(vData, geo.fieldTypes[8], fieldOfs);
+        }
+        if (geo.vertexFlags & 0x0200) {
+            size_t fieldOfs = geo.fieldOffsets[9];
+            if (fieldOfs < geo.vertexSize) v.uv2 = ReadVertexV2(vData, geo.fieldTypes[9], fieldOfs);
+        }
     }
 
     // Detect if blend values are texture layer weights
@@ -770,23 +937,44 @@ void M3Loader::ApplyBoneMapping(M3ModelData& model) {
     if (model.lutBoneMapping.empty()) return;
 
     auto& geo = model.geometry;
-    for (auto& sm : geo.submeshes) {
-        std::vector<int16_t> boneSubmap;
-        for (uint16_t i = sm.startBoneMapping; i < sm.startBoneMapping + sm.nrBoneMapping; i++) {
-            if (i < model.lutBoneMapping.size()) {
-                boneSubmap.push_back(model.lutBoneMapping[i]);
-            }
-        }
+    std::vector<uint8_t> mapped(geo.vertices.size(), 0);
 
-        if (boneSubmap.empty()) continue;
+    for (const auto& sm : geo.submeshes) {
+        uint32_t endVertex = sm.startVertex + sm.vertexCount;
+        if (endVertex < sm.startVertex) endVertex = static_cast<uint32_t>(geo.vertices.size());
+        endVertex = std::min<uint32_t>(endVertex, static_cast<uint32_t>(geo.vertices.size()));
 
-        for (uint32_t j = sm.startVertex; j < sm.startVertex + sm.vertexCount; j++) {
-            if (j >= geo.vertices.size()) break;
+        for (uint32_t j = sm.startVertex; j < endVertex; j++) {
+            if (mapped[j]) continue;
+
             auto& v = geo.vertices[j];
 
             for (int k = 0; k < 4; k++) {
-                if (v.boneWeights[k] > 0 && v.boneIndices[k] < boneSubmap.size()) {
-                    v.boneIndices[k] = boneSubmap[v.boneIndices[k]];
+                if (v.boneWeights[k] <= 0.0f) continue;
+
+                uint32_t localBoneIndex = v.boneIndices[k];
+                uint32_t lutIndex = sm.startBoneMapping + localBoneIndex;
+                if (localBoneIndex < sm.nrBoneMapping && lutIndex < model.lutBoneMapping.size()) {
+                    int16_t mappedBone = model.lutBoneMapping[lutIndex];
+                    if (mappedBone >= 0 && mappedBone < static_cast<int16_t>(model.bones.size())) {
+                        v.boneIndices[k] = static_cast<uint32_t>(mappedBone);
+                    }
+                }
+            }
+
+            mapped[j] = 1;
+        }
+    }
+
+    for (size_t i = 0; i < geo.vertices.size(); ++i) {
+        if (mapped[i]) continue;
+
+        auto& v = geo.vertices[i];
+        for (int k = 0; k < 4; k++) {
+            if (v.boneWeights[k] > 0.0f && v.boneIndices[k] < model.lutBoneMapping.size()) {
+                int16_t mappedBone = model.lutBoneMapping[v.boneIndices[k]];
+                if (mappedBone >= 0 && mappedBone < static_cast<int16_t>(model.bones.size())) {
+                    v.boneIndices[k] = static_cast<uint32_t>(mappedBone);
                 }
             }
         }
@@ -795,7 +983,7 @@ void M3Loader::ApplyBoneMapping(M3ModelData& model) {
 
 void M3Loader::ReadLights(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.lights.count <= 0) return;
+    if (h.lights.count == 0) return;
 
     size_t tableStart = HEADER_SIZE + h.lights.offset;
 
@@ -820,7 +1008,7 @@ void M3Loader::ReadLights(const uint8_t* ptr, size_t size, M3ModelData& model) {
 
 void M3Loader::ReadSubmeshGroups(const uint8_t* ptr, size_t size, M3ModelData& model) {
     const auto& h = model.header;
-    if (h.submeshIds.count <= 0) return;
+    if (h.submeshIds.count == 0) return;
 
     size_t tableStart = HEADER_SIZE + h.submeshIds.offset;
 

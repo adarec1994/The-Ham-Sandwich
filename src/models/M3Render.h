@@ -105,6 +105,8 @@ public:
     float getAnimationDuration() const;
 
 private:
+    static constexpr size_t MaxGpuBones = 256;
+
     static ID3D11Device* sDevice;
     static ID3D11DeviceContext* sContext;
     static ComPtr<ID3D11VertexShader> sSharedVS;
@@ -149,6 +151,7 @@ private:
     std::vector<glm::vec3> bindLocalTranslation;
     std::vector<glm::mat4> bindLocalMatrix;  // Store the actual local matrix for mirrored bones
     std::vector<bool> boneAtOrigin;
+    std::vector<bool> boneUsesTrackBind;
     std::vector<bool> boneMirrored;  // Track bones with negative determinant local matrices
     std::vector<glm::mat4> worldTransforms;
     std::vector<XMMATRIX> boneMatrices;
@@ -183,6 +186,7 @@ private:
     ComPtr<ID3D11ShaderResourceView> createFallbackWhite();
     ID3D11ShaderResourceView* resolveDiffuseTexture(uint16_t materialId, int variant) const;
     int resolveTextureLayers(uint16_t materialId, int variant, ID3D11ShaderResourceView* outSRVs[4]) const;
+    void resetBoneMatricesToBindPose();
 
     struct alignas(16) M3ConstantBuffer {
         XMMATRIX model;
@@ -196,7 +200,7 @@ private:
     };
 
     struct alignas(16) BoneMatrixBuffer {
-        XMMATRIX bones[200];
+        XMMATRIX bones[MaxGpuBones];
     };
 
     struct alignas(16) SkeletonCB {

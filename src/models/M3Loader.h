@@ -36,7 +36,7 @@ private:
     static void ReadGeometry(const uint8_t* data, size_t size, M3ModelData& model);
     static void ReadLights(const uint8_t* data, size_t size, M3ModelData& model);
     static void ReadSubmeshGroups(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadBoneAnimationTrack(const uint8_t* data, size_t animStart, M3AnimationTrack& track);
+    static void ReadBoneAnimationTrack(const uint8_t* data, size_t size, size_t animStart, M3AnimationTrack& track);
     static void ApplyBoneMapping(M3ModelData& model);
     static void BuildBonePaths(M3ModelData& model);
     static void FixMirroredBones(M3ModelData& model);

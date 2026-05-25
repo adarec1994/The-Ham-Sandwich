@@ -16,10 +16,15 @@
 #include <iomanip>
 #include <limits>
 
-static bool g_M3DebugAnimationStart = true;
+static bool g_M3DebugAnimationStart = false;
 static bool g_M3DebugAnimationUpdate = false;
 static int g_M3DebugAnimationFrameInterval = 60;
 static int g_M3DebugAnimationFrameCount = 0;
+
+static glm::vec3 interpolateScale(const M3AnimationTrack& track, float timeMs);
+static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs);
+static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float timeMs);
+static glm::vec3 sampleEngineBoneScale(const M3Bone& bone, float timeMs);
 
 static void DebugPrintAnimationBones(const std::string& context,
                                       const std::vector<M3Bone>& bones,
@@ -112,7 +117,7 @@ cbuffer M3CB : register(b0) {
     float3 pad;
 };
 cbuffer BoneBuffer : register(b1) {
-    row_major matrix boneMatrices[200];
+    row_major matrix boneMatrices[256];
 };
 struct VSInput {
     float3 position : POSITION;
@@ -251,6 +256,20 @@ static XMMATRIX GlmToXM(const glm::mat4& m) {
         m[0][2], m[1][2], m[2][2], m[3][2],
         m[0][3], m[1][3], m[2][3], m[3][3]
     );
+}
+
+static bool IsUsableMatrix(const glm::mat4& m) {
+    float total = 0.0f;
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            float value = m[c][r];
+            if (!std::isfinite(value)) {
+                return false;
+            }
+            total += std::abs(value);
+        }
+    }
+    return total > 0.00001f;
 }
 
 void M3Render::SetDevice(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -468,6 +487,7 @@ void M3Render::precomputeBoneData() {
     bindLocalTranslation.resize(numBones, glm::vec3(0.0f));
     bindLocalMatrix.resize(numBones, glm::mat4(1.0f));
     boneAtOrigin.resize(numBones, false);
+    boneUsesTrackBind.resize(numBones, false);
     boneMirrored.resize(numBones, false);
 
     for (size_t i = 0; i < numBones; ++i) {
@@ -476,111 +496,45 @@ void M3Render::precomputeBoneData() {
         bool atOrigin = glm::length(glm::vec3(bone.globalMatrix[3])) < 0.001f;
         boneAtOrigin[i] = atOrigin;
 
-        if (atOrigin && !bone.tracks[6].keyframes.empty()) {
-            // For AT_ORIGIN bones, compute effective bind pose from all tracks
-            glm::vec3 track6Pos = bone.tracks[6].keyframes[0].translation;
+        bool usesTrackBind = !bone.tracks[0].keyframes.empty() ||
+                             !bone.tracks[2].keyframes.empty() ||
+                             !bone.tracks[4].keyframes.empty() ||
+                             !bone.tracks[6].keyframes.empty();
+        boneUsesTrackBind[i] = usesTrackBind;
 
-            // Check if original globalMatrix was mirrored
-            float origDet = glm::determinant(glm::mat3(bone.globalMatrix));
-            bool needNegativeDet = (origDet < 0.0f);
+        // Match the client: missing animated components are identity/zero, not
+        // decomposed from the inverse-bind file matrices.
+        bindLocalScale[i] = sampleEngineBoneScale(bone, 0.0f);
+        bindLocalRotation[i] = !bone.tracks[4].keyframes.empty()
+            ? glm::normalize(bone.tracks[4].keyframes.front().rotation)
+            : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        bindLocalTranslation[i] = !bone.tracks[6].keyframes.empty()
+            ? bone.tracks[6].keyframes.front().translation
+            : glm::vec3(0.0f);
 
-            // Get scale - prefer a track with matching determinant sign
-            glm::vec3 bindScale(1.0f);
-            bool foundMatchingScale = false;
-            for (int t = 0; t <= 2; ++t) {
-                if (!bone.tracks[t].keyframes.empty()) {
-                    glm::vec3 trackScale = bone.tracks[t].keyframes[0].scale;
-                    float trackDet = trackScale.x * trackScale.y * trackScale.z;
-                    bool trackNegative = (trackDet < 0.0f);
+        bindLocalMatrix[i] =
+            glm::translate(glm::mat4(1.0f), bindLocalTranslation[i]) *
+            glm::mat4_cast(bindLocalRotation[i]) *
+            glm::scale(glm::mat4(1.0f), bindLocalScale[i]);
 
-                    if (trackNegative == needNegativeDet) {
-                        bindScale = trackScale;
-                        foundMatchingScale = true;
-                        break;
-                    }
-                }
-            }
-
-            // If no matching track, use first available and fix determinant
-            if (!foundMatchingScale) {
-                for (int t = 0; t <= 2; ++t) {
-                    if (!bone.tracks[t].keyframes.empty()) {
-                        bindScale = bone.tracks[t].keyframes[0].scale;
-                        float scaleDet = bindScale.x * bindScale.y * bindScale.z;
-                        if ((scaleDet < 0.0f) != needNegativeDet) {
-                            bindScale.x = -bindScale.x;
-                        }
-                        break;
-                    }
-                }
-            }
-
-            // Get rotation from first available rotation track (R4 or R5)
-            glm::quat bindRot(1.0f, 0.0f, 0.0f, 0.0f);
-            for (int t = 4; t <= 5; ++t) {
-                if (!bone.tracks[t].keyframes.empty()) {
-                    bindRot = bone.tracks[t].keyframes[0].rotation;
-                    break;
-                }
-            }
-
-            // Compose local transform: T * R * S (standard order)
-            glm::mat4 T = glm::translate(glm::mat4(1.0f), track6Pos);
-            glm::mat4 R = glm::mat4_cast(glm::normalize(bindRot));
-            glm::mat4 S = glm::scale(glm::mat4(1.0f), bindScale);
-            glm::mat4 localT = T * R * S;
-
-            if (!isRootBone) {
-                effectiveBindGlobal[i] = effectiveBindGlobal[bone.parentId] * localT;
-            } else {
-                effectiveBindGlobal[i] = localT;
-            }
-        } else {
-            effectiveBindGlobal[i] = bone.globalMatrix;
-        }
-
-        inverseEffectiveBindGlobal[i] = glm::inverse(effectiveBindGlobal[i]);
+        effectiveBindGlobal[i] = isRootBone
+            ? bindLocalMatrix[i]
+            : effectiveBindGlobal[bone.parentId] * bindLocalMatrix[i];
+        boneMirrored[i] = glm::determinant(glm::mat3(bindLocalMatrix[i])) < 0.0f;
+        inverseEffectiveBindGlobal[i] = IsUsableMatrix(effectiveBindGlobal[i])
+            ? glm::inverse(effectiveBindGlobal[i])
+            : glm::mat4(1.0f);
     }
 
     for (size_t i = 0; i < numBones; ++i) {
-        const auto& bone = bones[i];
-        bool isRootBone = (bone.parentId < 0 || bone.parentId >= (int)numBones);
-
-        glm::mat4 bindLocal;
-        if (isRootBone) {
-            bindLocal = effectiveBindGlobal[i];
+        if (IsUsableMatrix(bones[i].inverseGlobalMatrix)) {
+            inverseEffectiveBindGlobal[i] = bones[i].inverseGlobalMatrix;
         } else {
-            bindLocal = inverseEffectiveBindGlobal[bone.parentId] * effectiveBindGlobal[i];
-        }
-
-        // Store the actual local matrix (needed for mirrored bones)
-        bindLocalMatrix[i] = bindLocal;
-
-        // Check for mirrored matrix (negative determinant)
-        float det = glm::determinant(glm::mat3(bindLocal));
-        boneMirrored[i] = (det < 0);
-
-        glm::vec3 skew;
-        glm::vec4 perspective;
-        glm::decompose(bindLocal, bindLocalScale[i], bindLocalRotation[i], bindLocalTranslation[i], skew, perspective);
-        bindLocalRotation[i] = glm::normalize(bindLocalRotation[i]);
-
-        // Normalize quaternion to positive hemisphere (w >= 0) for consistent interpolation
-        // This ensures that when we slerp from bind to animation, we take the shorter path
-        if (bindLocalRotation[i].w < 0) {
-            bindLocalRotation[i] = -bindLocalRotation[i];
-        }
-
-        // IMPORTANT: glm::decompose always extracts positive scale, but for mirrored bones
-        // we need to preserve the negative determinant. Fix the scale by negating X if needed.
-        if (boneMirrored[i]) {
-            float scaleDet = bindLocalScale[i].x * bindLocalScale[i].y * bindLocalScale[i].z;
-            if (scaleDet > 0.0f) {
-                // Scale is positive but we need negative det - negate X
-                bindLocalScale[i].x = -bindLocalScale[i].x;
-            }
+            inverseEffectiveBindGlobal[i] = glm::inverse(effectiveBindGlobal[i]);
         }
     }
+
+    resetBoneMatricesToBindPose();
 
     if (g_M3DebugAnimationStart) {
         std::cout << "\n===============================================================================\n";
@@ -610,6 +564,25 @@ void M3Render::precomputeBoneData() {
         }
 
         std::cout << "===============================================================================\n\n";
+    }
+}
+
+void M3Render::resetBoneMatricesToBindPose() {
+    size_t numBones = bones.size();
+    if (numBones == 0 || effectiveBindGlobal.size() != numBones || inverseEffectiveBindGlobal.size() != numBones) {
+        boneMatrices.clear();
+        worldTransforms.clear();
+        return;
+    }
+
+    worldTransforms.resize(numBones);
+    boneMatrices.resize(numBones);
+    for (size_t i = 0; i < numBones; ++i) {
+        const glm::mat4 bindGlobal = IsUsableMatrix(bones[i].globalMatrix)
+            ? bones[i].globalMatrix
+            : effectiveBindGlobal[i];
+        worldTransforms[i] = bindGlobal;
+        boneMatrices[i] = GlmToXM(bindGlobal * inverseEffectiveBindGlobal[i]);
     }
 }
 
@@ -915,7 +888,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     float blendFactor[4] = {0, 0, 0, 0};
     sContext->OMSetBlendState(sBlendState.Get(), blendFactor, 0xFFFFFFFF);
 
-    bool useSkinning = (playingAnimation >= 0 && !boneMatrices.empty());
+    bool useSkinning = ((geometry.vertexFlags & 0x0030) == 0x0030) && !boneMatrices.empty();
 
     M3ConstantBuffer cb;
     cb.model = model;
@@ -934,7 +907,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
 
     if (useSkinning && mBoneBuffer) {
         BoneMatrixBuffer bb = {};
-        size_t count = std::min(boneMatrices.size(), (size_t)200);
+        size_t count = std::min(boneMatrices.size(), M3Render::MaxGpuBones);
         for (size_t i = 0; i < count; ++i) {
             bb.bones[i] = boneMatrices[i];
         }
@@ -1113,7 +1086,7 @@ void M3Render::stopAnimation() {
     playingAnimation = -1;
     animationTime = 0.0f;
     animationPaused = false;
-    boneMatrices.clear();
+    resetBoneMatricesToBindPose();
 }
 
 void M3Render::pauseAnimation() { animationPaused = true; }
@@ -1200,9 +1173,28 @@ static glm::vec3 interpolateTranslation(const M3AnimationTrack& track, float tim
     return glm::mix(prev.translation, next.translation, t);
 }
 
+static glm::vec3 safeDivideScale(glm::vec3 value, const glm::vec3& divisor) {
+    constexpr float epsilon = 0.00001f;
+    if (std::abs(divisor.x) > epsilon) value.x /= divisor.x;
+    if (std::abs(divisor.y) > epsilon) value.y /= divisor.y;
+    if (std::abs(divisor.z) > epsilon) value.z /= divisor.z;
+    return value;
+}
+
+static glm::vec3 sampleEngineBoneScale(const M3Bone& bone, float timeMs) {
+    glm::vec3 scale(1.0f);
+    if (!bone.tracks[0].keyframes.empty()) {
+        scale = interpolateScale(bone.tracks[0], timeMs);
+    }
+    if (!bone.tracks[2].keyframes.empty()) {
+        scale = safeDivideScale(scale, interpolateScale(bone.tracks[2], timeMs));
+    }
+    return scale;
+}
+
 void M3Render::updateAnimation(float deltaTime) {
     if (playingAnimation < 0 || playingAnimation >= (int)animations.size()) {
-        boneMatrices.clear();
+        resetBoneMatricesToBindPose();
         return;
     }
 
@@ -1221,87 +1213,46 @@ void M3Render::updateAnimation(float deltaTime) {
     size_t numBones = bones.size();
     boneMatrices.resize(numBones);
     worldTransforms.resize(numBones);
+    std::vector<glm::vec3> worldScales(numBones, glm::vec3(1.0f));
+    std::vector<glm::quat> worldRotations(numBones, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    std::vector<glm::vec3> worldTranslations(numBones, glm::vec3(0.0f));
 
     for (size_t i = 0; i < numBones; ++i) {
         const auto& bone = bones[i];
         bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)numBones);
 
-        glm::vec3 scale = bindLocalScale[i];
-        glm::quat rotation = bindLocalRotation[i];
-        glm::vec3 translation = bindLocalTranslation[i];
+        glm::vec3 scale(1.0f);
+        glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::vec3 translation(0.0f);
 
-        // For mirrored bones, we need to select a scale track that preserves the
-        // bind pose determinant sign, otherwise we flip the mirroring
-        float bindScaleDet = bindLocalScale[i].x * bindLocalScale[i].y * bindLocalScale[i].z;
-        bool needNegativeDet = (bindScaleDet < 0.0f);
+        // Match the client path: scale track 0 divided by scale track 2.
+        scale = sampleEngineBoneScale(bone, currentTimeMs);
 
-        // First try to find a scale track with matching determinant
-        bool foundMatchingScale = false;
-        for (int t = 0; t <= 2; ++t) {
-            if (!bone.tracks[t].keyframes.empty()) {
-                glm::vec3 trackScale = interpolateScale(bone.tracks[t], currentTimeMs);
-                float trackDet = trackScale.x * trackScale.y * trackScale.z;
-                bool trackNegative = (trackDet < 0.0f);
-
-                if (trackNegative == needNegativeDet) {
-                    // Determinant matches - use this track
-                    scale = trackScale;
-                    foundMatchingScale = true;
-                    break;
-                }
-            }
+        if (!bone.tracks[4].keyframes.empty()) {
+            rotation = interpolateRotation(bone.tracks[4], currentTimeMs);
         }
 
-        // If no matching track found, use the first available but fix the determinant
-        if (!foundMatchingScale) {
-            for (int t = 0; t <= 2; ++t) {
-                if (!bone.tracks[t].keyframes.empty()) {
-                    scale = interpolateScale(bone.tracks[t], currentTimeMs);
-                    // Fix the determinant by negating X if needed
-                    float scaleDet = scale.x * scale.y * scale.z;
-                    if ((scaleDet < 0.0f) != needNegativeDet) {
-                        scale.x = -scale.x;
-                    }
-                    break;
-                }
-            }
-        }
-
-        for (int t = 4; t <= 5; ++t) {
-            if (!bone.tracks[t].keyframes.empty()) {
-                rotation = interpolateRotation(bone.tracks[t], currentTimeMs);
-                break;
-            }
-        }
-
-        if (boneAtOrigin[i] && !bone.tracks[6].keyframes.empty()) {
+        if (!bone.tracks[6].keyframes.empty()) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
 
-        // Compose local transform from animation values
-        glm::mat4 S = glm::scale(glm::mat4(1.0f), scale);
-        glm::mat4 T = glm::translate(glm::mat4(1.0f), translation);
-
         glm::quat finalRotation = glm::normalize(rotation);
-
-        glm::mat4 R = glm::mat4_cast(finalRotation);
-
-        glm::mat4 localTransform;
-        if (boneMirrored[i]) {
-            // Mirrored bone (bind pose has negative determinant)
-            // Use T * S * R order - rotation is applied in scaled (mirrored) space
-            localTransform = T * S * R;
+        if (isRoot || bone.parentId >= (int)i) {
+            worldScales[i] = scale;
+            worldRotations[i] = finalRotation;
+            worldTranslations[i] = translation;
         } else {
-            // Normal bone: standard T * R * S order
-            localTransform = T * R * S;
+            const size_t parentIndex = static_cast<size_t>(bone.parentId);
+            worldScales[i] = worldScales[parentIndex] * scale;
+            worldRotations[i] = glm::normalize(worldRotations[parentIndex] * finalRotation);
+            worldTranslations[i] = worldTranslations[parentIndex] +
+                worldRotations[parentIndex] * (worldScales[parentIndex] * translation);
         }
 
-        if (isRoot) {
-            worldTransforms[i] = localTransform;
-        } else {
-            worldTransforms[i] = worldTransforms[bone.parentId] * localTransform;
-        }
-
+        worldTransforms[i] =
+            glm::translate(glm::mat4(1.0f), worldTranslations[i]) *
+            glm::mat4_cast(worldRotations[i]) *
+            glm::scale(glm::mat4(1.0f), worldScales[i]);
         boneMatrices[i] = GlmToXM(worldTransforms[i] * inverseEffectiveBindGlobal[i]);
     }
 

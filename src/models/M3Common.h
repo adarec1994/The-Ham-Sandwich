@@ -9,12 +9,14 @@
 #pragma pack(push, 1)
 
 struct M3MetaDef {
-    int64_t count;
+    uint32_t count;
+    uint32_t flags;
     int64_t offset;
 };
 
 struct M3TrackDef {
-    int64_t count;
+    uint32_t count;
+    uint32_t flags;
     int64_t offsetA;
     int64_t offsetB;
 };
@@ -47,10 +49,13 @@ struct M3KeyFrame {
 };
 
 struct M3AnimationTrack {
-    int64_t duration = 0;
+    uint32_t duration = 0;
+    uint32_t flags = 0;
     int64_t timeOffset = 0;
     int64_t valueOffset = 0;
+    uint8_t valueSize = 0;
     int trackType = 0;
+    std::string name;
     std::vector<M3KeyFrame> keyframes;
 };
 
@@ -100,6 +105,7 @@ struct M3ModelAnimation {
     uint32_t unk27 = 0;
     uint64_t unk28 = 0;
     uint64_t unk29 = 0;
+    bool hasAnimatedTracks = true;
 };
 
 struct M3Texture {
@@ -194,6 +200,7 @@ struct M3Geometry {
     uint16_t vertexSize = 0;
     int16_t vertexFlags = 0;
     std::array<uint8_t, 11> fieldTypes{};
+    std::array<uint8_t, 11> fieldOffsets{};
     uint32_t nrIndices = 0;
     int16_t indexFlags = 0;
     uint32_t ofsIndices = 0;
