@@ -1,10 +1,15 @@
 using Godot;
+using WildStar.Archive;
+using WildStar.GameTable;
 
 namespace WildStar.Model;
 
 public static class M3SceneBuilder
 {
     private const string SkeletonName = "Skeleton";
+    private static System.Func<WsFileSystem?>? _fileSystemProvider;
+
+    public static void SetFileSystem(System.Func<WsFileSystem?>? provider) => _fileSystemProvider = provider;
 
     public static Node3D Build(M3File model, ArrayMesh mesh, string name, byte[] modelData) =>
         Build(model, mesh, name, modelData, System.Array.Empty<int>());
@@ -14,7 +19,8 @@ public static class M3SceneBuilder
         => Build(model, mesh, name, modelData, surfaceGeosets, System.Array.Empty<int>());
 
     public static Node3D Build(M3File model, ArrayMesh mesh, string name, byte[] modelData,
-                               int[] surfaceGeosets, int[] surfaceMaterials)
+                               int[] surfaceGeosets, int[] surfaceMaterials,
+                               string modelPath = "")
     {
         ApplyMaterials(model, mesh, surfaceMaterials);
 
@@ -24,11 +30,24 @@ public static class M3SceneBuilder
             surfaceKeys[i] = model.GeosetKey(surfaceGeosets[i]);
         }
 
+        string[] presets = System.Array.Empty<string>();
+        var fs = _fileSystemProvider?.Invoke();
+        if (fs != null && modelPath.Length > 0)
+        {
+            int[][] raw = ModelMeshLookup.FindOutfitPresets(fs, modelPath);
+            presets = new string[raw.Length];
+            for (int i = 0; i < raw.Length; i++)
+            {
+                presets[i] = string.Join(",", raw[i]);
+            }
+        }
+
         var root = new M3ModelRoot
         {
             Name = name,
             SurfaceGeosets = surfaceGeosets,
             SurfaceKeys = surfaceKeys,
+            OutfitPresets = presets,
         };
         var instance = new MeshInstance3D { Name = "Mesh", Mesh = mesh };
 

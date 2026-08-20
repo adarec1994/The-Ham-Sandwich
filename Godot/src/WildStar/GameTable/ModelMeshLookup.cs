@@ -10,76 +10,126 @@ public static class ModelMeshLookup
     private const string Creature2DisplayInfoTbl = "DB/Creature2DisplayInfo.tbl";
     private const string ModelMeshTbl = "DB/ModelMesh.tbl";
 
-    public readonly struct VariantSlot
-    {
-        public readonly int[] Keys;
+    private const string AssetPathField = "assetPath";
+    private const string MeshIdPrefix = "modelMeshId";
+    private const int MeshIdSlots = 16;
 
-        public VariantSlot(int[] keys) { Keys = keys; }
-    }
-
-    public static VariantSlot[] FindVariantSlots(WsFileSystem fs, string modelPath)
+    public static int[][] FindOutfitPresets(WsFileSystem fs, string modelPath)
     {
         string normalized = NormalizePath(modelPath);
+        var presets = new List<int[]>();
 
-        var slots = new HashSet<int>[16];
-        for (int i = 0; i < 16; i++)
-            slots[i] = new HashSet<int>();
+        Collect(fs, Creature2ModelInfoTbl, normalized, presets);
+        Collect(fs, Creature2DisplayInfoTbl, normalized, presets);
 
-        CollectSlots(fs, Creature2ModelInfoTbl, 1, 41, 16, normalized, slots);
-        CollectSlots(fs, Creature2DisplayInfoTbl, 2, 60, 16, normalized, slots);
-
-        var result = new List<VariantSlot>();
-        for (int s = 0; s < 16; s++)
-        {
-            slots[s].Remove(0);
-            if (slots[s].Count == 0)
-                continue;
-
-            var keys = new List<int>(slots[s]);
-            keys.Sort();
-            result.Add(new VariantSlot(keys.ToArray()));
-        }
-
-        return result.ToArray();
+        return Deduplicate(presets);
     }
 
-    private static void CollectSlots(WsFileSystem fs, string tblPath, int pathField,
-                                     int meshIdStart, int meshIdCount,
-                                     string normalized, HashSet<int>[] slots)
+    private static void Collect(WsFileSystem fs, string tblPath, string normalized,
+                                List<int[]> presets)
     {
         byte[]? data = FindTbl(fs, tblPath);
-        if (data == null || !TblReader.TryParse(data, out TblReader tbl))
-            return;
-
-        for (int i = 0; i < tbl.RecordCount; i++)
+        if (data == null || !TblReader.TryParse(data, out TblReader tbl, out _))
         {
-            string path = NormalizePath(tbl.GetString(i, pathField));
-            if (!path.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) &&
-                !normalized.EndsWith(path, StringComparison.OrdinalIgnoreCase))
-                continue;
+            return;
+        }
 
-            for (int f = 0; f < meshIdCount && (meshIdStart + f) < tbl.FieldCount; f++)
+        int pathField = tbl.IndexOfField(AssetPathField);
+        if (pathField < 0)
+        {
+            return;
+        }
+
+        var meshFields = new List<int>(MeshIdSlots);
+        for (int slot = 0; slot < MeshIdSlots; slot++)
+        {
+            int index = tbl.IndexOfField(MeshIdPrefix + slot.ToString("00"));
+            if (index >= 0)
             {
-                uint v = tbl.GetUInt(i, meshIdStart + f);
-                if (v != 0 && f < 16)
-                    slots[f].Add((int)v);
+                meshFields.Add(index);
             }
         }
+
+        if (meshFields.Count == 0)
+        {
+            return;
+        }
+
+        for (int row = 0; row < tbl.RecordCount; row++)
+        {
+            if (!Matches(NormalizePath(tbl.GetString(row, pathField)), normalized))
+            {
+                continue;
+            }
+
+            var keys = new List<int>(meshFields.Count);
+            foreach (int field in meshFields)
+            {
+                uint value = tbl.GetUInt(row, field);
+                if (value != 0)
+                {
+                    keys.Add((int)value);
+                }
+            }
+
+            if (keys.Count > 0)
+            {
+                presets.Add(keys.ToArray());
+            }
+        }
+    }
+
+    private static bool Matches(string path, string normalized)
+    {
+        if (path.Length == 0)
+        {
+            return false;
+        }
+
+        return path.EndsWith(normalized, StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(path, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int[][] Deduplicate(List<int[]> presets)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var unique = new List<int[]>();
+
+        foreach (int[] preset in presets)
+        {
+            Array.Sort(preset);
+            if (seen.Add(string.Join(",", preset)))
+            {
+                unique.Add(preset);
+            }
+        }
+
+        return unique.ToArray();
     }
 
     public static Dictionary<uint, string> LoadMeshNames(WsFileSystem fs)
     {
         var names = new Dictionary<uint, string>();
-        byte[]? data = FindTbl(fs, ModelMeshTbl);
-        if (data == null || !TblReader.TryParse(data, out TblReader tbl))
-            return names;
 
-        for (int i = 0; i < tbl.RecordCount; i++)
+        byte[]? data = FindTbl(fs, ModelMeshTbl);
+        if (data == null || !TblReader.TryParse(data, out TblReader tbl, out _))
         {
-            uint id = tbl.GetUInt(i, 0);
-            string name = tbl.GetString(i, 1);
-            if (!string.IsNullOrEmpty(name))
-                names[id] = name;
+            return names;
+        }
+
+        int nameField = tbl.IndexOfField("EnumName");
+        if (nameField < 0)
+        {
+            return names;
+        }
+
+        for (int row = 0; row < tbl.RecordCount; row++)
+        {
+            string name = tbl.GetString(row, nameField);
+            if (name.Length != 0)
+            {
+                names[tbl.GetUInt(row, 0)] = name;
+            }
         }
 
         return names;
@@ -87,19 +137,24 @@ public static class ModelMeshLookup
 
     private static byte[]? FindTbl(WsFileSystem fs, string path)
     {
-        foreach (var arc in fs.Archives)
+        foreach (WsArchive archive in fs.Archives)
         {
-            if (arc.TryGetFile(path, out var f))
+            if (archive.TryGetFile(path, out WsFile file))
             {
-                try { return f.ReadAllBytes(); }
-                catch { continue; }
+                try
+                {
+                    return file.ReadAllBytes();
+                }
+                catch
+                {
+                    continue;
+                }
             }
         }
+
         return null;
     }
 
-    private static string NormalizePath(string path)
-    {
-        return path.Replace('\\', '/').TrimStart('/');
-    }
+    private static string NormalizePath(string path) =>
+        path.Replace('\\', '/').TrimStart('/');
 }

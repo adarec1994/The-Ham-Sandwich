@@ -14,9 +14,10 @@ public partial class M3ModelRoot : Node3D
     [Export] public int[] SurfaceKeys { get; set; } = Array.Empty<int>();
     [Export] public NodePath MeshPath { get; set; } = new NodePath("Skeleton/Mesh");
     [Export] public int[] HiddenVariantKeys { get; set; } = Array.Empty<int>();
-    public int SelectedVariant { get; set; }
+    [Export] public string[] OutfitPresets { get; set; } = Array.Empty<string>();
+    public int SelectedOutfit { get; set; }
 
-    private const string DropdownProperty = "Variants/Active";
+    private const string DropdownProperty = "Variants/Outfit";
     private const string CheckboxPrefix = "Variants/key_";
 
     public override void _Ready()
@@ -32,18 +33,21 @@ public partial class M3ModelRoot : Node3D
         if (keys.Length == 0)
             return list;
 
-        string hint = "All";
-        foreach (int key in keys)
-            hint += "," + key;
-
-        list.Add(new Godot.Collections.Dictionary
+        if (OutfitPresets.Length > 0)
         {
-            { "name", DropdownProperty },
-            { "type", (int)Variant.Type.Int },
-            { "usage", (int)(PropertyUsageFlags.Editor | PropertyUsageFlags.Storage) },
-            { "hint", (int)PropertyHint.Enum },
-            { "hint_string", hint },
-        });
+            string hint = "All";
+            for (int i = 0; i < OutfitPresets.Length; i++)
+                hint += ",Outfit " + (i + 1) + " (" + OutfitPresets[i].Replace(",", "+") + ")";
+
+            list.Add(new Godot.Collections.Dictionary
+            {
+                { "name", DropdownProperty },
+                { "type", (int)Variant.Type.Int },
+                { "usage", (int)(PropertyUsageFlags.Editor | PropertyUsageFlags.Storage) },
+                { "hint", (int)PropertyHint.Enum },
+                { "hint_string", hint },
+            });
+        }
 
         foreach (int key in keys)
         {
@@ -64,11 +68,9 @@ public partial class M3ModelRoot : Node3D
 
         if (name == DropdownProperty)
         {
-            if (SelectedVariant <= 0)
-                return 0;
-            int[] keys = VariantKeys();
-            int idx = Array.IndexOf(keys, SelectedVariant);
-            return idx < 0 ? 0 : idx + 1;
+            return SelectedOutfit > 0 && SelectedOutfit <= OutfitPresets.Length
+                ? SelectedOutfit
+                : 0;
         }
 
         if (name.StartsWith(CheckboxPrefix, StringComparison.Ordinal) &&
@@ -86,18 +88,11 @@ public partial class M3ModelRoot : Node3D
 
         if (name == DropdownProperty)
         {
-            int idx = value.AsInt32();
-            if (idx <= 0)
-            {
-                SelectedVariant = 0;
+            int index = value.AsInt32();
+            SelectedOutfit = index > 0 && index <= OutfitPresets.Length ? index : 0;
+            if (SelectedOutfit == 0)
                 HiddenVariantKeys = Array.Empty<int>();
-            }
-            else
-            {
-                int[] keys = VariantKeys();
-                if (idx - 1 < keys.Length)
-                    SelectedVariant = keys[idx - 1];
-            }
+
             ApplyVisibility();
             NotifyPropertyListChanged();
             return true;
@@ -106,14 +101,16 @@ public partial class M3ModelRoot : Node3D
         if (name.StartsWith(CheckboxPrefix, StringComparison.Ordinal) &&
             int.TryParse(name.AsSpan(CheckboxPrefix.Length), out int key))
         {
-            SelectedVariant = 0;
+            SelectedOutfit = 0;
             var hidden = new List<int>(HiddenVariantKeys);
             if (value.AsBool())
                 hidden.Remove(key);
             else if (!hidden.Contains(key))
                 hidden.Add(key);
+
             HiddenVariantKeys = hidden.ToArray();
             ApplyVisibility();
+            NotifyPropertyListChanged();
             return true;
         }
 
@@ -122,30 +119,22 @@ public partial class M3ModelRoot : Node3D
 
     private void ApplyVisibility()
     {
+        if (SelectedOutfit > 0 && SelectedOutfit <= OutfitPresets.Length)
+        {
+            SetActiveVariantKeys(ParsePreset(OutfitPresets[SelectedOutfit - 1]));
+            return;
+        }
+
         var instance = GetNodeOrNull<MeshInstance3D>(MeshPath)
                        ?? GetNodeOrNull<MeshInstance3D>("Mesh");
         if (instance is null) return;
 
         int surfaces = Math.Min(SurfaceKeys.Length, instance.GetSurfaceOverrideMaterialCount());
-
-        if (SelectedVariant > 0)
+        for (int i = 0; i < surfaces; i++)
         {
-            for (int i = 0; i < surfaces; i++)
-            {
-                int key = SurfaceKeys[i];
-                bool visible = key == M3File.UngatedGeoset ||
-                               (key > 0 && key == SelectedVariant);
-                instance.SetSurfaceOverrideMaterial(i, visible ? null : HiddenMaterial());
-            }
-        }
-        else
-        {
-            for (int i = 0; i < surfaces; i++)
-            {
-                int key = SurfaceKeys[i];
-                bool visible = key <= 0 || Array.IndexOf(HiddenVariantKeys, key) < 0;
-                instance.SetSurfaceOverrideMaterial(i, visible ? null : HiddenMaterial());
-            }
+            int key = SurfaceKeys[i];
+            bool visible = key <= 0 || Array.IndexOf(HiddenVariantKeys, key) < 0;
+            instance.SetSurfaceOverrideMaterial(i, visible ? null : HiddenMaterial());
         }
     }
 
@@ -184,6 +173,7 @@ public partial class M3ModelRoot : Node3D
         foreach (int key in SurfaceKeys)
             if (key > 0)
                 seen.Add(key);
+
         var keys = new int[seen.Count];
         seen.CopyTo(keys);
         return keys;
@@ -194,8 +184,25 @@ public partial class M3ModelRoot : Node3D
         var seen = new SortedSet<int>();
         foreach (int id in SurfaceGeosets)
             seen.Add(id);
+
         var ids = new int[seen.Count];
         seen.CopyTo(ids);
         return ids;
+    }
+
+    private static int[] ParsePreset(string preset)
+    {
+        if (string.IsNullOrEmpty(preset))
+            return Array.Empty<int>();
+
+        string[] parts = preset.Split(',');
+        var keys = new List<int>(parts.Length);
+        foreach (string part in parts)
+        {
+            if (int.TryParse(part.Trim(), out int key))
+                keys.Add(key);
+        }
+
+        return keys.ToArray();
     }
 }

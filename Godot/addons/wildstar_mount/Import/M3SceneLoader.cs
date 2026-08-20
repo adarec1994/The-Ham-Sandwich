@@ -64,7 +64,7 @@ public partial class M3SceneLoader : ResourceFormatLoader
         string name = NameOf(path);
         mesh.ResourceName = name;
 
-        Node3D root = M3SceneBuilder.Build(model, mesh, name, bytes, surfaceGeosets, surfaceMaterials);
+        Node3D root = M3SceneBuilder.Build(model, mesh, name, bytes, surfaceGeosets, surfaceMaterials, path);
         var scene = new PackedScene();
         Error packed = scene.Pack(root);
         root.Free();

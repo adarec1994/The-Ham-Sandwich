@@ -248,7 +248,7 @@ public partial class WildStarMountPlugin
         {
             TreeItem item = tree.CreateItem(parent);
             item.SetText(0, child.Name);
-            item.SetIcon(0, IconFor(child.Name) ?? file);
+            ApplyFileIcon(item, child, file);
             item.SetTooltipText(0, Describe(child));
 
             if (IsBank(child.Name))

@@ -186,6 +186,7 @@ public partial class WildStarMountPlugin : EditorPlugin
         WsFileSystem? old = _filesystem;
         _filesystem = null;
         _expanded.Clear();
+        _thumbnails.Clear();
         RemoveRoots();
         old?.Dispose();
         StartMount();

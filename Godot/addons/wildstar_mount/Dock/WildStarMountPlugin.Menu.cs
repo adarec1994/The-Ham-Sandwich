@@ -16,6 +16,8 @@ public partial class WildStarMountPlugin
     private const int MenuPlay = 5;
     private const int MenuStop = 6;
     private const int MenuPlace = 7;
+    private const int MenuOpenTexture = 8;
+    private const int MenuOpenTable = 9;
 
     private void InstallBridge(Tree tree)
     {
@@ -85,6 +87,18 @@ public partial class WildStarMountPlugin
             return;
         }
 
+        if (IsTexture(file.Name))
+        {
+            OpenTexture(file);
+            return;
+        }
+
+        if (IsTable(file.Name))
+        {
+            OpenTable(file);
+            return;
+        }
+
         ExtractFile(file);
     }
 
@@ -114,6 +128,16 @@ public partial class WildStarMountPlugin
             else if (IsModel(item.GetText(0)))
             {
                 menu.AddItem("Add to scene", MenuPlace);
+                menu.AddSeparator();
+            }
+            else if (IsTexture(item.GetText(0)))
+            {
+                menu.AddItem("Open texture", MenuOpenTexture);
+                menu.AddSeparator();
+            }
+            else if (IsTable(item.GetText(0)))
+            {
+                menu.AddItem("Open table", MenuOpenTable);
                 menu.AddSeparator();
             }
 
@@ -207,6 +231,14 @@ public partial class WildStarMountPlugin
             else if (id == MenuPlace)
             {
                 PlaceModel(file);
+            }
+            else if (id == MenuOpenTexture)
+            {
+                OpenTexture(file);
+            }
+            else if (id == MenuOpenTable)
+            {
+                OpenTable(file);
             }
             else if (id == MenuExtract)
             {

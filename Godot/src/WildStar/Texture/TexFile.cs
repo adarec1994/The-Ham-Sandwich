@@ -28,9 +28,53 @@ public sealed class TexFile
 
     public byte[][] Levels { get; }
 
-    public static bool TryDecode(byte[] bytes, out TexFile file, out string error)
+    public const int NormalPixelMode = 1;
+
+    public bool IsNormalMap => PixelMode == NormalPixelMode;
+
+    public static void RepackNormal(byte[] rgba)
     {
-        file = null!;
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            float nx = rgba[i + 3] / 255.0f * 2.0f - 1.0f;
+            float ny = rgba[i + 1] / 255.0f * 2.0f - 1.0f;
+            float nz = MathF.Sqrt(Math.Clamp(1.0f - nx * nx - ny * ny, 0.0f, 1.0f));
+
+            rgba[i] = (byte)Math.Clamp((nx * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f);
+            rgba[i + 1] = (byte)Math.Clamp((ny * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f);
+            rgba[i + 2] = (byte)Math.Clamp((nz * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f);
+            rgba[i + 3] = 255;
+        }
+    }
+
+    private readonly struct Header
+    {
+        public Header(int width, int height, int mips, int pixelMode, int[] quality,
+                      bool[] isConstant, int[] constantValue, int[] sizes)
+        {
+            Width = width;
+            Height = height;
+            Mips = mips;
+            PixelMode = pixelMode;
+            Quality = quality;
+            IsConstant = isConstant;
+            ConstantValue = constantValue;
+            Sizes = sizes;
+        }
+
+        public int Width { get; }
+        public int Height { get; }
+        public int Mips { get; }
+        public int PixelMode { get; }
+        public int[] Quality { get; }
+        public bool[] IsConstant { get; }
+        public int[] ConstantValue { get; }
+        public int[] Sizes { get; }
+    }
+
+    private static bool TryReadHeader(byte[] bytes, out Header header, out string error)
+    {
+        header = default;
 
         if (bytes.Length < DataStart)
         {
@@ -113,20 +157,35 @@ public sealed class TexFile
             return false;
         }
 
-        var levels = new byte[mips][];
+        header = new Header(width, height, mips, pixelMode, quality, isConstant,
+                            constantValue, sizes);
+        error = string.Empty;
+        return true;
+    }
+
+    public static bool TryDecode(byte[] bytes, out TexFile file, out string error)
+    {
+        file = null!;
+
+        if (!TryReadHeader(bytes, out Header header, out error))
+        {
+            return false;
+        }
+
+        var levels = new byte[header.Mips][];
         int offset = DataStart;
 
-        for (int i = 0; i < mips; i++)
+        for (int i = 0; i < header.Mips; i++)
         {
-            int mip = mips - 1 - i;
-            int w = Math.Max(1, width >> mip);
-            int h = Math.Max(1, height >> mip);
+            int mip = header.Mips - 1 - i;
+            int w = Math.Max(1, header.Width >> mip);
+            int h = Math.Max(1, header.Height >> mip);
 
             try
             {
-                levels[mip] = TexDecoder.DecodeLevel(bytes, offset, sizes[i], w, h,
-                                                    pixelMode, quality, isConstant,
-                                                    constantValue);
+                levels[mip] = TexDecoder.DecodeLevel(bytes, offset, header.Sizes[i], w, h,
+                                                    header.PixelMode, header.Quality,
+                                                    header.IsConstant, header.ConstantValue);
             }
             catch (Exception e)
             {
@@ -134,10 +193,65 @@ public sealed class TexFile
                 return false;
             }
 
-            offset += sizes[i];
+            offset += header.Sizes[i];
         }
 
-        file = new TexFile(width, height, mips, pixelMode, levels);
+        file = new TexFile(header.Width, header.Height, header.Mips, header.PixelMode, levels);
+        error = string.Empty;
+        return true;
+    }
+
+    public static bool TryDecodeThumbnail(byte[] bytes, int targetSize, out int width,
+                                          out int height, out byte[] rgba, out string error)
+    {
+        width = 0;
+        height = 0;
+        rgba = Array.Empty<byte>();
+
+        if (!TryReadHeader(bytes, out Header header, out error))
+        {
+            return false;
+        }
+
+        int mip = 0;
+        for (int candidate = header.Mips - 1; candidate >= 0; candidate--)
+        {
+            int w = Math.Max(1, header.Width >> candidate);
+            int h = Math.Max(1, header.Height >> candidate);
+            if (Math.Max(w, h) >= targetSize)
+            {
+                mip = candidate;
+                break;
+            }
+        }
+
+        int offset = DataStart;
+        for (int i = 0; i < header.Mips - 1 - mip; i++)
+        {
+            offset += header.Sizes[i];
+        }
+
+        int index = header.Mips - 1 - mip;
+        width = Math.Max(1, header.Width >> mip);
+        height = Math.Max(1, header.Height >> mip);
+
+        try
+        {
+            rgba = TexDecoder.DecodeLevel(bytes, offset, header.Sizes[index], width, height,
+                                          header.PixelMode, header.Quality,
+                                          header.IsConstant, header.ConstantValue);
+        }
+        catch (Exception e)
+        {
+            error = $"level {mip} ({width}x{height}): {e.Message}";
+            return false;
+        }
+
+        if (header.PixelMode == NormalPixelMode)
+        {
+            RepackNormal(rgba);
+        }
+
         error = string.Empty;
         return true;
     }
