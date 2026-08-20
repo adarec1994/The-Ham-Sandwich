@@ -1,0 +1,28 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Wildstar"
+config/description="WildStar archive browser for Godot. Every .index/.archive pair mounts as its own root in the FileSystem dock."
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
+
+[dotnet]
+
+project/assembly_name="wildstar"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/wildstar_mount/plugin.cfg")
+
+[wildstar]
+
+paths/game_directory=""
+paths/extract_directory="res://extracted"

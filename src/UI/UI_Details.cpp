@@ -148,8 +148,6 @@ namespace UI_Details
                 ImGui::PushID((int)i);
 
                 int currentVar = render->getMaterialSelectedVariant(i);
-                int variantCount = (int)render->getMaterialVariantCount(i);
-
 
                 int validVariantCount = 0;
                 std::vector<int> validVariantIndices;
@@ -165,33 +163,52 @@ namespace UI_Details
                     }
                 }
 
+                int currentValidIdx = 0;
+                for (int v = 0; v < (int)validVariantIndices.size(); ++v)
+                {
+                    if (validVariantIndices[v] == currentVar)
+                    {
+                        currentValidIdx = v;
+                        break;
+                    }
+                }
+
+                bool isLayerStack = render->getGeometry().usesTextureLayerBlending && validVariantCount > 1;
                 char headerLabel[64];
-                if (validVariantCount > 1)
-                    snprintf(headerLabel, sizeof(headerLabel), "Material %zu [Variant %d/%d]", i, currentVar + 1, validVariantCount);
+                if (isLayerStack)
+                    snprintf(headerLabel, sizeof(headerLabel), "Material %zu [%d layers]", i, validVariantCount);
+                else if (validVariantCount > 1)
+                    snprintf(headerLabel, sizeof(headerLabel), "Material %zu [Set %d/%d]", i, currentValidIdx + 1, validVariantCount);
                 else
                     snprintf(headerLabel, sizeof(headerLabel), "Material %zu", i);
 
                 if (ImGui::TreeNode((void*)(intptr_t)i, "%s", headerLabel))
                 {
-                    if (validVariantCount > 1)
+                    if (validVariantCount > 1 && !isLayerStack)
                     {
-
-                        int currentValidIdx = 0;
-                        for (int v = 0; v < (int)validVariantIndices.size(); ++v)
+                        std::string previewLabel = "Set " + std::to_string(currentValidIdx + 1);
+                        ImGui::SetNextItemWidth(150.0f);
+                        if (ImGui::BeginCombo("Texture set", previewLabel.c_str()))
                         {
-                            if (validVariantIndices[v] == currentVar)
+                            for (int v = 0; v < validVariantCount; ++v)
                             {
-                                currentValidIdx = v;
-                                break;
+                                std::string itemLabel = "Set " + std::to_string(v + 1);
+                                bool selected = (v == currentValidIdx);
+                                if (ImGui::Selectable(itemLabel.c_str(), selected))
+                                {
+                                    render->setMaterialSelectedVariant(i, validVariantIndices[v]);
+                                    currentVar = validVariantIndices[v];
+                                    currentValidIdx = v;
+                                }
+                                if (selected)
+                                    ImGui::SetItemDefaultFocus();
                             }
+                            ImGui::EndCombo();
                         }
-
-                        ImGui::SetNextItemWidth(120.0f);
-                        if (ImGui::SliderInt("Variant", &currentValidIdx, 0, validVariantCount - 1))
-                        {
-                            if (currentValidIdx < (int)validVariantIndices.size())
-                                render->setMaterialSelectedVariant(i, validVariantIndices[currentValidIdx]);
-                        }
+                    }
+                    else if (isLayerStack)
+                    {
+                        ImGui::Text("Layer stack: %d", validVariantCount);
                     }
 
                     if (i < allMaterials.size())
@@ -200,10 +217,8 @@ namespace UI_Details
 
                         ImGui::Text("Specular: %d, %d", mat.specularX, mat.specularY);
 
-                        if (!mat.variants.empty() && currentVar >= 0 && currentVar < (int)mat.variants.size())
+                        if (!mat.variants.empty())
                         {
-                            const auto& variant = mat.variants[currentVar];
-
                             ImGui::Separator();
 
                             auto drawTexture = [&](const char* id, int16_t texIndex, const std::string& path) {
@@ -265,6 +280,21 @@ namespace UI_Details
                                             ImGui::BeginTooltip();
                                             ImGui::Text("[%d] %s", texIndex,
                                                 texIndex < (int)allTextures.size() ? allTextures[texIndex].path.c_str() : path.c_str());
+                                            if (texIndex >= 0)
+                                            {
+                                                if (texIndex < (int)allTextures.size())
+                                                {
+                                                    const auto& tex = allTextures[texIndex];
+                                                    ImGui::Text("Slot: %u  Fallback: %u (%s)",
+                                                        tex.slotId, tex.fallbackType, tex.textureType.c_str());
+                                                }
+                                                const auto& alpha = render->getTextureAlphaInfo((size_t)texIndex);
+                                                ImGui::Text("Format: %s (%u)", alpha.formatName.empty() ? "unknown" : alpha.formatName.c_str(), alpha.texFormat);
+                                                ImGui::Text("Alpha pixels: %s", alpha.hasNonOpaquePixels ? "yes" : "no");
+                                                ImGui::Text("Render alpha: %s", render->getTextureRenderAlpha((size_t)texIndex) ? "yes" : "no");
+                                                if (!alpha.reason.empty())
+                                                    ImGui::TextWrapped("%s", alpha.reason.c_str());
+                                            }
                                             ImGui::EndTooltip();
                                         }
                                         return true;
@@ -273,18 +303,30 @@ namespace UI_Details
                                 return false;
                             };
 
-                            bool drewColor = drawTexture("color", variant.textureIndexA, variant.textureColorPath);
-                            if (drewColor && variant.textureIndexB >= 0)
-                                ImGui::SameLine();
-                            bool drewNormal = drawTexture("normal", variant.textureIndexB, variant.textureNormalPath);
+                            auto drawVariantRow = [&](const char* label, const M3MaterialVariant& variant) {
+                                ImGui::TextUnformatted(label);
+                                ImGui::SameLine(95.0f);
+                                bool drewColor = drawTexture("color", variant.textureIndexA, variant.textureColorPath);
+                                if (drewColor && variant.textureIndexB >= 0)
+                                    ImGui::SameLine();
+                                drawTexture("normal", variant.textureIndexB, variant.textureNormalPath);
+                            };
 
-                            if ((drewColor || drewNormal) && variant.textureIndexC >= 0)
-                                ImGui::SameLine();
-                            bool drewColor2 = drawTexture("color2", variant.textureIndexC, variant.textureColor2Path);
-
-                            if ((drewColor || drewNormal || drewColor2) && variant.textureIndexD >= 0)
-                                ImGui::SameLine();
-                            drawTexture("color3", variant.textureIndexD, variant.textureColor3Path);
+                            if (isLayerStack)
+                            {
+                                for (int v = 0; v < validVariantCount; ++v)
+                                {
+                                    int variantIndex = validVariantIndices[v];
+                                    if (variantIndex < 0 || variantIndex >= (int)mat.variants.size())
+                                        continue;
+                                    std::string label = "Layer " + std::to_string(v + 1);
+                                    drawVariantRow(label.c_str(), mat.variants[variantIndex]);
+                                }
+                            }
+                            else if (currentVar >= 0 && currentVar < (int)mat.variants.size())
+                            {
+                                drawVariantRow("Textures", mat.variants[currentVar]);
+                            }
                         }
                     }
 
@@ -357,11 +399,16 @@ namespace UI_Details
                     {
                         ImGui::BeginTooltip();
                         ImGui::Text("[%zu] %s", i, tex.path.c_str());
-                        ImGui::Text("Type: %s", tex.type == 0 ? "color" : (tex.type == 1 ? "normal" : "unknown"));
+                        ImGui::Text("Slot: %u  Fallback: %u (%s)",
+                            tex.slotId, tex.fallbackType, tex.textureType.c_str());
+                        const auto& alpha = render->getTextureAlphaInfo(i);
+                        ImGui::Text("Format: %s (%u)", alpha.formatName.empty() ? "unknown" : alpha.formatName.c_str(), alpha.texFormat);
+                        ImGui::Text("Alpha pixels: %s", alpha.hasNonOpaquePixels ? "yes" : "no");
+                        ImGui::Text("Render alpha: %s", render->getTextureRenderAlpha(i) ? "yes" : "no");
                         if (tex.intensity != 0.0f)
                             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Intensity: %.3f", tex.intensity);
-                        if (tex.hasAlpha)
-                            ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "Has Alpha");
+                        if (!alpha.reason.empty())
+                            ImGui::TextWrapped("%s", alpha.reason.c_str());
                         ImGui::EndTooltip();
                     }
                 }

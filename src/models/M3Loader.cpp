@@ -362,9 +362,8 @@ void M3Loader::ReadTextures(const uint8_t* ptr, size_t size, M3ModelData& model)
         if (ofs + TEX_ENTRY_SIZE > size) break;
 
         auto& tex = model.textures[i];
-        tex.unk0 = Read<int16_t>(ptr, ofs);
-        tex.type = ptr[ofs + 2];
-        tex.unk1 = ptr[ofs + 3];
+        tex.slotId = Read<uint16_t>(ptr, ofs);
+        tex.fallbackType = Read<uint16_t>(ptr, ofs + 2);
         tex.flags = Read<int32_t>(ptr, ofs + 4);
         tex.intensity = Read<float>(ptr, ofs + 8);
         tex.unk4 = ptr[ofs + 12];
@@ -385,8 +384,9 @@ void M3Loader::ReadTextures(const uint8_t* ptr, size_t size, M3ModelData& model)
             }
         }
 
-        if (tex.type == 0) tex.textureType = "color";
-        else if (tex.type == 1) tex.textureType = "normal";
+        if (tex.fallbackType == 0) tex.textureType = "color";
+        else if (tex.fallbackType == 1) tex.textureType = "normal";
+        else if (tex.fallbackType == 2) tex.textureType = "special";
         else tex.textureType = "unknown";
     }
 }
@@ -428,47 +428,6 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
                 var.textureIndexB = Read<int16_t>(ptr, descOfs + 2);
                 std::memcpy(var.unkValues.data(), ptr + descOfs + 4, 292);
 
-                int16_t rawLayerC = static_cast<int16_t>(var.unkValues[4]);
-                int16_t rawLayerD = static_cast<int16_t>(var.unkValues[8]);
-
-                bool layerCValid = rawLayerC > 0 && rawLayerC < (int)model.textures.size() &&
-                                   model.textures[rawLayerC].type == 0 &&
-                                   rawLayerC != var.textureIndexA && rawLayerC != var.textureIndexB;
-
-                if (layerCValid) {
-                    var.textureIndexC = rawLayerC;
-                }
-
-                bool layerDValid = rawLayerD > 0 && rawLayerD < (int)model.textures.size() &&
-                                   model.textures[rawLayerD].type == 0 &&
-                                   rawLayerD != var.textureIndexA && rawLayerD != var.textureIndexB &&
-                                   rawLayerD != var.textureIndexC;
-
-                if (layerDValid) {
-                    var.textureIndexD = rawLayerD;
-                }
-
-                if (!layerCValid && var.textureIndexC < 0) {
-                    for (int ti = 0; ti < (int)model.textures.size(); ti++) {
-                        if (model.textures[ti].type == 0 &&
-                            ti != var.textureIndexA && ti != var.textureIndexB) {
-                            var.textureIndexC = ti;
-                            break;
-                        }
-                    }
-                }
-
-                if (!layerDValid && var.textureIndexD < 0) {
-                    for (int ti = 0; ti < (int)model.textures.size(); ti++) {
-                        if (model.textures[ti].type == 0 &&
-                            ti != var.textureIndexA && ti != var.textureIndexB &&
-                            ti != var.textureIndexC) {
-                            var.textureIndexD = ti;
-                            break;
-                        }
-                    }
-                }
-
                 if (var.textureIndexA >= 0 && var.textureIndexA < (int)model.textures.size()) {
                     auto& tex = model.textures[var.textureIndexA];
                     size_t dotPos = tex.path.find('.');
@@ -479,18 +438,6 @@ void M3Loader::ReadMaterials(const uint8_t* ptr, size_t size, M3ModelData& model
                     auto& tex = model.textures[var.textureIndexB];
                     size_t dotPos = tex.path.find('.');
                     var.textureNormalPath = (dotPos != std::string::npos) ?
-                        tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
-                }
-                if (var.textureIndexC >= 0 && var.textureIndexC < (int)model.textures.size()) {
-                    auto& tex = model.textures[var.textureIndexC];
-                    size_t dotPos = tex.path.find('.');
-                    var.textureColor2Path = (dotPos != std::string::npos) ?
-                        tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
-                }
-                if (var.textureIndexD >= 0 && var.textureIndexD < (int)model.textures.size()) {
-                    auto& tex = model.textures[var.textureIndexD];
-                    size_t dotPos = tex.path.find('.');
-                    var.textureColor3Path = (dotPos != std::string::npos) ?
                         tex.path.substr(0, dotPos) + ".tex" : tex.path + ".tex";
                 }
             }

@@ -19,6 +19,22 @@ using namespace DirectX;
 
 class M3Render {
 public:
+    struct TextureAlphaInfo {
+        bool formatCanStoreAlpha = false;
+        bool hasNonOpaquePixels = false;
+        bool hasCutoutAlpha = false;
+        bool hasBlendAlpha = false;
+        float transparentRatio = 0.0f;
+        float belowCutoffRatio = 0.0f;
+        float midAlphaRatio = 0.0f;
+        float nonOpaqueRatio = 0.0f;
+        float opaqueRatio = 0.0f;
+        uint32_t texFormat = 0;
+        uint32_t compressionFormat = 0;
+        std::string formatName;
+        std::string reason;
+    };
+
     static void SetDevice(ID3D11Device* device, ID3D11DeviceContext* context);
     static void InitSharedResources();
 
@@ -39,6 +55,8 @@ public:
     const std::vector<M3Bone>& getAllBones() const { return bones; }
     const std::vector<M3Texture>& getAllTextures() const { return textures; }
     const std::vector<ComPtr<ID3D11ShaderResourceView>>& getGLTextures() const { return mTextureSRVs; }
+    const TextureAlphaInfo& getTextureAlphaInfo(size_t i) const;
+    bool getTextureRenderAlpha(size_t i) const;
     const std::vector<M3ModelAnimation>& getAllAnimations() const { return animations; }
 
     size_t getMaterialCount() const;
@@ -119,9 +137,11 @@ private:
     static ComPtr<ID3D11RasterizerState> sRasterState;
     static ComPtr<ID3D11DepthStencilState> sDepthState;
     static ComPtr<ID3D11BlendState> sBlendState;
+    static ComPtr<ID3D11BlendState> sAlphaBlendState;
     static bool sShadersInitialized;
 
     static std::unordered_map<std::string, ComPtr<ID3D11ShaderResourceView>> sTextureSRVCache;
+    static std::unordered_map<std::string, TextureAlphaInfo> sTextureAlphaInfoCache;
     static std::mutex sTextureCacheMutex;
 
     ComPtr<ID3D11Buffer> mVertexBuffer;
@@ -138,6 +158,9 @@ private:
     std::vector<M3Texture> textures;
     std::vector<M3ModelAnimation> animations;
     std::vector<ComPtr<ID3D11ShaderResourceView>> mTextureSRVs;
+    std::vector<TextureAlphaInfo> mTextureAlphaInfo;
+    std::vector<uint8_t> mTextureUsesAlphaTest;
+    std::vector<uint8_t> mTextureAlphaModes;
     M3Geometry geometry;
 
     std::vector<int> materialSelectedVariant;
@@ -182,10 +205,13 @@ private:
 
     void precomputeBoneData();
     void loadTextures(const M3ModelData& data, const ArchivePtr& arc);
-    ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path, bool* outHasAlpha = nullptr);
+    ComPtr<ID3D11ShaderResourceView> loadTextureFromArchive(const ArchivePtr& arc, const std::string& path, TextureAlphaInfo* outAlphaInfo = nullptr);
     ComPtr<ID3D11ShaderResourceView> createFallbackWhite();
     ID3D11ShaderResourceView* resolveDiffuseTexture(uint16_t materialId, int variant) const;
     int resolveTextureLayers(uint16_t materialId, int variant, ID3D11ShaderResourceView* outSRVs[4]) const;
+    uint8_t textureIndexAlphaMode(int textureIndex) const;
+    bool textureIndexUsesAlphaTest(int textureIndex) const;
+    uint8_t materialAlphaMode(uint16_t materialId, int variant) const;
     void resetBoneMatricesToBindPose();
 
     struct alignas(16) M3ConstantBuffer {
@@ -196,7 +222,8 @@ private:
         float highlightMix;
         int useSkinning;
         int useLayerBlending;  // Whether to use multi-texture layer blending
-        XMFLOAT2 pad;
+        int alphaMode;
+        float alphaCutoff;
     };
 
     struct alignas(16) BoneMatrixBuffer {

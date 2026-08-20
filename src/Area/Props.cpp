@@ -256,7 +256,7 @@ void PropLoader::Initialize(size_t numThreads)
     if (mRunning.load()) return;
 
     if (numThreads == 0)
-        numThreads = std::max(1u, std::thread::hardware_concurrency() - 1);
+        numThreads = 2;
 
     mRunning.store(true);
     mWorkers.reserve(numThreads);
@@ -304,10 +304,18 @@ void PropLoader::Shutdown()
 
 void PropLoader::SetArchive(const ArchivePtr& archive)
 {
-    std::lock_guard<std::mutex> archiveLock(mArchiveMutex);
-    std::lock_guard<std::mutex> fileLock(mFileCacheMutex);
-    mArchive = archive;
-    mFileCache.clear();
+    bool archiveChanged = false;
+    {
+        std::lock_guard<std::mutex> archiveLock(mArchiveMutex);
+        archiveChanged = mArchive.get() != archive.get();
+        mArchive = archive;
+    }
+
+    if (archiveChanged)
+    {
+        std::lock_guard<std::mutex> fileLock(mFileCacheMutex);
+        mFileCache.clear();
+    }
 }
 
 void PropLoader::ClearCache()
@@ -871,7 +879,7 @@ void PropLoader::ProcessGPUUploads(int maxPerFrame)
     }
 
     int texturesUploaded = 0;
-    int maxTexturesPerFrame = 50;
+    int maxTexturesPerFrame = std::max(2, maxPerFrame * 2);
 
     if (archive)
     {

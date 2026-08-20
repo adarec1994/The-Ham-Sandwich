@@ -412,7 +412,9 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
             std::memcpy(&texEntry, ptr + entryOfs, sizeof(M3TextureV95));
 
             M3Texture tex;
-            tex.textureType = static_cast<int32_t>(i);
+            tex.slotId = 0xFFFF;
+            tex.fallbackType = 0;
+            tex.textureType = "color";
 
             if (texEntry.ofsName > 0 && texEntry.lenName > 0) {
                 size_t nameOfs = texEnd + texEntry.ofsName;

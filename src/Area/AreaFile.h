@@ -325,6 +325,8 @@ public:
     void loadAllPropsWithProgress(std::function<void(size_t, size_t)> progressCallback);
     void loadAllPropsAsync();
     void loadPropsInView(const XMFLOAT3& cameraPos, float radius);
+    size_t streamPropsNearCamera(const XMFLOAT3& cameraPos, float radius, size_t maxToQueue);
+    size_t streamPropsInVisibleChunks(const AreaRenderCulling& culling, size_t maxToQueue);
     void updatePropLoading();
 
     [[nodiscard]] float getMaxHeight() const { return mMaxHeight; }

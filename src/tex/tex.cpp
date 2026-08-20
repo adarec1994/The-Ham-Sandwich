@@ -55,6 +55,52 @@ namespace Tex
         showA = true;
     }
 
+    const char* TextureTypeName(TextureType type)
+    {
+        switch (type)
+        {
+        case TextureType::Jpeg1: return "JPEG color+alpha";
+        case TextureType::Jpeg2: return "JPEG channels";
+        case TextureType::Jpeg3: return "JPEG color";
+        case TextureType::Argb1: return "ARGB";
+        case TextureType::Argb2: return "ARGB";
+        case TextureType::Argb16: return "ARGB16";
+        case TextureType::Rgb: return "RGB";
+        case TextureType::Grayscale: return "R8";
+        case TextureType::Garbage: return "RGBA16";
+        case TextureType::DXT1: return "DXT1";
+        case TextureType::DXT3: return "DXT3";
+        case TextureType::DXT5: return "DXT5";
+        case TextureType::Unknown:
+        default:
+            return "Unknown";
+        }
+    }
+
+    bool TextureTypeCanStoreAlpha(const Header& header)
+    {
+        switch (header.textureType)
+        {
+        case TextureType::DXT3:
+        case TextureType::DXT5:
+        case TextureType::Argb1:
+        case TextureType::Argb2:
+        case TextureType::Argb16:
+        case TextureType::Garbage:
+            return true;
+
+        case TextureType::Jpeg1:
+            return true;
+
+        case TextureType::Jpeg2:
+        case TextureType::Jpeg3:
+            return header.layerInfos[3].hasReplacement == 0;
+
+        default:
+            return false;
+        }
+    }
+
     bool Header::read(const uint8_t* data, size_t size, size_t& offset)
     {
         if (size < 4) return false;
@@ -202,6 +248,9 @@ namespace Tex
                     pal[2][1] = (uint8_t)((g0 + g1) / 2);
                     pal[2][2] = (uint8_t)((b0 + b1) / 2);
                     pal[2][3] = 255;
+                    pal[3][0] = 0;
+                    pal[3][1] = 0;
+                    pal[3][2] = 0;
                     pal[3][3] = 255;
                 }
 

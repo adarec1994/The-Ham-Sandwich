@@ -109,9 +109,8 @@ struct M3ModelAnimation {
 };
 
 struct M3Texture {
-    int16_t unk0 = 0;
-    uint8_t type = 0;
-    uint8_t unk1 = 0;
+    uint16_t slotId = 0;        // Client material slot/category id. 0xFFFF means unassigned/custom.
+    uint16_t fallbackType = 0;  // Client texture fallback selector: 0=color, 1=normal, 2=special.
     int32_t flags = 0;
     float intensity = 0.0f;
     uint8_t unk4 = 0;
@@ -126,15 +125,11 @@ struct M3Texture {
 };
 
 struct M3MaterialVariant {
-    int16_t textureIndexA = -1;  // Diffuse/color layer 0
-    int16_t textureIndexB = -1;  // Normal map
-    int16_t textureIndexC = -1;  // Color layer 1 (texture blend)
-    int16_t textureIndexD = -1;  // Color layer 2 (texture blend)
+    int16_t textureIndexA = -1;  // Diffuse/color selector
+    int16_t textureIndexB = -1;  // Normal selector
     std::array<uint16_t, 146> unkValues{};
     std::string textureColorPath;
     std::string textureNormalPath;
-    std::string textureColor2Path;  // Second color layer
-    std::string textureColor3Path;  // Third color layer
 };
 
 struct M3Material {

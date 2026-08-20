@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <unordered_set>
 
 using namespace DirectX;
 
@@ -72,6 +73,32 @@ static bool BoundsVisibleForCamera(const AreaRenderCulling& culling,
     const float ez = std::max((maxBounds.z - minBounds.z) * 0.5f, 1.0f);
     const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
 
+    XMFLOAT3 toCenter(
+        center.x - culling.cameraPosition.x,
+        center.y - culling.cameraPosition.y,
+        center.z - culling.cameraPosition.z
+    );
+
+    const float forwardDist = Dot(toCenter, culling.cameraForward);
+    if (forwardDist < -radius || forwardDist > culling.farDistance + radius)
+        return false;
+
+    const float depth = std::max(forwardDist, 0.0f);
+    const float rightDist = std::abs(Dot(toCenter, culling.cameraRight));
+    if (rightDist > depth * culling.tanHalfFovX + radius)
+        return false;
+
+    const float upDist = std::abs(Dot(toCenter, culling.cameraUp));
+    if (upDist > depth * culling.tanHalfFovY + radius)
+        return false;
+
+    return true;
+}
+
+static bool SphereVisibleForCamera(const AreaRenderCulling& culling,
+                                   const XMFLOAT3& center,
+                                   float radius)
+{
     XMFLOAT3 toCenter(
         center.x - culling.cameraPosition.x,
         center.y - culling.cameraPosition.y,
@@ -748,32 +775,127 @@ void AreaFile::loadAllPropsAsync()
 
 void AreaFile::loadPropsInView(const XMFLOAT3& cameraPos, float radius)
 {
+    streamPropsNearCamera(cameraPos, radius, mProps.size());
+}
+
+size_t AreaFile::streamPropsNearCamera(const XMFLOAT3& cameraPos, float radius, size_t maxToQueue)
+{
+    if (maxToQueue == 0 || mProps.empty()) return 0;
+
     auto& loader = PropLoader::Instance();
     loader.SetArchive(mArchive);
+
     std::vector<std::pair<float, Prop*>> sorted;
-    sorted.reserve(mProps.size());
-    float radiusSq = radius * radius;
+    sorted.reserve(std::min(maxToQueue * 2, mProps.size()));
+
+    const float radiusSq = radius * radius;
     for (auto& prop : mProps)
     {
-        if (prop.loaded || prop.loadRequested) continue;
+        if (prop.loaded.load(std::memory_order_acquire) || prop.loadRequested.load(std::memory_order_acquire))
+            continue;
+        if (prop.path.empty()) continue;
+        if (prop.modelType == PropModelType::Unk_2 || prop.modelType == PropModelType::Unk_4)
+            continue;
+
         XMFLOAT3 propWorldPos;
         propWorldPos.x = prop.position.x + mWorldOffset.x;
         propWorldPos.y = prop.position.y + mWorldOffset.y;
         propWorldPos.z = prop.position.z + mWorldOffset.z;
-        float dx = propWorldPos.x - cameraPos.x;
-        float dy = propWorldPos.y - cameraPos.y;
-        float dz = propWorldPos.z - cameraPos.z;
-        float distSq = dx*dx + dy*dy + dz*dz;
+
+        const float dx = propWorldPos.x - cameraPos.x;
+        const float dy = propWorldPos.y - cameraPos.y;
+        const float dz = propWorldPos.z - cameraPos.z;
+        const float distSq = dx * dx + dy * dy + dz * dz;
         if (distSq <= radiusSq)
             sorted.push_back({distSq, &prop});
     }
-    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    if (sorted.empty()) return 0;
+
+    std::sort(sorted.begin(), sorted.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+
     std::vector<Prop*> toLoad;
-    toLoad.reserve(sorted.size());
+    toLoad.reserve(std::min(maxToQueue, sorted.size()));
     for (auto& [dist, prop] : sorted)
+    {
+        (void)dist;
         toLoad.push_back(prop);
-    if (!toLoad.empty())
-        loader.QueueProps(toLoad);
+        if (toLoad.size() >= maxToQueue)
+            break;
+    }
+
+    loader.QueueProps(toLoad);
+    return toLoad.size();
+}
+
+size_t AreaFile::streamPropsInVisibleChunks(const AreaRenderCulling& culling, size_t maxToQueue)
+{
+    if (maxToQueue == 0 || mProps.empty()) return 0;
+
+    auto& loader = PropLoader::Instance();
+    loader.SetArchive(mArchive);
+
+    std::vector<std::pair<float, Prop*>> candidates;
+    candidates.reserve(std::min(maxToQueue * 2, mProps.size()));
+    std::unordered_set<uint32_t> seen;
+
+    for (const auto& chunk : mChunks)
+    {
+        if (!chunk || !chunk->isFullyInitialized()) continue;
+        if (!BoundsVisibleForCamera(culling, chunk->getMinBounds(), chunk->getMaxBounds(), mWorldOffset))
+            continue;
+
+        const auto& propIds = chunk->getProps().uniqueIDs;
+        for (uint32_t uniqueID : propIds)
+        {
+            if (!seen.insert(uniqueID).second) continue;
+
+            auto it = mPropLookup.find(uniqueID);
+            if (it == mPropLookup.end() || it->second >= mProps.size()) continue;
+
+            Prop& prop = mProps[it->second];
+            if (prop.loaded.load(std::memory_order_acquire) || prop.loadRequested.load(std::memory_order_acquire))
+                continue;
+            if (prop.path.empty()) continue;
+            if (prop.modelType == PropModelType::Unk_2 || prop.modelType == PropModelType::Unk_4)
+                continue;
+
+            XMFLOAT3 pos(
+                prop.position.x + mWorldOffset.x,
+                prop.position.y + mWorldOffset.y,
+                prop.position.z + mWorldOffset.z
+            );
+
+            const float radius = std::max(prop.scale * 20.0f, 32.0f);
+            if (!SphereVisibleForCamera(culling, pos, radius))
+                continue;
+
+            const float dx = pos.x - culling.cameraPosition.x;
+            const float dy = pos.y - culling.cameraPosition.y;
+            const float dz = pos.z - culling.cameraPosition.z;
+            const float distSq = dx * dx + dy * dy + dz * dz;
+            candidates.push_back({distSq, &prop});
+        }
+    }
+
+    if (candidates.empty()) return 0;
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::vector<Prop*> toLoad;
+    toLoad.reserve(std::min(maxToQueue, candidates.size()));
+    for (const auto& [distSq, prop] : candidates)
+    {
+        (void)distSq;
+        toLoad.push_back(prop);
+        if (toLoad.size() >= maxToQueue)
+            break;
+    }
+
+    loader.QueueProps(toLoad);
+    return toLoad.size();
 }
 
 void AreaFile::updatePropLoading()

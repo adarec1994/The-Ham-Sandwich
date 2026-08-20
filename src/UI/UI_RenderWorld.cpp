@@ -349,6 +349,26 @@ void HandleAreaPicking(AppState& state)
     CheckAreaSelection(state);
 }
 
+static void StreamVisibleProps(const AreaRenderCulling& culling)
+{
+    static constexpr size_t MaxPropRequestsPerFrame = 24;
+    static constexpr int MaxModelUploadsPerFrame = 2;
+    static constexpr float PropStreamRadius = 2048.0f;
+
+    size_t remaining = MaxPropRequestsPerFrame;
+    for (const auto& area : gLoadedAreas)
+    {
+        if (!area || remaining == 0) continue;
+        if (!BoundsVisibleForCamera(culling, area->getWorldMinBounds(), area->getWorldMaxBounds()))
+            continue;
+
+        const size_t queued = area->streamPropsNearCamera(culling.cameraPosition, PropStreamRadius, remaining);
+        remaining -= (queued < remaining ? queued : remaining);
+    }
+
+    PropLoader::Instance().ProcessGPUUploads(MaxModelUploadsPerFrame);
+}
+
 void RenderAreas(const AppState& state, int display_w, int display_h)
 {
     if (display_w <= 0 || display_h <= 0) return;
@@ -383,7 +403,7 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
     DirectX::XMMATRIX dxProj = ToDXMatrix(projection);
 
     static constexpr float FovYDegrees = 45.0f;
-    static constexpr float TerrainDrawDistance = 4096.0f;
+    static constexpr float TerrainDrawDistance = 1536.0f;
     const float tanHalfFovY = std::tan(glm::radians(FovYDegrees) * 0.5f);
     const float aspect = static_cast<float>(display_w) / static_cast<float>(display_h);
 
@@ -458,12 +478,16 @@ void RenderAreas(const AppState& state, int display_w, int display_h)
         const Prop* selectedProp = nullptr;
         DirectX::XMMATRIX selectedPropModelMatrix = DirectX::XMMatrixIdentity();
 
+        StreamVisibleProps(culling);
+
         if (gShowProps)
         {
             for (size_t areaIdx = 0; areaIdx < gLoadedAreas.size(); ++areaIdx)
             {
                 const auto& area = gLoadedAreas[areaIdx];
                 if (!area) continue;
+                if (!BoundsVisibleForCamera(culling, area->getWorldMinBounds(), area->getWorldMaxBounds()))
+                    continue;
 
                 DirectX::XMFLOAT3 worldOffset = area->getWorldOffset();
                 const auto& props = area->getProps();

@@ -53,6 +53,28 @@ static std::mutex gDumpMutex;
 extern void SnapCameraToLoaded(AppState& state);
 extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
 
+static void QueueInitialPropsForLoadedAreas(const AppState& state)
+{
+    static constexpr size_t MaxInitialPropRequests = 64;
+    static constexpr float InitialPropRadius = 2048.0f;
+
+    DirectX::XMFLOAT3 cameraPos(
+        state.camera.Position.x,
+        state.camera.Position.y,
+        state.camera.Position.z
+    );
+
+    size_t remaining = MaxInitialPropRequests;
+    for (const auto& area : gLoadedAreas)
+    {
+        if (!area || remaining == 0) continue;
+        const size_t queued = area->streamPropsNearCamera(cameraPos, InitialPropRadius, remaining);
+        remaining -= (queued < remaining ? queued : remaining);
+    }
+
+    PropLoader::Instance().ProcessGPUUploads(2);
+}
+
 void StartLoadingModel(const ArchivePtr& arc, const std::shared_ptr<FileEntry>& file, const std::string& name)
 {
     if (gIsLoadingModel) return;
@@ -186,6 +208,7 @@ void ProcessAreaLoading(AppState& state)
         {
             state.currentArea = gLoadedAreas.back();
             SnapCameraToLoaded(state);
+            QueueInitialPropsForLoadedAreas(state);
         }
         else
         {

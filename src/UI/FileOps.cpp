@@ -25,7 +25,6 @@ extern void SnapCameraToLoaded(AppState& state);
 extern ID3D11Device* gDevice;
 
 namespace UI_ContentBrowser {
-
     bool sIsOpen = true;
     bool sIsDocked = true;
     float sCurrentHeight = 300.0f;
@@ -43,6 +42,7 @@ namespace UI_ContentBrowser {
     std::string sSelectedPath;
 
     char sSearchFilter[256] = "";
+    ContentTypeFilter sContentTypeFilter = ContentTypeFilter::None;
 
     std::vector<FileInfo> sCachedFiles;
     bool sNeedsRefresh = true;
@@ -591,7 +591,45 @@ namespace UI_ContentBrowser {
         return filename;
     }
 
-    void CollectRecursive(const ArchivePtr& archive, const IFileSystemEntryPtr& folder, const std::string& filterLower, std::vector<FileInfo>& outList)
+    static bool MatchesContentTypeFilter(const std::string& extension, ContentTypeFilter typeFilter)
+    {
+        switch (typeFilter)
+        {
+        case ContentTypeFilter::Area:
+            return extension == ".area";
+        case ContentTypeFilter::Texture:
+            return extension == ".tex";
+        case ContentTypeFilter::Model:
+            return extension == ".m3";
+        case ContentTypeFilter::None:
+        default:
+            return true;
+        }
+    }
+
+    static void QueueInitialPropsForLoadedAreas(const AppState& state)
+    {
+        static constexpr size_t MaxInitialPropRequests = 64;
+        static constexpr float InitialPropRadius = 2048.0f;
+
+        DirectX::XMFLOAT3 cameraPos(
+            state.camera.Position.x,
+            state.camera.Position.y,
+            state.camera.Position.z
+        );
+
+        size_t remaining = MaxInitialPropRequests;
+        for (const auto& area : gLoadedAreas)
+        {
+            if (!area || remaining == 0) continue;
+            const size_t queued = area->streamPropsNearCamera(cameraPos, InitialPropRadius, remaining);
+            remaining -= (queued < remaining ? queued : remaining);
+        }
+
+        PropLoader::Instance().ProcessGPUUploads(2);
+    }
+
+    void CollectRecursive(const ArchivePtr& archive, const IFileSystemEntryPtr& folder, const std::string& filterLower, ContentTypeFilter typeFilter, std::vector<FileInfo>& outList)
     {
         if (!folder || !folder->isDirectory()) return;
 
@@ -601,12 +639,15 @@ namespace UI_ContentBrowser {
 
             if (child->isDirectory())
             {
-                CollectRecursive(archive, child, filterLower, outList);
+                CollectRecursive(archive, child, filterLower, typeFilter, outList);
             }
             else
             {
                 std::string name = wstring_to_utf8(child->getEntryName());
                 std::string ext = GetExtension(name);
+
+                if (!MatchesContentTypeFilter(ext, typeFilter))
+                    continue;
 
                 // Apply WEM naming
                 if (ext == ".wem") {
@@ -668,6 +709,8 @@ namespace UI_ContentBrowser {
         LoadWemNameLookup(state.archives);
 
         bool isFiltering = (sSearchFilter[0] != '\0');
+        bool hasTypeFilter = (sContentTypeFilter != ContentTypeFilter::None);
+        bool useRecursiveFilter = isFiltering || hasTypeFilter;
         std::string filterLower;
         if (isFiltering) {
             filterLower = sSearchFilter;
@@ -684,6 +727,9 @@ namespace UI_ContentBrowser {
                 info.entry = nullptr;
                 info.archive = sBnkViewArchive;
                 info.isDirectory = false;
+
+                if (!MatchesContentTypeFilter(info.extension, sContentTypeFilter))
+                    continue;
 
                 if (isFiltering) {
                     std::string nameLower = info.name;
@@ -702,9 +748,9 @@ namespace UI_ContentBrowser {
                 auto root = archive->getRoot();
                 if (!root) continue;
 
-                if (isFiltering)
+                if (useRecursiveFilter)
                 {
-                    CollectRecursive(archive, root, filterLower, sCachedFiles);
+                    CollectRecursive(archive, root, filterLower, sContentTypeFilter, sCachedFiles);
                 }
                 else
                 {
@@ -721,9 +767,9 @@ namespace UI_ContentBrowser {
         }
         else if (sSelectedArchive)
         {
-            if (isFiltering)
+            if (useRecursiveFilter)
             {
-                CollectRecursive(sSelectedArchive, sSelectedFolder, filterLower, sCachedFiles);
+                CollectRecursive(sSelectedArchive, sSelectedFolder, filterLower, sContentTypeFilter, sCachedFiles);
             }
             else
             {
@@ -754,7 +800,7 @@ namespace UI_ContentBrowser {
             return a.name < b.name;
         });
 
-        if (sSelectedFolder && !isFiltering)
+        if (sSelectedFolder && !useRecursiveFilter)
         {
             bool hasAreaFiles = false;
             for (const auto& f : sCachedFiles)
@@ -831,7 +877,7 @@ namespace UI_ContentBrowser {
             state.currentArea = af;
             SnapCameraToLoaded(state);
 
-            af->loadAllPropsAsync();
+            QueueInitialPropsForLoadedAreas(state);
             gShowProps = true;
         }
         else
@@ -1019,8 +1065,7 @@ namespace UI_ContentBrowser {
             {
                 state.currentArea = gLoadedAreas[0];
                 SnapCameraToLoaded(state);
-                for (auto& area : gLoadedAreas)
-                    area->loadAllPropsAsync();
+                QueueInitialPropsForLoadedAreas(state);
                 gShowProps = true;
             }
 

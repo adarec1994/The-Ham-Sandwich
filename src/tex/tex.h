@@ -66,6 +66,9 @@ namespace Tex
         bool read(const uint8_t* data, size_t size, size_t& offset);
     };
 
+    const char* TextureTypeName(TextureType type);
+    bool TextureTypeCanStoreAlpha(const Header& header);
+
     struct ImageRGBA
     {
         int width = 0;

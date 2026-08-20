@@ -17,6 +17,14 @@ struct AppState;
 
 namespace UI_ContentBrowser {
 
+    enum class ContentTypeFilter
+    {
+        None,
+        Area,
+        Texture,
+        Model
+    };
+
     struct FileInfo
     {
         std::string name;
@@ -77,6 +85,7 @@ namespace UI_ContentBrowser {
     extern std::string sSelectedPath;
 
     extern char sSearchFilter[256];
+    extern ContentTypeFilter sContentTypeFilter;
 
     extern std::vector<FileInfo> sCachedFiles;
     extern bool sNeedsRefresh;
@@ -136,7 +145,7 @@ namespace UI_ContentBrowser {
     void ProcessThumbnailResults();
     std::string GetExtension(const std::string& filename);
     bool FindPathToNode(const IFileSystemEntryPtr& current, const IFileSystemEntryPtr& target);
-    void CollectRecursive(const ArchivePtr& archive, const IFileSystemEntryPtr& folder, const std::string& filterLower, std::vector<FileInfo>& outList);
+    void CollectRecursive(const ArchivePtr& archive, const IFileSystemEntryPtr& folder, const std::string& filterLower, ContentTypeFilter typeFilter, std::vector<FileInfo>& outList);
     void RefreshFileList(AppState& state);
     void LoadSingleArea(AppState& state, const ArchivePtr& arc, const std::shared_ptr<FileEntry>& fileEntry);
     void LoadAllAreasInFolder(AppState& state);

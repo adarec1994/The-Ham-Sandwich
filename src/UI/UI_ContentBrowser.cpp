@@ -37,6 +37,8 @@
 #include <condition_variable>
 #include <fstream>
 #include <cstring>
+#include <cctype>
+#include <exception>
 
 extern void SnapCameraToLoaded(AppState& state);
 extern void SnapCameraToModel(AppState& state, const glm::vec3& boundsMin, const glm::vec3& boundsMax);
@@ -44,6 +46,381 @@ extern ID3D11Device* gDevice;
 extern ID3D11DeviceContext* gContext;
 
 namespace UI_ContentBrowser {
+
+    enum class BulkExtractMode
+    {
+        Raw,
+        TexturePNG,
+        TextureJPG,
+        TextureTIFF,
+        TextureDDS
+    };
+
+    static BulkExtractMode sBulkExtractMode = BulkExtractMode::Raw;
+    static std::vector<FileInfo> sBulkExtractFiles;
+    static std::atomic<bool> sBulkExtractActive{false};
+    static std::atomic<bool> sBulkExtractCancelRequested{false};
+
+    struct BulkExtractJob
+    {
+        FileInfo file;
+        std::filesystem::path targetPath;
+    };
+
+    static std::string ToLowerAscii(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    }
+
+    static bool FileMatchesTypeFilter(const FileInfo& file, ContentTypeFilter filter)
+    {
+        switch (filter)
+        {
+        case ContentTypeFilter::Area:
+            return file.extension == ".area";
+        case ContentTypeFilter::Texture:
+            return file.extension == ".tex";
+        case ContentTypeFilter::Model:
+            return file.extension == ".m3";
+        case ContentTypeFilter::None:
+        default:
+            return false;
+        }
+    }
+
+    static std::vector<FileInfo> CollectBulkExtractFiles(ContentTypeFilter filter)
+    {
+        std::vector<FileInfo> files;
+        for (const auto& file : sCachedFiles)
+        {
+            if (file.isDirectory || file.isLoadAllEntry || file.isTextureMapEntry || !file.archive || !file.entry)
+                continue;
+
+            if (!FileMatchesTypeFilter(file, filter))
+                continue;
+
+            if (!std::dynamic_pointer_cast<FileEntry>(file.entry))
+                continue;
+
+            files.push_back(file);
+        }
+        return files;
+    }
+
+    static int CountBulkExtractFiles(ContentTypeFilter filter)
+    {
+        int count = 0;
+        for (const auto& file : sCachedFiles)
+        {
+            if (file.isDirectory || file.isLoadAllEntry || file.isTextureMapEntry || !file.archive || !file.entry)
+                continue;
+
+            if (FileMatchesTypeFilter(file, filter) && std::dynamic_pointer_cast<FileEntry>(file.entry))
+                ++count;
+        }
+        return count;
+    }
+
+    static std::filesystem::path BuildBulkExtractPath(const FileInfo& file, const std::filesystem::path& outputRoot, BulkExtractMode mode)
+    {
+        std::string relativePath = file.entry ? file.entry->getFullPathNarrow() : file.name;
+        if (relativePath.empty())
+            relativePath = file.name;
+
+        std::replace(relativePath.begin(), relativePath.end(), '\\', '/');
+        std::filesystem::path target = outputRoot / std::filesystem::path(relativePath);
+
+        switch (mode)
+        {
+        case BulkExtractMode::TexturePNG:
+            target.replace_extension(".png");
+            break;
+        case BulkExtractMode::TextureJPG:
+            target.replace_extension(".jpg");
+            break;
+        case BulkExtractMode::TextureTIFF:
+            target.replace_extension(".tiff");
+            break;
+        case BulkExtractMode::TextureDDS:
+            target.replace_extension(".dds");
+            break;
+        case BulkExtractMode::Raw:
+        default:
+            break;
+        }
+
+        return target;
+    }
+
+    static std::filesystem::path MakeUniqueBatchPath(const std::filesystem::path& target, std::unordered_set<std::string>& usedPaths)
+    {
+        std::filesystem::path candidate = target;
+        std::string key = ToLowerAscii(candidate.lexically_normal().string());
+        if (usedPaths.insert(key).second)
+            return candidate;
+
+        const std::filesystem::path parent = target.parent_path();
+        const std::string stem = target.stem().string();
+        const std::string extension = target.extension().string();
+
+        for (int suffix = 2;; ++suffix)
+        {
+            candidate = parent / (stem + "_" + std::to_string(suffix) + extension);
+            key = ToLowerAscii(candidate.lexically_normal().string());
+            if (usedPaths.insert(key).second)
+                return candidate;
+        }
+    }
+
+    static bool ExportBulkFile(const FileInfo& file, const std::filesystem::path& targetPath, BulkExtractMode mode, std::string& error)
+    {
+        auto fileEntry = std::dynamic_pointer_cast<FileEntry>(file.entry);
+        if (!file.archive || !fileEntry)
+        {
+            error = "Invalid archive entry";
+            return false;
+        }
+
+        try
+        {
+            if (targetPath.has_parent_path())
+                std::filesystem::create_directories(targetPath.parent_path());
+        }
+        catch (const std::exception& ex)
+        {
+            error = ex.what();
+            return false;
+        }
+
+        if (mode == BulkExtractMode::Raw)
+        {
+            std::vector<uint8_t> buffer;
+            if (!file.archive->openFileStream(fileEntry, buffer))
+            {
+                error = "Failed to read archive data";
+                return false;
+            }
+
+            std::ofstream out(targetPath, std::ios::binary);
+            if (!out.is_open())
+            {
+                error = "Failed to create output file";
+                return false;
+            }
+
+            out.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+            return out.good();
+        }
+
+        Tex::ExportFormat format = Tex::ExportFormat::PNG;
+        switch (mode)
+        {
+        case BulkExtractMode::TextureJPG:
+            format = Tex::ExportFormat::JPEG;
+            break;
+        case BulkExtractMode::TextureTIFF:
+            format = Tex::ExportFormat::TIFF;
+            break;
+        case BulkExtractMode::TextureDDS:
+            format = Tex::ExportFormat::DDS;
+            break;
+        case BulkExtractMode::TexturePNG:
+        default:
+            format = Tex::ExportFormat::PNG;
+            break;
+        }
+
+        if (!Tex::ExportTextureFromArchive(file.archive, fileEntry, targetPath.string(), format))
+        {
+            error = "Failed to export texture";
+            return false;
+        }
+
+        return true;
+    }
+
+    static const char* BulkExtractModeLabel(BulkExtractMode mode)
+    {
+        switch (mode)
+        {
+        case BulkExtractMode::Raw:
+            return "Raw";
+        case BulkExtractMode::TexturePNG:
+            return "PNG";
+        case BulkExtractMode::TextureJPG:
+            return "JPG";
+        case BulkExtractMode::TextureTIFF:
+            return "TIFF";
+        case BulkExtractMode::TextureDDS:
+            return "DDS";
+        default:
+            return "Files";
+        }
+    }
+
+    static void StartBulkExtraction(const std::string& outputFolder, std::vector<FileInfo> files, BulkExtractMode mode)
+    {
+        if (files.empty())
+        {
+            sNotificationSuccess = false;
+            sNotificationMessage = "No files match the active filter.";
+            sNotificationTimer = 3.0f;
+            return;
+        }
+
+        sExportInProgress = true;
+        sExportProgress = 0;
+        sExportTotal = static_cast<int>(files.size());
+        sBulkExtractActive = true;
+        sBulkExtractCancelRequested = false;
+        {
+            std::lock_guard<std::mutex> lock(sExportMutex);
+            sExportStatus = "Starting extract...";
+        }
+
+        std::thread([outputFolder, files = std::move(files), mode]() mutable {
+            const std::filesystem::path outputRoot(outputFolder);
+            std::unordered_set<std::string> usedPaths;
+            std::vector<BulkExtractJob> jobs;
+            jobs.reserve(files.size());
+
+            for (const auto& file : files)
+            {
+                jobs.push_back({file, MakeUniqueBatchPath(BuildBulkExtractPath(file, outputRoot, mode), usedPaths)});
+            }
+
+            std::atomic<size_t> nextJob{0};
+            std::atomic<int> successCount{0};
+            std::atomic<int> failedCount{0};
+            std::mutex errorMutex;
+            std::string firstError;
+
+            unsigned int hardwareThreads = std::thread::hardware_concurrency();
+            if (hardwareThreads == 0)
+                hardwareThreads = 4;
+
+            const size_t maxWorkers = mode == BulkExtractMode::Raw ? 8 : 4;
+            const size_t workerCount = std::max<size_t>(1, std::min<size_t>(jobs.size(), std::min<size_t>(hardwareThreads, maxWorkers)));
+
+            std::vector<std::thread> workers;
+            workers.reserve(workerCount);
+
+            for (size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex)
+            {
+                workers.emplace_back([&]() {
+                    for (;;)
+                    {
+                        if (sBulkExtractCancelRequested.load())
+                            break;
+
+                        size_t jobIndex = nextJob.fetch_add(1);
+                        if (jobIndex >= jobs.size())
+                            break;
+
+                        if (sBulkExtractCancelRequested.load())
+                            break;
+
+                        const auto& job = jobs[jobIndex];
+
+                        {
+                            std::lock_guard<std::mutex> lock(sExportMutex);
+                            sExportStatus = std::string("Extracting ") + job.file.name + " as " + BulkExtractModeLabel(mode);
+                        }
+
+                        std::string error;
+                        bool exported = false;
+                        try
+                        {
+                            exported = ExportBulkFile(job.file, job.targetPath, mode, error);
+                        }
+                        catch (const std::exception& ex)
+                        {
+                            error = ex.what();
+                        }
+
+                        if (exported)
+                        {
+                            ++successCount;
+                        }
+                        else
+                        {
+                            ++failedCount;
+                            std::lock_guard<std::mutex> lock(errorMutex);
+                            if (firstError.empty())
+                                firstError = job.file.name + ": " + error;
+                        }
+
+                        ++sExportProgress;
+                    }
+                });
+            }
+
+            for (auto& worker : workers)
+            {
+                if (worker.joinable())
+                    worker.join();
+            }
+
+            const int successfulFiles = successCount.load();
+            const int failedFiles = failedCount.load();
+            const bool canceled = sBulkExtractCancelRequested.load();
+
+            M3Export::ExportResult result;
+            result.success = canceled || failedFiles == 0;
+            result.outputFile = outputFolder;
+            if (canceled)
+            {
+                result.errorMessage = "Extract canceled after " + std::to_string(successfulFiles) + " of " +
+                    std::to_string(static_cast<int>(jobs.size())) + " files.";
+            }
+            else if (result.success)
+            {
+                result.errorMessage = "Extracted " + std::to_string(successfulFiles) + " " + BulkExtractModeLabel(mode) + " file" + (successfulFiles == 1 ? "." : "s.");
+            }
+            else
+            {
+                result.errorMessage = "Bulk extract incomplete: extracted " + std::to_string(successfulFiles) + " of " +
+                    std::to_string(static_cast<int>(jobs.size())) + " files.";
+
+                {
+                    std::lock_guard<std::mutex> lock(errorMutex);
+                    if (firstError.empty())
+                        firstError = "Unknown error";
+                    result.errorMessage += " First error: " + firstError;
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(sExportMutex);
+                sExportResult = result;
+            }
+            sBulkExtractActive = false;
+            sExportInProgress = false;
+            sShowExportResult = true;
+        }).detach();
+    }
+
+    static void OpenBulkExtractDialog(BulkExtractMode mode)
+    {
+        sBulkExtractMode = mode;
+        sBulkExtractFiles = CollectBulkExtractFiles(sContentTypeFilter);
+
+        if (sBulkExtractFiles.empty())
+        {
+            sNotificationSuccess = false;
+            sNotificationMessage = "No files match the active filter.";
+            sNotificationTimer = 3.0f;
+            return;
+        }
+
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        config.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog("BulkExtractDlg", "Select Output Folder", nullptr, config);
+    }
 
     static void RenderTreeNode(AppState& state, const IFileSystemEntryPtr& entry, const ArchivePtr& archive, int depth = 0)
     {
@@ -325,6 +702,75 @@ namespace UI_ContentBrowser {
             if (ImGui::InputTextWithHint("##filter", "Search...", sSearchFilter, IM_ARRAYSIZE(sSearchFilter)))
             {
                 sNeedsRefresh = true;
+            }
+
+            auto drawTypeFilterButton = [](const char* label, ContentTypeFilter filter)
+            {
+                const bool active = (sContentTypeFilter == filter);
+                if (active)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.50f, 0.85f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.32f, 0.60f, 1.0f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.20f, 0.42f, 0.72f, 1.0f));
+                }
+
+                if (ImGui::Button(label))
+                {
+                    sContentTypeFilter = active ? ContentTypeFilter::None : filter;
+                    sNeedsRefresh = true;
+                }
+
+                if (active)
+                    ImGui::PopStyleColor(3);
+            };
+
+            constexpr float filterButtonSpacing = 10.0f;
+
+            ImGui::SameLine(0.0f, filterButtonSpacing);
+            drawTypeFilterButton("Area", ContentTypeFilter::Area);
+            ImGui::SameLine(0.0f, filterButtonSpacing);
+            drawTypeFilterButton("Texture", ContentTypeFilter::Texture);
+            ImGui::SameLine(0.0f, filterButtonSpacing);
+            drawTypeFilterButton("Models", ContentTypeFilter::Model);
+
+            if (sContentTypeFilter != ContentTypeFilter::None)
+            {
+                const int extractableCount = CountBulkExtractFiles(sContentTypeFilter);
+                const bool canExtract = extractableCount > 0 && !sExportInProgress.load();
+
+                ImGui::SameLine(0.0f, filterButtonSpacing + 6.0f);
+                if (!canExtract)
+                    ImGui::BeginDisabled();
+
+                if (ImGui::Button("Extract"))
+                    ImGui::OpenPopup("BulkExtractMenu");
+
+                if (!canExtract)
+                    ImGui::EndDisabled();
+
+                if (ImGui::BeginPopup("BulkExtractMenu"))
+                {
+                    ImGui::TextDisabled("%d file%s", extractableCount, extractableCount == 1 ? "" : "s");
+                    ImGui::Separator();
+
+                    if (ImGui::MenuItem("Raw"))
+                        OpenBulkExtractDialog(BulkExtractMode::Raw);
+
+                    if (sContentTypeFilter == ContentTypeFilter::Texture)
+                    {
+                        ImGui::Separator();
+                        if (ImGui::MenuItem("PNG"))
+                            OpenBulkExtractDialog(BulkExtractMode::TexturePNG);
+                        if (ImGui::MenuItem("JPG"))
+                            OpenBulkExtractDialog(BulkExtractMode::TextureJPG);
+                        if (ImGui::MenuItem("TIFF"))
+                            OpenBulkExtractDialog(BulkExtractMode::TextureTIFF);
+                        if (ImGui::MenuItem("DDS"))
+                            OpenBulkExtractDialog(BulkExtractMode::TextureDDS);
+                    }
+
+                    ImGui::EndPopup();
+                }
             }
 
             ImGui::Separator();
@@ -1453,6 +1899,17 @@ namespace UI_ContentBrowser {
         ImGui::PopStyleVar();
 
 
+        if (ImGuiFileDialog::Instance()->Display("BulkExtractDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            {
+                std::string outputFolder = ImGuiFileDialog::Instance()->GetCurrentPath();
+                StartBulkExtraction(outputFolder, std::move(sBulkExtractFiles), sBulkExtractMode);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+
         if (ImGuiFileDialog::Instance()->Display("ExportGLBDlg", ImGuiWindowFlags_NoCollapse, ImVec2(600, 400)))
         {
             if (ImGuiFileDialog::Instance()->IsOk() && sExportArchive && sExportFileEntry)
@@ -2323,7 +2780,10 @@ namespace UI_ContentBrowser {
                 result = sExportResult;
             }
             sNotificationSuccess = result.success;
-            sNotificationMessage = result.success ? "Export successful!" : ("Export failed: " + result.errorMessage);
+            if (result.success)
+                sNotificationMessage = result.errorMessage.empty() ? "Export successful!" : result.errorMessage;
+            else
+                sNotificationMessage = result.errorMessage.empty() ? "Export failed" : ("Export failed: " + result.errorMessage);
             sNotificationTimer = 3.0f;
             sShowExportResult = false;
         }
@@ -2358,29 +2818,58 @@ namespace UI_ContentBrowser {
         }
 
 
+        ImGuiViewport* progressVp = ImGui::GetMainViewport();
+        ImVec2 progressCenter(progressVp->Pos.x + progressVp->Size.x * 0.5f, progressVp->Pos.y + progressVp->Size.y * 0.5f);
+        const float progressWindowWidth = std::max(320.0f, std::min(560.0f, progressVp->WorkSize.x - 48.0f));
+
+        ImGui::SetNextWindowPos(progressCenter, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(progressWindowWidth, 146.0f), ImGuiCond_Always);
+
         if (sExportInProgress.load())
+            ImGui::OpenPopup("##ExportProgressModal");
+
+        if (ImGui::BeginPopupModal("##ExportProgressModal", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar))
         {
-            ImGuiViewport* vp = ImGui::GetMainViewport();
-            ImVec2 center(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f);
+            if (!sExportInProgress.load())
+            {
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+                Heightmap::DrawHeightmapViewer(sCurrentGeneration);
+                return;
+            }
 
-            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowBgAlpha(0.95f);
-
-            ImGuiWindowFlags progressFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize;
-
-            if (ImGui::Begin("##ExportProgress", nullptr, progressFlags))
             {
                 std::string status;
                 {
                     std::lock_guard<std::mutex> lock(sExportMutex);
                     status = sExportStatus;
                 }
-                ImGui::Text("Exporting...");
-                ImGui::Text("%s", status.c_str());
+                ImGui::TextUnformatted("Working...");
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+                if (sBulkExtractCancelRequested.load())
+                    ImGui::TextUnformatted("Canceling after current files finish...");
+                else
+                    ImGui::TextUnformatted(status.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::Spacing();
                 float progress = sExportTotal > 0 ? (float)sExportProgress.load() / (float)sExportTotal : 0.0f;
-                ImGui::ProgressBar(progress, ImVec2(300, 20));
+                ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 20));
+
+                ImGui::Spacing();
+                const bool canCancel = sBulkExtractActive.load() && !sBulkExtractCancelRequested.load();
+                if (!canCancel)
+                    ImGui::BeginDisabled();
+
+                if (ImGui::Button(sBulkExtractCancelRequested.load() ? "Canceling..." : "Cancel", ImVec2(120.0f, 0.0f)))
+                    sBulkExtractCancelRequested = true;
+
+                if (!canCancel)
+                    ImGui::EndDisabled();
             }
-            ImGui::End();
+
+            ImGui::EndPopup();
         }
 
         Heightmap::DrawHeightmapViewer(sCurrentGeneration);
