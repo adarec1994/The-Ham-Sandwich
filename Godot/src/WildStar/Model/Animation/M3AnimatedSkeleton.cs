@@ -15,9 +15,12 @@ public partial class M3AnimatedSkeleton : Node
 
     [Export] public bool Playing { get; set; } = true;
 
+    [Export] public NodePath PlayerPath { get; set; } = new NodePath("../AnimationPlayer");
+
     private M3File? _model;
     private M3PoseRuntime? _runtime;
     private Skeleton3D? _skeleton;
+    private AnimationPlayer? _player;
     private int[] _parent = Array.Empty<int>();
 
     private int _sequence = -1;
@@ -36,6 +39,7 @@ public partial class M3AnimatedSkeleton : Node
         _model = model;
         _runtime = new M3PoseRuntime(model);
         _skeleton = GetNodeOrNull<Skeleton3D>(SkeletonPath);
+        _player = GetNodeOrNull<AnimationPlayer>(PlayerPath);
 
         if (_skeleton is null || _skeleton.GetBoneCount() != model.Bones.Length)
         {
@@ -111,6 +115,12 @@ public partial class M3AnimatedSkeleton : Node
     public override void _Process(double delta)
     {
         if (_runtime is null || _skeleton is null || _sequence < 0)
+        {
+            return;
+        }
+
+        if (Engine.IsEditorHint() && _player is not null &&
+            (_player.IsPlaying() || !string.IsNullOrEmpty(_player.CurrentAnimation.ToString())))
         {
             return;
         }

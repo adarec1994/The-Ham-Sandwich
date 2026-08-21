@@ -135,7 +135,7 @@ public static class ModelMeshLookup
         return names;
     }
 
-    private static byte[]? FindTbl(WsFileSystem fs, string path)
+    internal static byte[]? FindTbl(WsFileSystem fs, string path)
     {
         foreach (WsArchive archive in fs.Archives)
         {

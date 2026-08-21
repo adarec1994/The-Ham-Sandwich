@@ -9,7 +9,11 @@ public static class M3SceneBuilder
     private const string SkeletonName = "Skeleton";
     private static System.Func<WsFileSystem?>? _fileSystemProvider;
 
-    public static void SetFileSystem(System.Func<WsFileSystem?>? provider) => _fileSystemProvider = provider;
+    public static void SetFileSystem(System.Func<WsFileSystem?>? provider)
+    {
+        _fileSystemProvider = provider;
+        ModelSequenceLookup.Clear();
+    }
 
     public static Node3D Build(M3File model, ArrayMesh mesh, string name, byte[] modelData) =>
         Build(model, mesh, name, modelData, System.Array.Empty<int>());
@@ -190,6 +194,22 @@ public static class M3SceneBuilder
         if (!animated)
         {
             return;
+        }
+
+        var fs = _fileSystemProvider?.Invoke();
+        M3BakeResult bake = M3AnimationBaker.Build(
+            model, skeleton, SkeletonName,
+            fs is not null ? ModelSequenceLookup.Load(fs) : null);
+        if (bake.Player is not null)
+        {
+            root.AddChild(bake.Player);
+            bake.Player.Owner = root;
+
+            string note = bake.Skipped > 0
+                ? $", {bake.Skipped} skipped (key budget {M3AnimationBaker.KeyBudget:N0} reached)"
+                : string.Empty;
+            GD.Print($"[wildstar_mount] {root.Name}: baked {bake.Baked} of " +
+                     $"{model.Animations.Length} clips, {bake.Keys:N0} keys{note}");
         }
 
         var animator = new M3AnimatedSkeleton

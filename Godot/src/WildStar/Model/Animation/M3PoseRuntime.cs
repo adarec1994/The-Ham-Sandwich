@@ -24,6 +24,7 @@ public sealed class M3PoseRuntime
 
     private readonly Layer[] _layers = new Layer[MaxLayers];
     private int _layerCount;
+    private int _additiveCount;
 
     public M3PoseRuntime(M3File model)
     {
@@ -80,11 +81,13 @@ public sealed class M3PoseRuntime
         _layers[0].Time = time;
         _layers[0].Weight = 1.0f;
         _layerCount = 1;
+        _additiveCount = 0;
     }
 
     public void SetLayers(ReadOnlySpan<Layer> layers)
     {
         _layerCount = Math.Min(layers.Length, MaxLayers);
+        _additiveCount = _layerCount;
         for (int i = 0; i < _layerCount; i++)
         {
             _layers[i] = layers[i];
@@ -153,9 +156,9 @@ public sealed class M3PoseRuntime
                 }
             }
 
-            if (bone.ScaleLayer.HasKeys && _layerCount > 0)
+            if (bone.ScaleLayer.HasKeys && _additiveCount > 0)
             {
-                for (int layer = _layerCount; layer > 0; layer--)
+                for (int layer = _additiveCount; layer > 0; layer--)
                 {
                     uint time = _layers[layer - 1].Time;
                     bone.ScaleLayer.Sample(time, layerValue);
@@ -204,12 +207,12 @@ public sealed class M3PoseRuntime
                 _rotation.AsSpan(pq, 4).CopyTo(_rotation.AsSpan(q, 4));
             }
 
-            if (bone.RotationLayer.HasKeys && _layerCount > 0)
+            if (bone.RotationLayer.HasKeys && _additiveCount > 0)
             {
                 accum[0] = accum[1] = accum[2] = accum[3] = 0.0f;
                 float totalWeight = 0.0f;
 
-                for (int layer = _layerCount; layer > 0; layer--)
+                for (int layer = _additiveCount; layer > 0; layer--)
                 {
                     bone.RotationLayer.SampleSlerp(_layers[layer - 1].Time, sampled);
 
@@ -262,9 +265,9 @@ public sealed class M3PoseRuntime
                 _translation[t] = _translation[t + 1] = _translation[t + 2] = 0.0f;
             }
 
-            if (bone.TranslationLayer.HasKeys && _layerCount > 0)
+            if (bone.TranslationLayer.HasKeys && _additiveCount > 0)
             {
-                for (int layer = _layerCount; layer > 0; layer--)
+                for (int layer = _additiveCount; layer > 0; layer--)
                 {
                     bone.TranslationLayer.Sample(_layers[layer - 1].Time, layerValue);
                     float w = _layers[layer - 1].Weight;
