@@ -16,10 +16,15 @@ public partial class WildStarMountPlugin : EditorPlugin
     private const string DefaultExtractDirectory = "res://extracted";
     private const string IgnoreExtractedSetting = "wildstar/paths/ignore_extracted";
 
+    private const string DefaultSkySetting = "wildstar/view/default_sky";
+    private const string DefaultSkyPath = "Sky\\TestReference.sky";
+
     private const string PlaceholderMeta = "__ws_placeholder__";
     private const string RootPrefix = "wsroot:";
     private const string DirectoryPrefix = "wsdir:";
     private const string BankPrefix = "wsbank:";
+
+    private const string MapScenePrefix = "wsmap:";
     private const string BankSoundPrefix = "wsbanksound:";
 
     private const double WatchdogSeconds = 0.5;
@@ -40,15 +45,20 @@ public partial class WildStarMountPlugin : EditorPlugin
     private EditorFileDialog? _picking;
     private WemImportPlugin? _wemImporter;
     private Action? _confirmed;
+    private Task? _mountTask;
     private double _sinceCheck;
     private bool _reinjected;
     private bool _mounting;
 
+    internal static WildStarMountPlugin? Instance { get; private set; }
+
     public override void _EnterTree()
     {
+        Instance = this;
         EnsureSetting(GameDirectorySetting, "");
         EnsureSetting(ExtractDirectorySetting, DefaultExtractDirectory);
         EnsureSetting(IgnoreExtractedSetting, true);
+        EnsureSetting(DefaultSkySetting, DefaultSkyPath);
 
         StartMount();
 
@@ -77,6 +87,8 @@ public partial class WildStarMountPlugin : EditorPlugin
             return;
         }
 
+        EnsureLoaders();
+
         if (_roots.Count == 0 || !GodotObject.IsInstanceValid(_roots[0]))
         {
             if (!_reinjected)
@@ -89,11 +101,17 @@ public partial class WildStarMountPlugin : EditorPlugin
             Inject();
         }
 
+        EnsurePreviewSky();
         KeepPickerOnTop();
     }
 
     public override void _ExitTree()
     {
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+
         SetProcess(false);
         EditorInterface.Singleton.GetResourceFilesystem().FilesystemChanged -= OnFilesystemChanged;
 
@@ -131,7 +149,7 @@ public partial class WildStarMountPlugin : EditorPlugin
         string repositoryRoot = Path.GetFullPath(
             Path.Combine(ProjectSettings.GlobalizePath("res://"), ".."));
 
-        Task.Run(() =>
+        _mountTask = Task.Run(() =>
         {
             WsFileSystem? mounted = null;
             try

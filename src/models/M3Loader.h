@@ -14,7 +14,7 @@ private:
     static constexpr size_t TEX_ENTRY_SIZE = 32;
     static constexpr size_t MAT_ENTRY_SIZE = 48;
     static constexpr size_t MAT_DESC_SIZE = 296;
-    static constexpr size_t GEOM_SIZE = 208;
+    static constexpr size_t GEOM_RECORD_SIZE = 200;
     static constexpr size_t SUBMESH_SIZE = 112;
     static constexpr size_t BONE_SIZE = 352;
     static constexpr size_t ANIMATION_SIZE = 112;
@@ -28,15 +28,15 @@ private:
     static glm::vec2 ReadVertexV2(const uint8_t* data, uint8_t type, size_t& offset);
 
     static bool ReadHeader(const uint8_t* data, size_t size, M3Header& header);
-    static void ReadLUTs(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadTextures(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadMaterials(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadBones(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadAnimations(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadGeometry(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadLights(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadSubmeshGroups(const uint8_t* data, size_t size, M3ModelData& model);
-    static void ReadBoneAnimationTrack(const uint8_t* data, size_t size, size_t animStart, M3AnimationTrack& track);
+    static bool ReadLUTs(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadTextures(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadMaterials(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadBones(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadAnimations(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadGeometry(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadLights(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadSubmeshGroups(const uint8_t* data, size_t size, M3ModelData& model);
+    static bool ReadBoneAnimationTrack(const uint8_t* data, size_t size, size_t animStart, M3AnimationTrack& track);
     static void ApplyBoneMapping(M3ModelData& model);
     static void BuildBonePaths(M3ModelData& model);
     static void FixMirroredBones(M3ModelData& model);

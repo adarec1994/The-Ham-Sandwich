@@ -305,26 +305,6 @@ namespace M3Export
         }
     }
 
-    // =========================================================================
-    // Runtime-faithful bone state helpers.
-    //
-    // The renderer (M3Render) does several things that the export must mirror
-    // EXACTLY, otherwise the exported bind pose / animations diverge from what
-    // the runtime produces. The two main subtleties are:
-    //
-    //   1. AT_ORIGIN bones (those whose globalMatrix has translation 0) get
-    //      their bind pose reconstructed from track 6 translation + track 4/5
-    //      rotation + track 0/1/2 scale, composed as T*R*S. The previous
-    //      exporter only used the track 6 TRANSLATION, dropping rotation
-    //      and scale - this caused incorrect bind poses for ~45 bones in
-    //      typical character models.
-    //
-    //   2. MIRRORED bones (negative-determinant local matrix, e.g. left-side
-    //      bones in a humanoid) are composed at runtime as T*S*R, NOT the
-    //      standard T*R*S that glTF/FBX use. To export this correctly we
-    //      must bake the runtime composition at every keyframe and decompose
-    //      back into TRS that, with T*R*S order, produces the same matrix.
-    // =========================================================================
 
     struct BoneRuntimeState {
         glm::mat4 effectiveBindGlobal{1.0f};
@@ -337,11 +317,8 @@ namespace M3Export
         bool boneMirrored = false;
     };
 
-    // Forward declaration - defined further down.
     static void DecomposeForExport(const glm::mat4& m, glm::vec3& outT, glm::quat& outR, glm::vec3& outS);
 
-    // Safe matrix inverse - returns identity for singular / non-finite matrices
-    // rather than propagating NaN through the rest of the pipeline.
     static glm::mat4 SafeInverse(const glm::mat4& m) {
         for (int c = 0; c < 4; ++c)
             for (int r = 0; r < 4; ++r)
@@ -355,15 +332,12 @@ namespace M3Export
         return inv;
     }
 
-    // Mirrors M3Render::precomputeBoneData() exactly. Bones must already be
-    // in topological order (parents before children), which the loader guarantees.
     static void PrecomputeBoneStates(const std::vector<M3Bone>& bones,
                                      std::vector<BoneRuntimeState>& states)
     {
         size_t n = bones.size();
         states.assign(n, BoneRuntimeState{});
 
-        // Pass 1: compute effectiveBindGlobal in hierarchy order
         for (size_t i = 0; i < n; ++i) {
             const auto& bone = bones[i];
             bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)n);
@@ -403,7 +377,6 @@ namespace M3Export
                 for (int t = 4; t <= 5; ++t) {
                     if (!bone.tracks[t].keyframes.empty()) {
                         bindRot = bone.tracks[t].keyframes[0].rotation;
-                        // Guard against zero / degenerate quaternions in source data
                         float qL2 = bindRot.x*bindRot.x + bindRot.y*bindRot.y +
                                     bindRot.z*bindRot.z + bindRot.w*bindRot.w;
                         if (!std::isfinite(qL2) || qL2 < 1e-12f)
@@ -430,11 +403,6 @@ namespace M3Export
             states[i].inverseEffectiveBindGlobal = SafeInverse(states[i].effectiveBindGlobal);
         }
 
-        // Pass 2: bindLocalMatrix and decomposition (mirrors renderer's pass 2).
-        // We use DecomposeForExport instead of glm::decompose because the latter
-        // can fail (or assert in MSVC debug builds) on negative-determinant
-        // matrices, which our fix actively produces for AT_ORIGIN bones with
-        // mirrored scale tracks.
         for (size_t i = 0; i < n; ++i) {
             const auto& bone = bones[i];
             bool isRoot = (bone.parentId < 0 || bone.parentId >= (int)n);
@@ -451,15 +419,9 @@ namespace M3Export
                                states[i].bindLocalTranslation,
                                states[i].bindLocalRotation,
                                states[i].bindLocalScale);
-            // DecomposeForExport already guarantees:
-            //  - rotation is a valid normalized quaternion with w >= 0
-            //  - for negative-det matrices, scale.x is negated so scale's det
-            //    matches the matrix's det (this is what SelectTracksForBone
-            //    relies on for its determinant-matching logic)
         }
     }
 
-    // Track interpolation - matches renderer's interpolateScale/Rotation/Translation
     static glm::vec3 InterpScaleAt(const M3AnimationTrack& tr, float tMs) {
         if (tr.keyframes.empty()) return glm::vec3(1.0f);
         if (tr.keyframes.size() == 1) return tr.keyframes[0].scale;
@@ -477,7 +439,6 @@ namespace M3Export
         return glm::mix(a.scale, b.scale, t);
     }
 
-    // Safe quaternion normalize: returns identity for zero / NaN inputs.
     static glm::quat SafeNormalize(const glm::quat& q) {
         float l2 = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
         if (!std::isfinite(l2) || l2 < 1e-12f)
@@ -522,8 +483,6 @@ namespace M3Export
         return glm::mix(a.translation, b.translation, t);
     }
 
-    // Per-bone selection of which tracks to use - locked once per (anim, bone)
-    // so that the chosen track stays consistent across the entire animation.
     struct BoneTrackSel {
         const M3AnimationTrack* scaleTrack = nullptr;
         const M3AnimationTrack* rotTrack   = nullptr;
@@ -535,7 +494,6 @@ namespace M3Export
     {
         BoneTrackSel sel;
 
-        // Scale: prefer track with matching determinant sign vs. bind pose
         float bindScaleDet = st.bindLocalScale.x * st.bindLocalScale.y * st.bindLocalScale.z;
         bool needNegativeDet = (bindScaleDet < 0.0f);
         for (int t = 0; t <= 2; ++t) {
@@ -554,19 +512,15 @@ namespace M3Export
                 break;
             }
         }
-        // Rotation: first non-empty of track 4, 5
         for (int t = 4; t <= 5; ++t) {
             if (!bone.tracks[t].keyframes.empty()) { sel.rotTrack = &bone.tracks[t]; break; }
         }
-        // Translation: track 6 only if AT_ORIGIN (matches renderer's runtime)
         if (st.boneAtOrigin && !bone.tracks[6].keyframes.empty())
             sel.transTrack = &bone.tracks[6];
 
         return sel;
     }
 
-    // Compute the local matrix at time tMs using the EXACT runtime composition rule.
-    // This is the heart of the fix - mirrored bones use T*S*R, others use T*R*S.
     static glm::mat4 ComputeRuntimeLocalAt(const M3Bone& bone, const BoneRuntimeState& st,
                                            const BoneTrackSel& sel, float tMs)
     {
@@ -586,15 +540,8 @@ namespace M3Export
         return st.boneMirrored ? (T * S * R) : (T * R * S);
     }
 
-    // Decompose a 4x4 matrix into T, R, S such that T * R * S exactly equals
-    // the input. For matrices with negative determinant (mirrors), scale.x
-    // is made negative and R remains a proper rotation (positive determinant).
-    // This is what glTF/FBX expect for clean re-composition.
-    // Robust against NaN / inf / degenerate inputs - returns identity TRS for
-    // bad input rather than propagating NaN further.
     static void DecomposeForExport(const glm::mat4& m, glm::vec3& outT, glm::quat& outR, glm::vec3& outS)
     {
-        // Sanity check the entire matrix for non-finite values up front.
         for (int c = 0; c < 4; ++c) {
             for (int r = 0; r < 4; ++r) {
                 if (!std::isfinite(m[c][r])) {
@@ -608,7 +555,6 @@ namespace M3Export
 
         outT = glm::vec3(m[3]);
 
-        // glm matrices are column-major, so m[0], m[1], m[2] are columns.
         glm::vec3 c0(m[0]); glm::vec3 c1(m[1]); glm::vec3 c2(m[2]);
 
         float sx = glm::length(c0);
@@ -621,7 +567,6 @@ namespace M3Export
         if (sy < EPS) { sy = EPS; r1 = glm::vec3(0.0f, 1.0f, 0.0f); } else r1 = c1 / sy;
         if (sz < EPS) { sz = EPS; r2 = glm::vec3(0.0f, 0.0f, 1.0f); } else r2 = c2 / sz;
 
-        // Detect reflection - if r0,r1,r2 form a left-handed basis we have a mirror
         if (glm::dot(r0, glm::cross(r1, r2)) < 0.0f) {
             sx = -sx;
             r0 = -r0;
@@ -631,8 +576,6 @@ namespace M3Export
 
         glm::mat3 rotMat(r0, r1, r2);
         glm::quat q = glm::quat_cast(rotMat);
-        // Defensive: if the basis was non-orthogonal due to skew/numerical error,
-        // quat_cast can produce a non-unit or NaN quaternion.
         float qLen2 = q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w;
         if (!std::isfinite(qLen2) || qLen2 < 1e-12f) {
             q = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
@@ -643,8 +586,6 @@ namespace M3Export
         outR = q;
     }
 
-    // Result of baking one bone's animation. Keyframes are in MILLISECONDS
-    // relative to the start of the file, matching the input track timestamps.
     struct BakedBoneAnim {
         std::vector<uint32_t> times;
         std::vector<glm::vec3> translations;
@@ -655,10 +596,6 @@ namespace M3Export
         bool hasScale       = false;
     };
 
-    // Bake an animation for one bone. We sample at the union of all relevant
-    // track keyframe times (clamped to anim range) so that we don't lose any
-    // keyframe information. Mirrored bones get T*S*R applied per sample, then
-    // decomposed into TRS that re-composes to the same matrix with T*R*S.
     static BakedBoneAnim BakeBoneAnimation(const M3Bone& bone, const BoneRuntimeState& st,
                                            uint32_t startMs, uint32_t endMs)
     {
@@ -666,7 +603,6 @@ namespace M3Export
         BoneTrackSel sel = SelectTracksForBone(bone, st);
         if (!sel.scaleTrack && !sel.rotTrack && !sel.transTrack) return out;
 
-        // Gather unique timestamps from used tracks within [startMs, endMs]
         std::vector<uint32_t> times;
         auto addTimes = [&](const M3AnimationTrack* tr) {
             if (!tr) return;
@@ -678,7 +614,6 @@ namespace M3Export
         addTimes(sel.scaleTrack);
         addTimes(sel.rotTrack);
         addTimes(sel.transTrack);
-        // Always anchor the start and end so the animation has well-defined endpoints
         times.push_back(startMs);
         times.push_back(endMs);
         std::sort(times.begin(), times.end());
@@ -699,7 +634,6 @@ namespace M3Export
             glm::quat R_;
             DecomposeForExport(local, T_, R_, S_);
 
-            // Maintain quaternion continuity across keyframes (avoid 360 flips)
             if (hasPrev && glm::dot(prevR, R_) < 0.0f) R_ = -R_;
             prevR = R_;
             hasPrev = true;
@@ -709,14 +643,9 @@ namespace M3Export
             out.rotations.push_back(R_);
             out.scales.push_back(S_);
         }
-        // Each bone always has all three since we baked them; the export side
-        // can choose to skip channels that are constant if it wants to.
         out.hasTranslation = (sel.transTrack != nullptr);
         out.hasRotation    = (sel.rotTrack != nullptr);
         out.hasScale       = (sel.scaleTrack != nullptr);
-        // For mirrored bones we MUST emit all three channels because the
-        // composition order is non-standard: missing channels would let the
-        // target app fall back to the node's bind TRS, which assumes T*R*S.
         if (st.boneMirrored) {
             out.hasTranslation = out.hasRotation = out.hasScale = true;
         }
@@ -743,8 +672,6 @@ namespace M3Export
         const auto& materials = render->getAllMaterials();
         const auto& textures = render->getAllTextures();
 
-        // FIX: Use runtime-faithful bone states instead of just translation
-        // (was dropping rotation+scale from tracks for AT_ORIGIN bones)
         std::vector<BoneRuntimeState> boneStates;
         PrecomputeBoneStates(bones, boneStates);
         std::vector<glm::mat4> effectiveBindGlobal(bones.size());
@@ -881,7 +808,6 @@ namespace M3Export
             return glm::vec3(rx, ry, rz);
         };
 
-        // Continuous unwrap of Euler angles to avoid 360-degree pops between keyframes
         auto UnwrapEuler = [](float prev, float current) -> float {
             while (current - prev >  180.0f) current -= 360.0f;
             while (current - prev < -180.0f) current += 360.0f;
@@ -905,9 +831,6 @@ namespace M3Export
                 for (size_t bi = 0; bi < bones.size(); ++bi) {
                     const auto& bone = bones[bi];
 
-                    // FIX: bake the runtime composition (T*S*R for mirrored,
-                    // T*R*S otherwise) at every keyframe time, then decompose
-                    // for FBX (which always uses T*R*S).
                     BakedBoneAnim baked = BakeBoneAnimation(bone, boneStates[bi],
                                                             anim.timestampStart, anim.timestampEnd);
                     if (baked.times.size() < 2) continue;
@@ -937,7 +860,6 @@ namespace M3Export
                         emitChannel("Lcl Translation", [&](size_t k) { return baked.translations[k]; });
                     }
                     if (baked.hasRotation) {
-                        // Convert each baked quaternion to Euler XYZ with continuity.
                         std::vector<glm::vec3> eulers(baked.times.size());
                         glm::vec3 prev(0.0f);
                         for (size_t k = 0; k < baked.times.size(); ++k) {
@@ -1056,9 +978,6 @@ namespace M3Export
                 } else {
                     localMat = effectiveBindGlobal[bi];
                 }
-                // Use DecomposeForExport (not glm::decompose) so that mirrored
-                // bind matrices (negative determinant) are handled by negating
-                // X scale rather than producing NaN in the rotation quaternion.
                 glm::vec3 translation, scale;
                 glm::quat rotation;
                 DecomposeForExport(localMat, translation, rotation, scale);
@@ -1641,8 +1560,6 @@ namespace M3Export
                                                             anim.timestampStart, anim.timestampEnd);
                     if (baked.times.size() < 2) continue;
 
-                    // Build a single shared input (time) accessor for this bone+anim:
-                    // all three channels share the same set of sample times.
                     std::vector<float> times;
                     times.reserve(baked.times.size());
                     for (uint32_t ms : baked.times) {
@@ -1778,10 +1695,6 @@ namespace M3Export
                 {
                     localMatrix = effectiveBindGlobal[i];
                 }
-                // glTF requires TRS (not matrix) for nodes that get animated.
-                // Decompose handles negative-determinant (mirrored) matrices by
-                // negating X scale and producing a proper rotation, so the TRS
-                // re-composes to the same matrix under T*R*S.
                 glm::vec3 nodeT, nodeS;
                 glm::quat nodeR;
                 DecomposeForExport(localMatrix, nodeT, nodeR, nodeS);

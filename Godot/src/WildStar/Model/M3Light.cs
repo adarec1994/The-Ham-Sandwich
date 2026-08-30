@@ -4,7 +4,7 @@ namespace WildStar.Model;
 
 public sealed class M3Light
 {
-    public const int TrackCount = 15;
+    public const int TrackCount = 16;
 
     public M3Light(byte[] record, M3RawTrack[] tracks)
     {

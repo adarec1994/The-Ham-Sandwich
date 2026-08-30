@@ -42,5 +42,7 @@ public sealed class WsFile
 
     public byte[] ReadAllBytes() => Archive.ReadFile(this);
 
+    public byte[] ReadPrefix(int maxBytes) => Archive.ReadFilePrefix(this, maxBytes);
+
     public byte[] ReadRawBlock() => Archive.ReadRawBlock(this);
 }

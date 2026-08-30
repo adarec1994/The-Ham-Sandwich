@@ -15,20 +15,38 @@ public partial class M3ModelRoot : Node3D
     [Export] public NodePath MeshPath { get; set; } = new NodePath("Skeleton/Mesh");
     [Export] public int[] HiddenVariantKeys { get; set; } = Array.Empty<int>();
     [Export] public string[] OutfitPresets { get; set; } = Array.Empty<string>();
+    [Export] public int[] SurfaceHidden { get; set; } = Array.Empty<int>();
     public int SelectedOutfit { get; set; }
+    public int AlphaMode { get; set; }
+
+    [Export] public float AlphaThreshold { get; set; } = 0.5f;
 
     private const string DropdownProperty = "Variants/Outfit";
     private const string CheckboxPrefix = "Variants/key_";
+    private const string AlphaProperty = "Material/Alpha";
+
+    private const string AlphaHint = "From material,Alpha scissor,Alpha blend,Force opaque";
 
     public override void _Ready()
     {
         NotifyPropertyListChanged();
         ApplyVisibility();
+        ApplyAlpha();
     }
 
     public override Godot.Collections.Array<Godot.Collections.Dictionary> _GetPropertyList()
     {
         var list = new Godot.Collections.Array<Godot.Collections.Dictionary>();
+
+        list.Add(new Godot.Collections.Dictionary
+        {
+            { "name", AlphaProperty },
+            { "type", (int)Variant.Type.Int },
+            { "usage", (int)(PropertyUsageFlags.Editor | PropertyUsageFlags.Storage) },
+            { "hint", (int)PropertyHint.Enum },
+            { "hint_string", AlphaHint },
+        });
+
         int[] keys = VariantKeys();
         if (keys.Length == 0)
             return list;
@@ -66,6 +84,9 @@ public partial class M3ModelRoot : Node3D
     {
         string name = property.ToString();
 
+        if (name == AlphaProperty)
+            return AlphaMode;
+
         if (name == DropdownProperty)
         {
             return SelectedOutfit > 0 && SelectedOutfit <= OutfitPresets.Length
@@ -85,6 +106,13 @@ public partial class M3ModelRoot : Node3D
     public override bool _Set(StringName property, Variant value)
     {
         string name = property.ToString();
+
+        if (name == AlphaProperty)
+        {
+            AlphaMode = value.AsInt32();
+            ApplyAlpha();
+            return true;
+        }
 
         if (name == DropdownProperty)
         {
@@ -133,10 +161,14 @@ public partial class M3ModelRoot : Node3D
         for (int i = 0; i < surfaces; i++)
         {
             int key = SurfaceKeys[i];
-            bool visible = key <= 0 || Array.IndexOf(HiddenVariantKeys, key) < 0;
+            bool visible = (key <= 0 || Array.IndexOf(HiddenVariantKeys, key) < 0) &&
+                           !InitiallyHidden(i);
             instance.SetSurfaceOverrideMaterial(i, visible ? null : HiddenMaterial());
         }
     }
+
+    private bool InitiallyHidden(int surface) =>
+        surface < SurfaceHidden.Length && SurfaceHidden[surface] != 0;
 
     private static ShaderMaterial HiddenMaterial()
     {
@@ -161,9 +193,40 @@ public partial class M3ModelRoot : Node3D
         for (int i = 0; i < surfaces; i++)
         {
             int key = SurfaceKeys[i];
-            bool visible = key == M3File.UngatedGeoset ||
-                           (key > 0 && Array.IndexOf(activeKeys, key) >= 0);
+            bool visible = (key == M3File.UngatedGeoset ||
+                            (key > 0 && Array.IndexOf(activeKeys, key) >= 0)) &&
+                           !InitiallyHidden(i);
             instance.SetSurfaceOverrideMaterial(i, visible ? null : HiddenMaterial());
+        }
+    }
+
+    public void ApplyAlpha()
+    {
+        if (AlphaMode == 0)
+            return;
+
+        var instance = GetNodeOrNull<MeshInstance3D>(MeshPath)
+                       ?? GetNodeOrNull<MeshInstance3D>("Mesh");
+        if (instance?.Mesh is null) return;
+
+        for (int i = 0; i < instance.Mesh.GetSurfaceCount(); i++)
+        {
+            if (instance.Mesh.SurfaceGetMaterial(i) is not StandardMaterial3D material)
+                continue;
+
+            switch (AlphaMode)
+            {
+                case 1:
+                    material.Transparency = BaseMaterial3D.TransparencyEnum.AlphaScissor;
+                    material.AlphaScissorThreshold = AlphaThreshold;
+                    break;
+                case 2:
+                    material.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
+                    break;
+                default:
+                    material.Transparency = BaseMaterial3D.TransparencyEnum.Disabled;
+                    break;
+            }
         }
     }
 

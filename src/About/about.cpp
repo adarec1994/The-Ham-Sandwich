@@ -21,13 +21,13 @@ Everything should be considered WIP.
 Acknowledgements:
 ----------------------
 LaMuerteDeLaPassion - M3 format and general support,
-URL: https://github.com/LaMuerteDeLaPassion/wildstar-export-2
+URL: https:
 Muazin Mugadr - Original Wildstar Studio.
-URL: https://bitbucket.org/mugadr_m/wildstar-studio/src/master/
+URL: https:
 Marble Bag - Nexus Vault application
-URL: https://github.com/MarbleBag/NexusVault-CLI
+URL: https:
 Zee - Reverse engineered many of the formats.
-URL: https://github.com/CucFlavius/ws-tool
+URL: https:
 Wildstar Community - Endearing to preserve this game.
 
 Licensing Information:

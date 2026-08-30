@@ -109,15 +109,16 @@ struct M3ModelAnimation {
 };
 
 struct M3Texture {
-    uint16_t slotId = 0;        // Client material slot/category id. 0xFFFF means unassigned/custom.
-    uint16_t fallbackType = 0;  // Client texture fallback selector: 0=color, 1=normal, 2=special.
+    uint16_t slotId = 0;
+    uint16_t fallbackType = 0;
     int32_t flags = 0;
     float intensity = 0.0f;
     uint8_t unk4 = 0;
     uint8_t unk5 = 0;
     uint8_t unk6 = 0;
     uint8_t unk7 = 0;
-    uint64_t nrLetters = 0;
+    uint32_t nrLetters = 0;
+    uint32_t pathFlags = 0;
     uint64_t offset = 0;
     std::string path;
     std::string textureType;
@@ -125,8 +126,8 @@ struct M3Texture {
 };
 
 struct M3MaterialVariant {
-    int16_t textureIndexA = -1;  // Diffuse/color selector
-    int16_t textureIndexB = -1;  // Normal selector
+    int16_t textureIndexA = -1;
+    int16_t textureIndexB = -1;
     std::array<uint16_t, 146> unkValues{};
     std::string textureColorPath;
     std::string textureNormalPath;
@@ -151,7 +152,8 @@ struct M3Material {
     uint32_t unk20 = 0;
     int32_t specularX = 0;
     int32_t specularY = 0;
-    uint64_t nrDescriptions = 0;
+    uint32_t nrDescriptions = 0;
+    uint32_t descriptionFlags = 0;
     uint64_t ofsDescriptions = 0;
     std::vector<M3MaterialVariant> variants;
 };
@@ -164,14 +166,19 @@ struct M3Submesh {
     uint16_t startBoneMapping = 0;
     uint16_t nrBoneMapping = 0;
     uint16_t unk1 = 0;
-    uint16_t materialID = 0;
-    uint16_t unk2 = 0;
-    uint16_t unk3 = 0;
-    uint16_t unk4 = 0;
-    uint8_t groupId = 0;
+    int16_t materialID = -1;
+    int16_t unk2 = 0;
+    int16_t unk3 = 0;
+    int16_t unk4 = 0;
+    int8_t groupId = -1;
     uint8_t unkGroupRelated = 0;
+    int16_t unk7 = 0;
+    int16_t anatomyId = 0;
+    std::array<int16_t, 6> unk8To13{};
     std::array<uint8_t, 4> color0{};
     std::array<uint8_t, 4> color1{};
+    uint8_t unk16 = 0;
+    uint8_t unk17 = 0;
     glm::vec4 boundMin{0.0f};
     glm::vec4 boundMax{0.0f};
     glm::vec4 unkVec4{0.0f};
@@ -192,18 +199,18 @@ struct M3Vertex {
 
 struct M3Geometry {
     uint32_t nrVertices = 0;
-    uint16_t vertexSize = 0;
+    uint8_t vertexSize = 0;
+    uint8_t vertexSizePadding = 0;
     int16_t vertexFlags = 0;
     std::array<uint8_t, 11> fieldTypes{};
     std::array<uint8_t, 11> fieldOffsets{};
     uint32_t nrIndices = 0;
-    int16_t indexFlags = 0;
-    uint32_t ofsIndices = 0;
+    uint8_t indexSize = 0;
+    uint8_t indexFlags = 0;
+    uint64_t ofsIndices = 0;
     uint32_t nrSubmeshes = 0;
-    uint32_t ofsSubmeshes = 0;
+    uint64_t ofsSubmeshes = 0;
 
-    // True if blend values look like texture layer blends (dominant channel ~255)
-    // False if blend values are vertex colors or other data
     bool usesTextureLayerBlending = false;
 
     std::vector<M3Vertex> vertices;
@@ -231,7 +238,7 @@ struct M3SubmeshGroup {
 struct M3Header {
     char signature[4]{};
     uint32_t version = 0;
-    uint32_t unk008 = 0;
+    uint64_t unk008 = 0;
 
     M3MetaDef animationsMeta{};
     M3TrackDef trackdefAnim[4]{};
@@ -319,15 +326,15 @@ struct M3ModelData {
     std::vector<int16_t> lut1A0;
     std::vector<int16_t> lut1D0;
     std::vector<int16_t> lut210;
-    std::vector<int16_t> lut260;
+    std::vector<int32_t> lut260;
     std::vector<int16_t> lut270;
-    std::vector<int16_t> lut280;
+    std::vector<int64_t> lut280;
     std::vector<int16_t> lut338;
-    std::vector<int16_t> lut4A0;
+    std::vector<int32_t> lut4A0;
     std::vector<glm::vec4> lut510;
     std::vector<int32_t> lut520;
     std::vector<int32_t> lut530;
-    std::vector<int32_t> lut550;
+    std::vector<int16_t> lut550;
 
     bool success = false;
 };

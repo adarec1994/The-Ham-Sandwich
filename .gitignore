@@ -1,3 +1,10 @@
 /archive
 /decomp
 /tools
+
+# documentation
+*.md
+*.rst
+*.adoc
+docs/
+doc/

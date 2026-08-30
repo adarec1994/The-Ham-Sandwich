@@ -7,6 +7,8 @@ internal static class WsLzma
 {
     private const int PropertySize = 5;
 
+    private const int MinimumWindow = 1 << 12;
+
     public static byte[] Decode(byte[] raw, int expected, string what)
     {
         if (raw.Length <= PropertySize)
@@ -16,6 +18,13 @@ internal static class WsLzma
 
         var properties = new byte[PropertySize];
         Array.Copy(raw, properties, PropertySize);
+
+        uint dictionary = BitConverter.ToUInt32(properties, 1);
+        var window = (uint)Math.Max(expected, MinimumWindow);
+        if (window < dictionary)
+        {
+            BitConverter.TryWriteBytes(properties.AsSpan(1), window);
+        }
 
         var decoder = new SevenZip.Compression.LZMA.Decoder();
         decoder.SetDecoderProperties(properties);

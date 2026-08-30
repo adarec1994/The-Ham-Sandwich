@@ -67,14 +67,11 @@ namespace TerrainExport
         if (path.empty()) return "model";
         std::string result = path;
 
-        // Remove .m3 extension
         size_t ext = result.rfind(".m3");
         if (ext != std::string::npos) result = result.substr(0, ext);
 
-        // Normalize slashes to forward slashes
         for (char& c : result) if (c == '\\') c = '/';
 
-        // Remove leading slash if present
         if (!result.empty() && result[0] == '/') result = result.substr(1);
 
         return result;
@@ -339,11 +336,9 @@ namespace TerrainExport
                             {
                                 auto render = std::make_unique<M3Render>(modelData, archive, true, true);
 
-                                // Get relative path and create subdirectories
                                 std::string relPath = ExtractModelRelativePath(modelPath);
                                 std::string modelOutputDir = modelsDir;
 
-                                // Extract directory part from relative path
                                 size_t lastSlash = relPath.rfind('/');
                                 if (lastSlash != std::string::npos)
                                 {

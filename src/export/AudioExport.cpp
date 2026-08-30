@@ -117,7 +117,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
             return false;
         }
     } else if (formatTag == 0x0002 && bitsPerSample == 4) {
-        // Wwise ADPCM (format 0x0002 with 4-bit) - uses IMA ADPCM algorithm
         static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
         static const int IMA_StepTable[89] = {
             7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -148,8 +147,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
             return false;
         }
 
-        // Wwise ADPCM: block is split by channel, NOT interleaved
-        // For stereo: [Left header 4B][Left data][Right header 4B][Right data]
         size_t bytesPerChannel = blockAlign / channels;
         size_t numBlocks = audioSize / blockAlign;
 
@@ -163,15 +160,12 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
             for (int ch = 0; ch < channels; ch++) {
                 const uint8_t* chData = blockStart + ch * bytesPerChannel;
 
-                // 4-byte header: predictor (2), step index (1), reserved (1)
                 int predictor = (int16_t)(chData[0] | (chData[1] << 8));
                 int stepIndex = chData[2];
                 if (stepIndex > 88) stepIndex = 88;
 
-                // First sample is the predictor
                 channelSamples[ch].push_back((int16_t)predictor);
 
-                // Decode data bytes
                 size_t dataBytes = bytesPerChannel - 4;
                 for (size_t i = 0; i < dataBytes; i++) {
                     uint8_t byte = chData[4 + i];
@@ -180,7 +174,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
                 }
             }
 
-            // Interleave channels
             size_t samplesPerChannel = channelSamples[0].size();
             for (size_t s = 0; s < samplesPerChannel; s++) {
                 for (int ch = 0; ch < channels; ch++) {
@@ -249,7 +242,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
         }
         return true;
     } else if (formatTag == 0x0069 || formatTag == 0x0011) {
-        // Wwise IMA ADPCM
         static const int IMA_IndexTable[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
         static const int IMA_StepTable[89] = {
             7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
@@ -288,7 +280,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
 
             std::vector<int> predictor(channels), stepIndex(channels);
 
-            // Read headers (4 bytes per channel)
             for (int ch = 0; ch < channels; ch++) {
                 size_t headerOff = ch * 4;
                 predictor[ch] = (int16_t)(bd[headerOff] | (bd[headerOff + 1] << 8));
@@ -296,7 +287,6 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
                 if (stepIndex[ch] > 88) stepIndex[ch] = 88;
             }
 
-            // Output initial samples
             if (channels == 1) {
                 pcmOut.push_back((int16_t)predictor[0]);
             } else {
@@ -314,26 +304,22 @@ static bool DecodeWEM(const uint8_t* wemData, size_t wemSize, std::vector<int16_
                     pcmOut.push_back(decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]));
                 }
             } else {
-                // Stereo: data comes in 4-byte chunks per channel, interleaved
                 size_t pos = 0;
                 while (pos + 8 <= dataSize) {
                     int16_t left[8], right[8];
 
-                    // Decode 4 bytes (8 samples) from left channel
                     for (int i = 0; i < 4; i++) {
                         uint8_t byte = data[pos + i];
                         left[i * 2] = decodeNibble(byte & 0x0F, predictor[0], stepIndex[0]);
                         left[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[0], stepIndex[0]);
                     }
 
-                    // Decode 4 bytes (8 samples) from right channel
                     for (int i = 0; i < 4; i++) {
                         uint8_t byte = data[pos + 4 + i];
                         right[i * 2] = decodeNibble(byte & 0x0F, predictor[1], stepIndex[1]);
                         right[i * 2 + 1] = decodeNibble((byte >> 4) & 0x0F, predictor[1], stepIndex[1]);
                     }
 
-                    // Interleave L R L R
                     for (int i = 0; i < 8; i++) {
                         pcmOut.push_back(left[i]);
                         pcmOut.push_back(right[i]);

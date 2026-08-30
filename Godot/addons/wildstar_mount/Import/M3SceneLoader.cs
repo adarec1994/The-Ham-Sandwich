@@ -55,7 +55,8 @@ public partial class M3SceneLoader : ResourceFormatLoader
         }
 
         if (!M3MeshBuilder.TryBuild(model, out ArrayMesh mesh, out int[] surfaceGeosets,
-                                    out int[] surfaceMaterials, out string buildError))
+                                    out int[] surfaceMaterials, out int[] surfaceSubmeshes,
+                                    out string buildError))
         {
             GD.PushWarning("[wildstar_mount] " + path + ": " + buildError);
             return Variant.CreateFrom((int)Error.FileCorrupt);
@@ -64,7 +65,8 @@ public partial class M3SceneLoader : ResourceFormatLoader
         string name = NameOf(path);
         mesh.ResourceName = name;
 
-        Node3D root = M3SceneBuilder.Build(model, mesh, name, bytes, surfaceGeosets, surfaceMaterials, path);
+        Node3D root = M3SceneBuilder.Build(model, mesh, name, bytes, surfaceGeosets,
+                                           surfaceMaterials, path, surfaceSubmeshes);
         var scene = new PackedScene();
         Error packed = scene.Pack(root);
         root.Free();

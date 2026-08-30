@@ -31,22 +31,28 @@ public static class M3MeshBuilder
 
     public static bool TryBuild(M3File model, out ArrayMesh mesh, out int[] surfaceGeosets,
                                 out int[] surfaceMaterials, out string error)
+        => TryBuild(model, out mesh, out surfaceGeosets, out surfaceMaterials, out _, out error);
+
+    public static bool TryBuild(M3File model, out ArrayMesh mesh, out int[] surfaceGeosets,
+                                out int[] surfaceMaterials, out int[] surfaceSubmeshes,
+                                out string error)
     {
         mesh = new ArrayMesh();
         surfaceGeosets = System.Array.Empty<int>();
         surfaceMaterials = System.Array.Empty<int>();
+        surfaceSubmeshes = System.Array.Empty<int>();
 
         var geosets = new System.Collections.Generic.List<int>();
         var materials = new System.Collections.Generic.List<int>();
+        var submeshIndices = new System.Collections.Generic.List<int>();
 
         M3Submesh[] submeshes = model.Submeshes.Length != 0
             ? model.Submeshes
-            : new[] { new M3Submesh(0, 0, model.IndexCount, model.VertexCount, 0, 0,
-                                    model.BoneMap.Length, 0, 0xFFFF, 0, 0, 0,
-                                    new ushort[4], new ushort[4]) };
+            : new[] { M3Submesh.Whole(model.IndexCount, model.VertexCount, model.BoneMap.Length) };
 
-        foreach (M3Submesh submesh in submeshes)
+        for (int s = 0; s < submeshes.Length; s++)
         {
+            M3Submesh submesh = submeshes[s];
             int before = mesh.GetSurfaceCount();
             if (!AddSurface(mesh, model, submesh, out error))
             {
@@ -57,6 +63,7 @@ public static class M3MeshBuilder
             {
                 geosets.Add(submesh.GeosetId);
                 materials.Add(submesh.MaterialIndex);
+                submeshIndices.Add(model.Submeshes.Length != 0 ? s : -1);
             }
         }
 
@@ -68,6 +75,7 @@ public static class M3MeshBuilder
 
         surfaceGeosets = geosets.ToArray();
         surfaceMaterials = materials.ToArray();
+        surfaceSubmeshes = submeshIndices.ToArray();
         error = string.Empty;
         return true;
     }
@@ -82,8 +90,10 @@ public static class M3MeshBuilder
             return true;
         }
 
-        if (submesh.StartVertex + submesh.VertexCount > model.VertexCount ||
-            submesh.StartIndex + submesh.IndexCount > model.IndexCount)
+        if (submesh.StartVertex < 0 || submesh.VertexCount < 0 ||
+            submesh.StartIndex < 0 || submesh.IndexCount < 0 ||
+            (long)submesh.StartVertex + submesh.VertexCount > model.VertexCount ||
+            (long)submesh.StartIndex + submesh.IndexCount > model.IndexCount)
         {
             error = "submesh runs past the vertex or index buffer";
             return false;
@@ -141,7 +151,7 @@ public static class M3MeshBuilder
 
             if (skinned)
             {
-                ReadSkin(model, submesh, vertex, boneIndices.Offset,
+                ReadSkin(model, vertex, boneIndices.Offset,
                          boneWeights.Present ? boneWeights.Offset : -1, bones, weights, i);
             }
         }
@@ -154,7 +164,7 @@ public static class M3MeshBuilder
             int b = model.Index(submesh.StartIndex + i * 3 + 1);
             int c = model.Index(submesh.StartIndex + i * 3 + 2);
 
-            if (a >= count || b >= count || c >= count)
+            if (a < 0 || b < 0 || c < 0 || a >= count || b >= count || c >= count)
             {
                 error = "submesh index points outside its vertex range";
                 return false;
@@ -198,7 +208,7 @@ public static class M3MeshBuilder
     {
         string name = "material" + submesh.MaterialIndex;
 
-        if (submesh.MaterialIndex >= model.Materials.Length)
+        if (submesh.MaterialIndex < 0 || submesh.MaterialIndex >= model.Materials.Length)
         {
             return name;
         }
@@ -210,7 +220,7 @@ public static class M3MeshBuilder
         }
 
         int texture = material.Layers[0].TextureA;
-        if (texture >= model.Textures.Length)
+        if (texture < 0 || texture >= model.Textures.Length)
         {
             return name;
         }
@@ -225,32 +235,18 @@ public static class M3MeshBuilder
         return name + "_" + (slash >= 0 ? path[(slash + 1)..] : path);
     }
 
-    private static void ReadSkin(M3File model, in M3Submesh submesh, ReadOnlySpan<byte> vertex,
+    private static void ReadSkin(M3File model, ReadOnlySpan<byte> vertex,
                                  int indexAt, int weightAt,
                                  int[] bones, float[] weights, int i)
     {
-        float total = 0.0f;
-
         for (int k = 0; k < 4; k++)
         {
             float weight = weightAt < 0
                 ? (k == 0 ? 1.0f : 0.0f)
                 : vertex[weightAt + k] * M3File.WeightScale;
 
-            bones[i * 4 + k] = model.ResolveBone(submesh, vertex[indexAt + k]);
+            bones[i * 4 + k] = model.ResolveBone(vertex[indexAt + k]);
             weights[i * 4 + k] = weight;
-            total += weight;
-        }
-
-        if (total <= 0.0f)
-        {
-            weights[i * 4] = 1.0f;
-            return;
-        }
-
-        for (int k = 0; k < 4; k++)
-        {
-            weights[i * 4 + k] /= total;
         }
     }
 

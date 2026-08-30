@@ -43,7 +43,6 @@ static void DebugPrintAnimationBones(const std::string& context,
     for (size_t i = 0; i < bones.size(); ++i) {
         const auto& bone = bones[i];
 
-        // Only show bones 0-20 (legs/feet) or mirrored bones
         bool isLegBone = (i <= 20);
         bool isMirrored = (i < boneMirrored.size() && boneMirrored[i]);
         if (!isLegBone && !isMirrored) continue;
@@ -129,7 +128,7 @@ struct VSInput {
     float3 position : POSITION;
     float3 normal : NORMAL;
     float2 texCoord : TEXCOORD0;
-    float4 blendWeights : TEXCOORD1;  // Texture layer blend weights
+    float4 blendWeights : TEXCOORD1;
     float4 boneWeights : BLENDWEIGHT;
     uint4 boneIndices : BLENDINDICES;
 };
@@ -137,7 +136,7 @@ struct PSInput {
     float4 position : SV_POSITION;
     float3 normal : TEXCOORD0;
     float2 texCoord : TEXCOORD1;
-    float4 blendWeights : TEXCOORD2;  // Pass blend weights to pixel shader
+    float4 blendWeights : TEXCOORD2;
 };
 PSInput main(VSInput input) {
     PSInput output;
@@ -168,20 +167,20 @@ cbuffer M3CB : register(b0) {
     float3 highlightColor;
     float highlightMix;
     int useSkinning;
-    int useLayerBlending;  // Whether to use texture layer blending
-    int alphaMode;         // 0=opaque, 1=cutout, 2=blend
+    int useLayerBlending;
+    int alphaMode;
     float alphaCutoff;
 };
-Texture2D diffTexture : register(t0);   // Layer 0 (primary diffuse)
-Texture2D diffTexture1 : register(t1);  // Layer 1
-Texture2D diffTexture2 : register(t2);  // Layer 2
-Texture2D diffTexture3 : register(t3);  // Layer 3
+Texture2D diffTexture : register(t0);
+Texture2D diffTexture1 : register(t1);
+Texture2D diffTexture2 : register(t2);
+Texture2D diffTexture3 : register(t3);
 SamplerState samplerState : register(s0);
 struct PSInput {
     float4 position : SV_POSITION;
     float3 normal : TEXCOORD0;
     float2 texCoord : TEXCOORD1;
-    float4 blendWeights : TEXCOORD2;  // Texture layer blend weights
+    float4 blendWeights : TEXCOORD2;
 };
 float4 main(PSInput input) : SV_TARGET {
     float3 lightDir = normalize(float3(0.5, 1.0, 0.3));
@@ -189,19 +188,17 @@ float4 main(PSInput input) : SV_TARGET {
 
     float4 texColor;
     if (useLayerBlending == 1) {
-        // Blend up to 4 texture layers based on vertex blend weights
         float4 layer0 = diffTexture.Sample(samplerState, input.texCoord);
         float4 layer1 = diffTexture1.Sample(samplerState, input.texCoord);
         float4 layer2 = diffTexture2.Sample(samplerState, input.texCoord);
         float4 layer3 = diffTexture3.Sample(samplerState, input.texCoord);
 
-        // WildStar's model shader maps material layers through COLOR1 as B, G, R, A.
         float4 weights = input.blendWeights.zyxw;
         float totalWeight = weights.x + weights.y + weights.z + weights.w;
         if (totalWeight > 0.001) {
             weights /= totalWeight;
         } else {
-            weights = float4(1, 0, 0, 0);  // Default to layer 0 only
+            weights = float4(1, 0, 0, 0);
         }
 
         texColor = layer0 * weights.x + layer1 * weights.y + layer2 * weights.z + layer3 * weights.w;
@@ -254,7 +251,7 @@ struct RenderVertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
-    glm::vec4 blendWeights;   // Texture layer blend weights
+    glm::vec4 blendWeights;
     glm::vec4 boneWeights;
     glm::uvec4 boneIndices;
 };
@@ -399,7 +396,7 @@ void M3Render::InitSharedResources() {
             {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
-            {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},  // blendWeights
+            {"TEXCOORD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 48, D3D11_INPUT_PER_VERTEX_DATA, 0},
             {"BLENDINDICES", 0, DXGI_FORMAT_R32G32B32A32_UINT, 0, 64, D3D11_INPUT_PER_VERTEX_DATA, 0},
         };
@@ -477,12 +474,14 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
     if (highestLodOnly) {
         uint8_t minGroupId = 255;
         for (const auto& sm : data.geometry.submeshes) {
-            if (sm.groupId != 255 && sm.groupId < minGroupId) {
-                minGroupId = sm.groupId;
+            const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+            if (groupId != 255 && groupId < minGroupId) {
+                minGroupId = groupId;
             }
         }
         for (const auto& sm : data.geometry.submeshes) {
-            if (sm.groupId == minGroupId || sm.groupId == 255) {
+            const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+            if (groupId == minGroupId || groupId == 255) {
                 submeshes.push_back(sm);
             }
         }
@@ -507,7 +506,8 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
 
     std::set<uint8_t> uniqueGroups;
     for (const auto& sm : submeshes) {
-        if (sm.groupId != 255) uniqueGroups.insert(sm.groupId);
+        const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+        if (groupId != 255) uniqueGroups.insert(groupId);
     }
     if (!uniqueGroups.empty()) {
         setActiveVariant(*uniqueGroups.begin());
@@ -546,7 +546,7 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
         rv.position = v.position;
         rv.normal = v.normal;
         rv.uv = v.uv1;
-        rv.blendWeights = v.blend;  // Texture layer blend weights
+        rv.blendWeights = v.blend;
         rv.boneWeights = v.boneWeights;
         rv.boneIndices = v.boneIndices;
         renderVerts.push_back(rv);
@@ -581,10 +581,8 @@ M3Render::M3Render(const M3ModelData& data, const ArchivePtr& arc, bool highestL
     cbd.ByteWidth = sizeof(SkeletonCB);
     sDevice->CreateBuffer(&cbd, nullptr, &mSkeletonCB);
 
-    // Diagnostic: check for vertex blend weights and multi-layer materials
     int vertsWithBlend = 0;
     for (const auto& v : data.geometry.vertices) {
-        // Check if any component of blend is non-zero
         if (v.blend.x > 0.01f || v.blend.y > 0.01f || v.blend.z > 0.01f || v.blend.w > 0.01f) {
             vertsWithBlend++;
         }
@@ -632,11 +630,9 @@ void M3Render::precomputeBoneData() {
                              !bone.tracks[6].keyframes.empty();
         boneUsesTrackBind[i] = usesTrackBind;
 
-        // Match the client: missing animated components are identity/zero, not
-        // decomposed from the inverse-bind file matrices.
         bindLocalScale[i] = sampleEngineBoneScale(bone, 0.0f);
         bindLocalRotation[i] = !bone.tracks[4].keyframes.empty()
-            ? glm::normalize(bone.tracks[4].keyframes.front().rotation)
+            ? bone.tracks[4].keyframes.front().rotation
             : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         bindLocalTranslation[i] = !bone.tracks[6].keyframes.empty()
             ? bone.tracks[6].keyframes.front().translation
@@ -651,17 +647,7 @@ void M3Render::precomputeBoneData() {
             ? bindLocalMatrix[i]
             : effectiveBindGlobal[bone.parentId] * bindLocalMatrix[i];
         boneMirrored[i] = glm::determinant(glm::mat3(bindLocalMatrix[i])) < 0.0f;
-        inverseEffectiveBindGlobal[i] = IsUsableMatrix(effectiveBindGlobal[i])
-            ? glm::inverse(effectiveBindGlobal[i])
-            : glm::mat4(1.0f);
-    }
-
-    for (size_t i = 0; i < numBones; ++i) {
-        if (IsUsableMatrix(bones[i].inverseGlobalMatrix)) {
-            inverseEffectiveBindGlobal[i] = bones[i].inverseGlobalMatrix;
-        } else {
-            inverseEffectiveBindGlobal[i] = glm::inverse(effectiveBindGlobal[i]);
-        }
+        inverseEffectiveBindGlobal[i] = bone.inverseGlobalMatrix;
     }
 
     resetBoneMatricesToBindPose();
@@ -708,11 +694,8 @@ void M3Render::resetBoneMatricesToBindPose() {
     worldTransforms.resize(numBones);
     boneMatrices.resize(numBones);
     for (size_t i = 0; i < numBones; ++i) {
-        const glm::mat4 bindGlobal = IsUsableMatrix(bones[i].globalMatrix)
-            ? bones[i].globalMatrix
-            : effectiveBindGlobal[i];
-        worldTransforms[i] = bindGlobal;
-        boneMatrices[i] = GlmToXM(bindGlobal * inverseEffectiveBindGlobal[i]);
+        worldTransforms[i] = effectiveBindGlobal[i];
+        boneMatrices[i] = GlmToXM(effectiveBindGlobal[i] * inverseEffectiveBindGlobal[i]);
     }
 }
 
@@ -769,7 +752,6 @@ void M3Render::loadTextures(const M3ModelData& data, const ArchivePtr& arc) {
 ComPtr<ID3D11ShaderResourceView> M3Render::createFallbackWhite() {
     if (!sDevice) return nullptr;
 
-    // Actual white pixel (was 0xFF808080 grey before!)
     uint32_t px = 0xFFFFFFFFu;
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = 1;
@@ -852,7 +834,6 @@ ComPtr<ID3D11ShaderResourceView> M3Render::loadTextureFromArchive(const ArchiveP
         pathsToTry.push_back(withTex.substr(lastSlash + 1));
     }
 
-    // Try with "art/" prefix if not present
     std::wstring normalized = NormalizeTexturePath(withTex);
     if (normalized.find(L"art/") != 0) {
         pathsToTry.push_back(L"art/" + normalized);
@@ -977,8 +958,6 @@ ID3D11ShaderResourceView* M3Render::resolveDiffuseTexture(uint16_t materialId, i
     return mFallbackWhiteSRV.Get();
 }
 
-// Resolve up to 4 texture layers for layer blending
-// Returns the number of valid layers (1-4)
 int M3Render::resolveTextureLayers(uint16_t materialId, int variant,
                                     ID3D11ShaderResourceView* outSRVs[4]) const {
     for (int i = 0; i < 4; ++i) {
@@ -1113,7 +1092,7 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     cb.highlightColor = XMFLOAT3(mHighlightR, mHighlightG, mHighlightB);
     cb.highlightMix = mHighlightMix;
     cb.useSkinning = useSkinning ? 1 : 0;
-    cb.useLayerBlending = 0;  // Will be set per-submesh if material has multiple layers
+    cb.useLayerBlending = 0;
     cb.alphaMode = 0;
     cb.alphaCutoff = 0.45f;
 
@@ -1154,20 +1133,20 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
     sContext->PSSetConstantBuffers(0, 1, cbs);
     sContext->PSSetSamplers(0, 1, sSharedSampler.GetAddressOf());
 
-    // Find minimum groupId (highest LOD) - skip groupId 255 (always visible)
     uint8_t minGroupId = 255;
     for (const auto& sm : submeshes) {
-        if (sm.groupId != 255 && sm.groupId < minGroupId) {
-            minGroupId = sm.groupId;
+        const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+        if (groupId != 255 && groupId < minGroupId) {
+            minGroupId = groupId;
         }
     }
 
-    // Debug: count how many submeshes we're actually rendering
     static bool lodDebugPrinted = false;
     if (!lodDebugPrinted) {
         int renderCount = 0;
         for (const auto& sm : submeshes) {
-            if (sm.groupId == minGroupId || sm.groupId == 255) renderCount++;
+            const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+            if (groupId == minGroupId || groupId == 255) renderCount++;
         }
         std::cout << "[M3Render] LOD filtering: minGroupId=" << (int)minGroupId
                   << ", rendering " << renderCount << "/" << submeshes.size() << " submeshes" << std::endl;
@@ -1178,8 +1157,8 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
         if (i < submeshVisible.size() && submeshVisible[i] == 0) continue;
         const auto& sm = submeshes[i];
 
-        // Only render highest LOD (lowest groupId) or always-visible submeshes (255)
-        if (sm.groupId != minGroupId && sm.groupId != 255) continue;
+        const uint8_t groupId = static_cast<uint8_t>(sm.groupId);
+        if (groupId != minGroupId && groupId != 255) continue;
 
 
         int variant = 0;
@@ -1191,18 +1170,13 @@ void M3Render::render(const XMMATRIX& view, const XMMATRIX& proj, const XMMATRIX
             variant = materialSelectedVariant[sm.materialID];
         }
 
-        // Resolve texture layers for this material
         ID3D11ShaderResourceView* layerSRVs[4];
         int layerCount = resolveTextureLayers(sm.materialID, variant, layerSRVs);
 
-        // Enable layer blending only if:
-        // 1. We have multiple texture layers defined
-        // 2. The model's blend values look like texture layer blends (dominant channel pattern)
         bool needsLayerBlending = (layerCount > 1) && geometry.usesTextureLayerBlending;
         cb.useLayerBlending = needsLayerBlending ? 1 : 0;
         cb.alphaMode = materialAlphaMode(sm.materialID, variant);
 
-        // Bind all texture layers
         sContext->PSSetShaderResources(0, 4, layerSRVs);
 
         if ((int)i == selectedSubmesh) {
@@ -1282,7 +1256,7 @@ void M3Render::setSubmeshVariantOverride(size_t submeshId, int variantOrMinus1) 
 void M3Render::setActiveVariant(int variantIndex) {
     activeVariant = variantIndex;
     for (size_t i = 0; i < submeshes.size(); ++i) {
-        uint8_t gid = submeshes[i].groupId;
+        uint8_t gid = static_cast<uint8_t>(submeshes[i].groupId);
         if (gid == 255 || variantIndex < 0) {
             submeshVisible[i] = 1;
         } else {
@@ -1370,8 +1344,8 @@ static glm::quat interpolateRotation(const M3AnimationTrack& track, float timeMs
     float t = (timeMs - prev.timestamp) / denom;
     t = glm::clamp(t, 0.0f, 1.0f);
 
-    glm::quat q0 = glm::normalize(prev.rotation);
-    glm::quat q1 = glm::normalize(next.rotation);
+    glm::quat q0 = prev.rotation;
+    glm::quat q1 = next.rotation;
     if (glm::dot(q0, q1) < 0.0f) {
         q1 = -q1;
     }
@@ -1453,7 +1427,6 @@ void M3Render::updateAnimation(float deltaTime) {
         glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
         glm::vec3 translation(0.0f);
 
-        // Match the client path: scale track 0 divided by scale track 2.
         scale = sampleEngineBoneScale(bone, currentTimeMs);
 
         if (!bone.tracks[4].keyframes.empty()) {
@@ -1464,7 +1437,7 @@ void M3Render::updateAnimation(float deltaTime) {
             translation = interpolateTranslation(bone.tracks[6], currentTimeMs);
         }
 
-        glm::quat finalRotation = glm::normalize(rotation);
+        glm::quat finalRotation = rotation;
         if (isRoot || bone.parentId >= (int)i) {
             worldScales[i] = scale;
             worldRotations[i] = finalRotation;
@@ -1472,7 +1445,7 @@ void M3Render::updateAnimation(float deltaTime) {
         } else {
             const size_t parentIndex = static_cast<size_t>(bone.parentId);
             worldScales[i] = worldScales[parentIndex] * scale;
-            worldRotations[i] = glm::normalize(worldRotations[parentIndex] * finalRotation);
+            worldRotations[i] = worldRotations[parentIndex] * finalRotation;
             worldTranslations[i] = worldTranslations[parentIndex] +
                 worldRotations[parentIndex] * (worldScales[parentIndex] * translation);
         }

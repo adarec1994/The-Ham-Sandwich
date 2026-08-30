@@ -20,7 +20,7 @@ enum class HircType : uint8_t {
     MusicTrack = 11,
     MusicSwitchContainer = 12,
     MusicPlaylistContainer = 13,
-    AudioDevice = 14,  // Also ActorMixer in some versions
+    AudioDevice = 14,
 };
 
 struct SoundObject {
@@ -100,7 +100,7 @@ private:
     std::unordered_map<uint32_t, std::vector<uint32_t>> mEventToActions;
     HircParser mEventsParser;
     HircParser mStructureParser;
-    std::unordered_map<uint32_t, uint32_t> mChildToParent;  // child -> parent container
+    std::unordered_map<uint32_t, uint32_t> mChildToParent;
 
     std::unordered_map<uint32_t, uint32_t> mWemIdToBankId;
     std::unordered_map<uint32_t, std::string> mBankIdToName;

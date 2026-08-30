@@ -163,11 +163,13 @@ internal static class TexDecoder
                                      int[] constantValue)
     {
 
-        int[][] quantBase = pixelMode == 0
+        bool yCoCg = pixelMode != 1;
+
+        int[][] quantBase = yCoCg
             ? new[] { TexTables.LumaQuant, TexTables.ChromaQuant, TexTables.ChromaQuant, TexTables.LumaQuant }
             : new[] { TexTables.LumaQuant, TexTables.LumaQuant, TexTables.LumaQuant, TexTables.LumaQuant };
 
-        bool[] chromaHuff = pixelMode == 0
+        bool[] chromaHuff = yCoCg
             ? new[] { false, true, true, false }
             : new[] { false, false, false, false };
 
@@ -221,7 +223,7 @@ internal static class TexDecoder
                 _ => planeCg,
             };
 
-            float fill = (c == 1 || c == 2) && modeZero ? v - 128.0f : v;
+            float fill = (c == 1 || c == 2) && yCoCg ? v - 128.0f : v;
             Array.Fill(target, fill);
         }
 
@@ -311,7 +313,9 @@ internal static class TexDecoder
                                     int py = my * (modeZero ? 8 : mcuSize) + ly * stepY;
                                     float cval = modeZero
                                         ? v
-                                        : Math.Clamp(v + 128.0f, 0.0f, 255.0f) - 128.0f;
+                                        : yCoCg
+                                            ? Math.Clamp(v, -256.0f, 255.0f)
+                                            : Math.Clamp(v + 128.0f, 0.0f, 255.0f) - 128.0f;
 
                                     for (int ry = 0; ry < stepY; ry++)
                                     for (int rx = 0; rx < stepX; rx++)
@@ -349,7 +353,7 @@ internal static class TexDecoder
 
                 int o = (y * width + x) * 4;
 
-                if (modeZero)
+                if (yCoCg)
                 {
                     float t = Y - MathF.Floor(cg * 0.5f);
                     float g = t + cg;

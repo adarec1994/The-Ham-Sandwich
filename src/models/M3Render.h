@@ -172,10 +172,10 @@ private:
     std::vector<glm::vec3> bindLocalScale;
     std::vector<glm::quat> bindLocalRotation;
     std::vector<glm::vec3> bindLocalTranslation;
-    std::vector<glm::mat4> bindLocalMatrix;  // Store the actual local matrix for mirrored bones
+    std::vector<glm::mat4> bindLocalMatrix;
     std::vector<bool> boneAtOrigin;
     std::vector<bool> boneUsesTrackBind;
-    std::vector<bool> boneMirrored;  // Track bones with negative determinant local matrices
+    std::vector<bool> boneMirrored;
     std::vector<glm::mat4> worldTransforms;
     std::vector<XMMATRIX> boneMatrices;
     size_t mSkeletonVBSize = 0;
@@ -221,7 +221,7 @@ private:
         XMFLOAT3 highlightColor;
         float highlightMix;
         int useSkinning;
-        int useLayerBlending;  // Whether to use multi-texture layer blending
+        int useLayerBlending;
         int alphaMode;
         float alphaCutoff;
     };

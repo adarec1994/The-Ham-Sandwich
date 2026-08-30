@@ -6,11 +6,13 @@ public sealed class M3Animation
 {
     public const int LoopFlag = 0x01;
 
-    public M3Animation(int sequenceId, int flags, uint start, uint end, ushort[] related,
+    public M3Animation(int sequenceId, int flags, int variation, uint start, uint end,
+                       ushort[] related,
                        int selectionWeight, int crossfadeMs, float naturalSpeed)
     {
         SequenceId = sequenceId;
         Flags = flags;
+        Variation = variation;
         Start = start;
         End = end;
         Related = related;
@@ -23,7 +25,7 @@ public sealed class M3Animation
 
     public int Flags { get; }
 
-    public int Variation => Flags;
+    public int Variation { get; }
 
     public bool Loops => (Flags & LoopFlag) != 0;
 
@@ -67,7 +69,7 @@ public sealed class M3Track
 
     public float Component(int key, int component) => Values[key * Stride + component];
 
-    public int LowerBound(uint time)
+    public int UpperBound(uint time)
     {
         int low = 0;
         int high = Keys.Length;
@@ -76,7 +78,7 @@ public sealed class M3Track
         {
             int mid = low + ((high - low) / 2);
 
-            if (Keys[mid] < time)
+            if (time >= Keys[mid])
             {
                 low = mid + 1;
             }
@@ -91,7 +93,13 @@ public sealed class M3Track
 
     public void Sample(uint time, Span<float> destination)
     {
-        int index = LowerBound(time);
+        if (Count == 0)
+        {
+            destination[..Stride].Clear();
+            return;
+        }
+
+        int index = UpperBound(time);
 
         if (index == 0)
         {
@@ -118,7 +126,13 @@ public sealed class M3Track
 
     public void SampleSlerp(uint time, Span<float> destination)
     {
-        int index = LowerBound(time);
+        if (Count == 0)
+        {
+            destination[..4].Clear();
+            return;
+        }
+
+        int index = UpperBound(time);
 
         if (index == 0)
         {

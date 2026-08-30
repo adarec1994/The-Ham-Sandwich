@@ -11,9 +11,9 @@ public:
     static bool CanLoad(const std::vector<uint8_t>& buffer);
 
 private:
-    static constexpr size_t HEADER_SIZE_V95 = 0x650;  // 1616 bytes
+    static constexpr size_t HEADER_SIZE_V95 = 0x650;
     static constexpr size_t VERTEX_SIZE_V95 = 48;
-    static constexpr size_t SUBMESH_SIZE_V95 = 88;    // Based on the struct
+    static constexpr size_t SUBMESH_SIZE_V95 = 88;
     static constexpr size_t TEXTURE_ENTRY_SIZE = 32;
     static constexpr size_t MATERIAL_SIZE = 48;
     static constexpr size_t SKIN_SIZE = 72;
@@ -21,23 +21,23 @@ private:
 #pragma pack(push, 1)
     struct M3HeaderV95
     {
-        uint8_t various1[0x1A0];      // 416 bytes
+        uint8_t various1[0x1A0];
         uint64_t nTextures;
         uint64_t ofsTextures;
-        uint8_t various5[0x20];       // 32 bytes
+        uint8_t various5[0x20];
         uint64_t nMaterials;
         uint64_t ofsMaterials;
-        uint8_t various2[0x20];       // 32 bytes
+        uint8_t various2[0x20];
         uint64_t nVertices;
         uint64_t ofsVertices;
         uint64_t nIndices;
         uint64_t ofsIndices;
         uint64_t nSubMeshes;
         uint64_t ofsSubMeshes;
-        uint64_t various3[7];         // 56 bytes
+        uint64_t various3[7];
         uint64_t nViews;
         uint64_t ofsViews;
-        uint8_t various4[0x3E8];      // 1000 bytes
+        uint8_t various4[0x3E8];
     };
 
     struct M3VertexV95

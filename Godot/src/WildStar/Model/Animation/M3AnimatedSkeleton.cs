@@ -21,7 +21,6 @@ public partial class M3AnimatedSkeleton : Node
     private M3PoseRuntime? _runtime;
     private Skeleton3D? _skeleton;
     private AnimationPlayer? _player;
-    private int[] _parent = Array.Empty<int>();
 
     private int _sequence = -1;
     private uint _start;
@@ -45,15 +44,6 @@ public partial class M3AnimatedSkeleton : Node
         {
             _skeleton = null;
             return;
-        }
-
-        _parent = new int[model.Bones.Length];
-        for (int i = 0; i < model.Bones.Length; i++)
-        {
-            M3Bone bone = model.Bones[i];
-            _parent[i] = !bone.IsRoot && bone.Parent < model.Bones.Length && bone.Parent != i
-                ? bone.Parent
-                : -1;
         }
 
         if (model.Animations.Length > 0)
@@ -103,13 +93,18 @@ public partial class M3AnimatedSkeleton : Node
             return;
         }
 
-        M3Animation animation = _model.Animations[index];
+        SelectIndex(index);
+        _elapsedMs = 0.0;
+        Playing = true;
+    }
+
+    private void SelectIndex(int index)
+    {
+        M3Animation animation = _model!.Animations[index];
         _sequence = index;
         _start = animation.Start;
         _end = animation.End;
         _loops = animation.Loops;
-        _elapsedMs = 0.0;
-        Playing = true;
     }
 
     public override void _Process(double delta)
@@ -119,8 +114,7 @@ public partial class M3AnimatedSkeleton : Node
             return;
         }
 
-        if (Engine.IsEditorHint() && _player is not null &&
-            (_player.IsPlaying() || !string.IsNullOrEmpty(_player.CurrentAnimation.ToString())))
+        if (ApplyPlayerPose())
         {
             return;
         }
@@ -153,6 +147,46 @@ public partial class M3AnimatedSkeleton : Node
         ApplyPose(_start + (uint)_elapsedMs);
     }
 
+    private bool ApplyPlayerPose()
+    {
+        if (_player is null || _model is null || _runtime is null || _skeleton is null)
+        {
+            return false;
+        }
+
+        StringName current = _player.CurrentAnimation;
+        if (current.IsEmpty || !_player.HasAnimation(current))
+        {
+            return false;
+        }
+
+        Animation clip = _player.GetAnimation(current);
+        if (!clip.HasMeta(M3AnimationBaker.SourceIndexMeta))
+        {
+            return false;
+        }
+
+        int index = clip.GetMeta(M3AnimationBaker.SourceIndexMeta).AsInt32();
+        if (index < 0 || index >= _model.Animations.Length)
+        {
+            return false;
+        }
+
+        if (_sequence != index)
+        {
+            SelectIndex(index);
+        }
+
+        uint duration = _end > _start ? _end - _start : 0;
+        double length = _player.CurrentAnimationLength;
+        double position = length > 0.0
+            ? Math.Clamp(_player.CurrentAnimationPosition / length, 0.0, 1.0)
+            : 0.0;
+        _elapsedMs = position * duration;
+        ApplyPose(_start + (uint)_elapsedMs);
+        return true;
+    }
+
     public float PoseRoundTripError()
     {
         if (_runtime is null || _skeleton is null)
@@ -162,7 +196,7 @@ public partial class M3AnimatedSkeleton : Node
 
         float worst = 0.0f;
 
-        for (int i = 0; i < _parent.Length; i++)
+        for (int i = 0; i < _runtime.BoneCount; i++)
         {
             Transform3D want = M3Matrix.ToTransform(_runtime.World(i));
             Transform3D got = _skeleton.GetBoneGlobalPose(i);
@@ -188,18 +222,17 @@ public partial class M3AnimatedSkeleton : Node
         _runtime.SetSingle(time);
         _runtime.Evaluate();
 
-        for (int i = 0; i < _parent.Length; i++)
+        for (int i = 0; i < _runtime.BoneCount; i++)
         {
-            Transform3D global = M3Matrix.ToTransform(_runtime.World(i));
+            ReadOnlySpan<float> translation = _runtime.WorldTranslation(i);
+            ReadOnlySpan<float> rotation = _runtime.WorldRotation(i);
+            ReadOnlySpan<float> scale = _runtime.WorldScale(i);
 
-            int p = _parent[i];
-            Transform3D local = p >= 0
-                ? M3Matrix.ToTransform(_runtime.World(p)).AffineInverse() * global
-                : global;
-
-            _skeleton.SetBonePosePosition(i, local.Origin);
-            _skeleton.SetBonePoseRotation(i, local.Basis.GetRotationQuaternion());
-            _skeleton.SetBonePoseScale(i, local.Basis.Scale);
+            _skeleton.SetBonePosePosition(
+                i, new Vector3(translation[0], translation[1], translation[2]));
+            _skeleton.SetBonePoseRotation(
+                i, new Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]));
+            _skeleton.SetBonePoseScale(i, new Vector3(scale[0], scale[1], scale[2]));
         }
     }
 }

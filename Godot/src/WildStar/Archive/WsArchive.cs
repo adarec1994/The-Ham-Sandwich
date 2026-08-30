@@ -122,6 +122,18 @@ public sealed class WsArchive : IDisposable
     public byte[] ReadFile(WsFile file) =>
         Decompress(ReadRawBlock(file), file.Compression, file.UncompressedSize, file.QualifiedPath);
 
+    public byte[] ReadFilePrefix(WsFile file, int maxBytes)
+    {
+        if (maxBytes <= 0)
+        {
+            return Array.Empty<byte>();
+        }
+
+        ulong want = Math.Min((ulong)maxBytes, file.UncompressedSize);
+        byte[] prefix = Decompress(ReadRawBlock(file), file.Compression, want, file.QualifiedPath);
+        return prefix.Length > (int)want ? prefix[..(int)want] : prefix;
+    }
+
     public byte[] ReadRawBlock(WsFile file)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

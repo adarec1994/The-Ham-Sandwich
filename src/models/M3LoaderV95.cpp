@@ -46,37 +46,18 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
 
     std::cout << "[M3V95] Loading version " << version << " file, size=" << size << std::endl;
 
-    // =========================================================================
-    // DEBUG: Dump header to find correct offsets
-    // =========================================================================
 
     std::cout << "[M3V95] Scanning header for non-zero uint64 pairs (count, offset):" << std::endl;
     for (size_t ofs = 0x100; ofs < 0x650; ofs += 16) {
         uint64_t val1 = Read<uint64_t>(ptr, ofs);
         uint64_t val2 = Read<uint64_t>(ptr, ofs + 8);
 
-        // Look for reasonable count/offset pairs
         if (val1 > 0 && val1 < 100000 && val2 > 0 && val2 < size) {
             std::cout << "[M3V95]   0x" << std::hex << ofs << ": count=" << std::dec << val1
                       << " offset=0x" << std::hex << val2 << std::dec << std::endl;
         }
     }
 
-    // =========================================================================
-    // V95 Header Layout (determined from analysis):
-    // V95 does NOT have nVertices/ofsVertices/nIndices/ofsIndices at 0x200-0x218.
-    // The geometry data is accessed through the Views/Skin structure.
-    //
-    // Known V95 offsets:
-    //   0x1a0: nTextures
-    //   0x1a8: ofsTextures
-    //   0x1d0: nMaterials
-    //   0x1d8: ofsMaterials
-    //   0x230: nSubMeshes
-    //   0x238: ofsSubMeshes
-    //   0x470: nViews
-    //   0x478: ofsViews
-    // =========================================================================
 
     uint64_t nTextures = Read<uint64_t>(ptr, 0x1A0);
     uint64_t ofsTextures = Read<uint64_t>(ptr, 0x1A8);
@@ -93,7 +74,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
     std::cout << "[M3V95]   Submeshes: " << nSubMeshes << " @ 0x" << std::hex << ofsSubMeshes << std::dec << std::endl;
     std::cout << "[M3V95]   Views:     " << nViews << " @ 0x" << std::hex << ofsViews << std::dec << std::endl;
 
-    // DEBUG: Dump bytes at views offset to understand skin structure
     if (ofsViews > 0 && ofsViews + 72 <= size) {
         std::cout << "[M3V95] Raw bytes at views offset 0x" << std::hex << ofsViews << std::dec << ":" << std::endl;
         std::cout << "[M3V95]   ";
@@ -116,14 +96,11 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         return model;
     }
 
-    // Read the Skin/View structure
-    // NOTE: Offsets might be ABSOLUTE (from file start) not relative to header end
-    size_t skinStart = ofsViews;  // Try absolute offset first
+    size_t skinStart = ofsViews;
 
     std::cout << "[M3V95] Trying skin at absolute offset 0x" << std::hex << skinStart << std::dec << std::endl;
 
     if (skinStart + sizeof(M3SkinV95) > size) {
-        // Try relative offset
         skinStart = HEADER_SIZE_V95 + ofsViews;
         std::cout << "[M3V95] Absolute failed, trying relative offset 0x" << std::hex << skinStart << std::dec << std::endl;
     }
@@ -133,7 +110,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         return model;
     }
 
-    // DEBUG: Dump bytes at skin offset
     std::cout << "[M3V95] Raw bytes at skin offset 0x" << std::hex << skinStart << std::dec << ":" << std::endl;
     std::cout << "[M3V95]   ";
     for (size_t i = 0; i < 72 && skinStart + i < size; i++) {
@@ -143,7 +119,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
     }
     std::cout << std::dec << std::endl;
 
-    // Try reading as uint64s
     std::cout << "[M3V95] As uint64s:" << std::endl;
     for (size_t i = 0; i < 9; i++) {
         uint64_t val = Read<uint64_t>(ptr, skinStart + i * 8);
@@ -162,9 +137,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
 
     size_t skinDataBase = skinStart + skin.sizeOfStruct;
 
-    // =========================================================================
-    // Scan the file for vertex data (3 floats that look like coordinates)
-    // =========================================================================
 
     std::cout << "[M3V95] Scanning file for vertex data..." << std::endl;
 
@@ -180,7 +152,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         if (std::abs(v1x) > 10000 || std::abs(v1y) > 10000 || std::abs(v1z) > 10000) continue;
         if (v1x == 0 && v1y == 0 && v1z == 0) continue;
 
-        // Check if subsequent vertices are also valid
         bool allValid = true;
         int validCount = 0;
         for (int i = 1; i < 10 && scanOfs + i * VERTEX_SIZE_V95 + 12 < size; i++) {
@@ -201,7 +172,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         }
 
         if (allValid && validCount >= 5) {
-            // Count total vertices
             size_t count = 0;
             for (size_t i = 0; scanOfs + i * VERTEX_SIZE_V95 + 12 < size; i++) {
                 size_t vOfs = scanOfs + i * VERTEX_SIZE_V95;
@@ -233,16 +203,12 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         return model;
     }
 
-    // =========================================================================
-    // Find index data - try skin's indexLookup first
-    // =========================================================================
 
     std::cout << "[M3V95] Looking for index data..." << std::endl;
 
     uint64_t nIndices = 0;
     size_t indexFileOffset = 0;
 
-    // Try skin index lookup
     if (skin.nIndexLookup > 0 && skin.ofsIndexLookup > 0) {
         size_t skinIndexOfs = skinDataBase + skin.ofsIndexLookup;
         std::cout << "[M3V95]   Testing skin indexLookup at 0x" << std::hex << skinIndexOfs << std::dec << std::endl;
@@ -265,7 +231,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         }
     }
 
-    // Scan for indices if not found
     if (nIndices == 0) {
         for (size_t scanOfs = HEADER_SIZE_V95; scanOfs < vertexFileOffset && scanOfs < size - 40; scanOfs += 4) {
             size_t count = 0;
@@ -288,9 +253,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
     std::cout << "[M3V95]   Vertices: " << nVertices << " @ 0x" << std::hex << vertexFileOffset << std::dec << std::endl;
     std::cout << "[M3V95]   Indices:  " << nIndices << " @ 0x" << std::hex << indexFileOffset << std::dec << std::endl;
 
-    // =========================================================================
-    // Read vertex data
-    // =========================================================================
 
     std::vector<M3VertexV95> rawVertices(nVertices);
     if (vertexFileOffset + nVertices * VERTEX_SIZE_V95 <= size) {
@@ -300,9 +262,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         return model;
     }
 
-    // =========================================================================
-    // Read index data
-    // =========================================================================
 
     std::vector<uint32_t> rawIndices;
     if (nIndices > 0 && indexFileOffset + nIndices * 4 <= size) {
@@ -310,9 +269,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         std::memcpy(rawIndices.data(), ptr + indexFileOffset, nIndices * sizeof(uint32_t));
     }
 
-    // =========================================================================
-    // Read submeshes
-    // =========================================================================
 
     size_t submeshStart = HEADER_SIZE_V95 + ofsSubMeshes;
     std::vector<M3SubMeshV95> rawSubmeshes;
@@ -329,9 +285,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
         }
     }
 
-    // =========================================================================
-    // Convert vertices
-    // =========================================================================
 
     model.geometry.vertices.resize(nVertices);
     for (size_t i = 0; i < nVertices; i++) {
@@ -358,9 +311,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
     model.geometry.nrVertices = static_cast<uint32_t>(nVertices);
     model.geometry.vertexSize = VERTEX_SIZE_V95;
 
-    // =========================================================================
-    // Build indices
-    // =========================================================================
 
     if (!rawSubmeshes.empty() && !rawIndices.empty()) {
         for (size_t smIdx = 0; smIdx < rawSubmeshes.size(); smIdx++) {
@@ -395,9 +345,6 @@ M3ModelData M3LoaderV95::Load(const std::vector<uint8_t>& buffer) {
     model.geometry.nrIndices = static_cast<uint32_t>(model.geometry.indices.size());
     model.geometry.nrSubmeshes = static_cast<uint32_t>(model.geometry.submeshes.size());
 
-    // =========================================================================
-    // Read textures
-    // =========================================================================
 
     if (nTextures > 0 && ofsTextures > 0) {
         size_t texStart = HEADER_SIZE_V95 + ofsTextures;

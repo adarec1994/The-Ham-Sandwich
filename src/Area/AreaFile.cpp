@@ -126,7 +126,7 @@ const float AreaFile::GRID_SIZE = 512.0f;
 
 static int gReferenceTileX = -1;
 static int gReferenceTileY = -1;
-static std::mutex gReferenceTileMutex;  // Protects gReferenceTileX/Y
+static std::mutex gReferenceTileMutex;
 static std::mutex gGeometryInitMutex;
 static thread_local bool tSkipGPUUpload = false;
 

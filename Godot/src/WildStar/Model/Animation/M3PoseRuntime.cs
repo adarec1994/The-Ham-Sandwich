@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 
 namespace WildStar.Model;
 
 public sealed class M3PoseRuntime
 {
-    public const int MaxLayers = 16;
+    public const int MaxPrimaryLayers = 4;
+    public const int MaxSecondaryLayers = 8;
 
     public struct Layer
     {
@@ -18,13 +19,10 @@ public sealed class M3PoseRuntime
     private readonly float[] _translation;
     private readonly float[] _matrix;
 
-    private readonly float[] _restScale;
-    private readonly float[] _restRotation;
-    private readonly float[] _restTranslation;
-
-    private readonly Layer[] _layers = new Layer[MaxLayers];
-    private int _layerCount;
-    private int _additiveCount;
+    private readonly Layer[] _primaryLayers = new Layer[MaxPrimaryLayers];
+    private readonly Layer[] _secondaryLayers = new Layer[MaxSecondaryLayers];
+    private int _primaryLayerCount;
+    private int _secondaryLayerCount;
 
     public M3PoseRuntime(M3File model)
     {
@@ -34,68 +32,48 @@ public sealed class M3PoseRuntime
         _rotation = new float[n * 4];
         _translation = new float[n * 3];
         _matrix = new float[n * 16];
-
-        _restScale = new float[n * 3];
-        _restRotation = new float[n * 4];
-        _restTranslation = new float[n * 3];
-        BuildRestLocals();
-    }
-
-    private void BuildRestLocals()
-    {
-        Span<float> scale = stackalloc float[3];
-        Span<float> rotation = stackalloc float[4];
-        Span<float> translation = stackalloc float[3];
-
-        for (int i = 0; i < _model.Bones.Length; i++)
-        {
-            M3Bone bone = _model.Bones[i];
-            float[] local;
-
-            if (bone.IsRoot || bone.Parent >= _model.Bones.Length || bone.Parent == i)
-            {
-                local = bone.Bind;
-            }
-            else
-            {
-                float[]? parentInverse = M3Pose.AffineInverse(_model.Bones[bone.Parent].Bind);
-                local = parentInverse is null
-                    ? bone.Bind
-                    : M3Pose.Multiply(parentInverse, bone.Bind);
-            }
-
-            M3Pose.Decompose(local, scale, rotation, translation);
-
-            scale.CopyTo(_restScale.AsSpan(i * 3, 3));
-            rotation.CopyTo(_restRotation.AsSpan(i * 4, 4));
-            translation.CopyTo(_restTranslation.AsSpan(i * 3, 3));
-        }
+        EvaluateRest();
     }
 
     public int BoneCount => _model.Bones.Length;
 
     public ReadOnlySpan<float> World(int bone) => _matrix.AsSpan(bone * 16, 16);
 
+    public ReadOnlySpan<float> WorldScale(int bone) => _scale.AsSpan(bone * 3, 3);
+
+    public ReadOnlySpan<float> WorldRotation(int bone) => _rotation.AsSpan(bone * 4, 4);
+
+    public ReadOnlySpan<float> WorldTranslation(int bone) => _translation.AsSpan(bone * 3, 3);
+
     public void SetSingle(uint time)
     {
-        _layers[0].Time = time;
-        _layers[0].Weight = 1.0f;
-        _layerCount = 1;
-        _additiveCount = 0;
+        _primaryLayers[0].Time = time;
+        _primaryLayers[0].Weight = 1.0f;
+        _primaryLayerCount = 1;
+        _secondaryLayerCount = 0;
     }
 
     public void SetLayers(ReadOnlySpan<Layer> layers)
     {
-        _layerCount = Math.Min(layers.Length, MaxLayers);
-        _additiveCount = _layerCount;
-        for (int i = 0; i < _layerCount; i++)
-        {
-            _layers[i] = layers[i];
-        }
+        SetLayers(layers, ReadOnlySpan<Layer>.Empty);
+    }
+
+    public void SetLayers(
+        ReadOnlySpan<Layer> primaryLayers,
+        ReadOnlySpan<Layer> secondaryLayers)
+    {
+        _primaryLayerCount = CopyLayers(primaryLayers, _primaryLayers);
+        _secondaryLayerCount = CopyLayers(secondaryLayers, _secondaryLayers);
     }
 
     public void Evaluate()
     {
+        if (_primaryLayerCount == 0)
+        {
+            EvaluateRest();
+            return;
+        }
+
         Span<float> sampled = stackalloc float[4];
         Span<float> layerValue = stackalloc float[4];
         Span<float> layerDivisor = stackalloc float[4];
@@ -156,11 +134,11 @@ public sealed class M3PoseRuntime
                 }
             }
 
-            if (bone.ScaleLayer.HasKeys && _additiveCount > 0)
+            if (bone.ScaleLayer.HasKeys && _secondaryLayerCount > 0)
             {
-                for (int layer = _additiveCount; layer > 0; layer--)
+                for (int layer = _secondaryLayerCount; layer > 0; layer--)
                 {
-                    uint time = _layers[layer - 1].Time;
+                    uint time = _secondaryLayers[layer - 1].Time;
                     bone.ScaleLayer.Sample(time, layerValue);
 
                     if (bone.ScaleDivisorLayer.HasKeys)
@@ -175,7 +153,7 @@ public sealed class M3PoseRuntime
                         }
                     }
 
-                    float w = _layers[layer - 1].Weight;
+                    float w = _secondaryLayers[layer - 1].Weight;
                     _scale[s] *= (layerValue[0] - 1.0f) * w + 1.0f;
                     _scale[s + 1] *= (layerValue[1] - 1.0f) * w + 1.0f;
                     _scale[s + 2] *= (layerValue[2] - 1.0f) * w + 1.0f;
@@ -207,14 +185,14 @@ public sealed class M3PoseRuntime
                 _rotation.AsSpan(pq, 4).CopyTo(_rotation.AsSpan(q, 4));
             }
 
-            if (bone.RotationLayer.HasKeys && _additiveCount > 0)
+            if (bone.RotationLayer.HasKeys && _secondaryLayerCount > 0)
             {
                 accum[0] = accum[1] = accum[2] = accum[3] = 0.0f;
                 float totalWeight = 0.0f;
 
-                for (int layer = _additiveCount; layer > 0; layer--)
+                for (int layer = _secondaryLayerCount; layer > 0; layer--)
                 {
-                    bone.RotationLayer.SampleSlerp(_layers[layer - 1].Time, sampled);
+                    bone.RotationLayer.SampleSlerp(_secondaryLayers[layer - 1].Time, sampled);
 
                     float dot = accum[0] * sampled[0] + accum[1] * sampled[1] +
                                 accum[2] * sampled[2] + accum[3] * sampled[3];
@@ -226,7 +204,7 @@ public sealed class M3PoseRuntime
                         sampled[3] = -sampled[3];
                     }
 
-                    float w = _layers[layer - 1].Weight;
+                    float w = _secondaryLayers[layer - 1].Weight;
                     totalWeight += w;
                     accum[0] += sampled[0] * w;
                     accum[1] += sampled[1] * w;
@@ -265,12 +243,12 @@ public sealed class M3PoseRuntime
                 _translation[t] = _translation[t + 1] = _translation[t + 2] = 0.0f;
             }
 
-            if (bone.TranslationLayer.HasKeys && _additiveCount > 0)
+            if (bone.TranslationLayer.HasKeys && _secondaryLayerCount > 0)
             {
-                for (int layer = _additiveCount; layer > 0; layer--)
+                for (int layer = _secondaryLayerCount; layer > 0; layer--)
                 {
-                    bone.TranslationLayer.Sample(_layers[layer - 1].Time, layerValue);
-                    float w = _layers[layer - 1].Weight;
+                    bone.TranslationLayer.Sample(_secondaryLayers[layer - 1].Time, layerValue);
+                    float w = _secondaryLayers[layer - 1].Weight;
                     _translation[t] += layerValue[0] * w;
                     _translation[t + 1] += layerValue[1] * w;
                     _translation[t + 2] += layerValue[2] * w;
@@ -292,16 +270,102 @@ public sealed class M3PoseRuntime
         }
     }
 
+    public void EvaluateRest()
+    {
+        Span<float> localScale = stackalloc float[3];
+        Span<float> localRotation = stackalloc float[4];
+        Span<float> localTranslation = stackalloc float[3];
+        Span<float> point = stackalloc float[3];
+
+        for (int i = 0; i < _model.Bones.Length; i++)
+        {
+            M3Bone bone = _model.Bones[i];
+            int s = i * 3;
+            int q = i * 4;
+            int t = i * 3;
+            int parent = !bone.IsRoot && bone.Parent < _model.Bones.Length && bone.Parent != i
+                ? bone.Parent
+                : -1;
+
+            localScale[0] = localScale[1] = localScale[2] = 1.0f;
+            if (bone.Scale.HasKeys)
+            {
+                bone.Scale.Values.AsSpan(0, 3).CopyTo(localScale);
+            }
+
+            if (bone.ScaleDivisor.HasKeys)
+            {
+                for (int c = 0; c < 3; c++)
+                {
+                    float divisor = bone.ScaleDivisor.Values[c];
+                    if (MathF.Abs(divisor) > M3File.DivisorEpsilon)
+                    {
+                        localScale[c] /= divisor;
+                    }
+                }
+            }
+
+            _scale[s] = localScale[0];
+            _scale[s + 1] = localScale[1];
+            _scale[s + 2] = localScale[2];
+            if (parent >= 0)
+            {
+                int ps = parent * 3;
+                _scale[s] *= _scale[ps];
+                _scale[s + 1] *= _scale[ps + 1];
+                _scale[s + 2] *= _scale[ps + 2];
+            }
+
+            localRotation[0] = localRotation[1] = localRotation[2] = 0.0f;
+            localRotation[3] = 1.0f;
+            if (bone.Rotation.HasKeys)
+            {
+                bone.Rotation.Values.AsSpan(0, 4).CopyTo(localRotation);
+            }
+
+            if (parent >= 0)
+            {
+                M3Pose.QuaternionMultiply(
+                    _rotation.AsSpan(parent * 4, 4), localRotation, _rotation.AsSpan(q, 4));
+            }
+            else
+            {
+                localRotation.CopyTo(_rotation.AsSpan(q, 4));
+            }
+
+            localTranslation.Clear();
+            if (bone.Translation.HasKeys)
+            {
+                bone.Translation.Values.AsSpan(0, 3).CopyTo(localTranslation);
+            }
+
+            if (parent >= 0)
+            {
+                M3Pose.TransformPointRowMajor(
+                    localTranslation, _matrix.AsSpan(parent * 16, 16), point);
+                point.CopyTo(_translation.AsSpan(t, 3));
+            }
+            else
+            {
+                localTranslation.CopyTo(_translation.AsSpan(t, 3));
+            }
+
+            float[] world = M3Pose.BuildPerFrameMatrix(
+                _scale.AsSpan(s, 3), _rotation.AsSpan(q, 4), _translation.AsSpan(t, 3));
+            world.CopyTo(_matrix, i * 16);
+        }
+    }
+
     private void SampleVec3Layered(M3Track track, Span<float> outValue)
     {
-        int last = _layerCount - 1;
-        track.Sample(_layers[last].Time, outValue);
+        int last = _primaryLayerCount - 1;
+        track.Sample(_primaryLayers[last].Time, outValue);
 
         Span<float> prev = stackalloc float[4];
         for (int i = last; i > 0; i--)
         {
-            track.Sample(_layers[i - 1].Time, prev);
-            float w = 1.0f - _layers[i].Weight;
+            track.Sample(_primaryLayers[i - 1].Time, prev);
+            float w = 1.0f - _primaryLayers[i - 1].Weight;
             outValue[0] = (outValue[0] - prev[0]) * w + prev[0];
             outValue[1] = (outValue[1] - prev[1]) * w + prev[1];
             outValue[2] = (outValue[2] - prev[2]) * w + prev[2];
@@ -310,17 +374,24 @@ public sealed class M3PoseRuntime
 
     private void SampleQuatLayered(M3Track track, Span<float> outValue)
     {
-        int last = _layerCount - 1;
-        track.SampleSlerp(_layers[last].Time, outValue);
+        int last = _primaryLayerCount - 1;
+        track.SampleSlerp(_primaryLayers[last].Time, outValue);
 
         Span<float> prev = stackalloc float[4];
         Span<float> result = stackalloc float[4];
         for (int i = last; i > 0; i--)
         {
-            track.SampleSlerp(_layers[i - 1].Time, prev);
-            float w = 1.0f - _layers[i].Weight;
+            track.SampleSlerp(_primaryLayers[i - 1].Time, prev);
+            float w = 1.0f - _primaryLayers[i - 1].Weight;
             M3Slerp.Slerp(result, prev, outValue, w);
             result.CopyTo(outValue);
         }
+    }
+
+    private static int CopyLayers(ReadOnlySpan<Layer> source, Layer[] destination)
+    {
+        int count = Math.Min(source.Length, destination.Length);
+        source[..count].CopyTo(destination);
+        return count;
     }
 }

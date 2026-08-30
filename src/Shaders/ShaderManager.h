@@ -44,38 +44,38 @@ class ShaderManager
 {
 public:
     static ShaderManager& Instance();
-    
+
     bool Initialize(ID3D11Device* device);
     void Shutdown();
-    
+
     ShaderProgram* GetShader(ShaderType type);
-    
+
     bool ReloadShader(ShaderType type);
     void ReloadAllShaders();
-    
+
     bool CompileShader(const std::string& source, const std::string& name,
                        const std::string& vsEntry, const std::string& psEntry,
                        const InputLayoutDesc& layoutDesc, ShaderProgram& outProgram);
-    
+
     bool CompileShaderFromFile(const std::wstring& path, const std::string& name,
                                const std::string& vsEntry, const std::string& psEntry,
                                const InputLayoutDesc& layoutDesc, ShaderProgram& outProgram);
-    
+
     bool CreateConstantBuffer(size_t size, ID3D11Buffer** outBuffer);
-    
+
     ID3D11Device* GetDevice() const { return m_device; }
-    
+
 private:
     ShaderManager() = default;
     ~ShaderManager() = default;
     ShaderManager(const ShaderManager&) = delete;
     ShaderManager& operator=(const ShaderManager&) = delete;
-    
+
     bool LoadAllShaders();
     bool LoadShader(ShaderType type);
     std::string GetShaderSource(ShaderType type);
     InputLayoutDesc GetInputLayout(ShaderType type);
-    
+
     ID3D11Device* m_device = nullptr;
     std::unordered_map<ShaderType, ShaderProgram> m_shaders;
     std::wstring m_shaderPath = L"shaders/";
@@ -94,31 +94,31 @@ namespace ShaderCB
         XMFLOAT4 baseColor;
         XMFLOAT3 camPosition;
         int hasColorMap;
-        
+
         XMFLOAT4 heightScale;
         XMFLOAT4 heightOffset;
         XMFLOAT4 parallaxScale;
         XMFLOAT4 parallaxOffset;
-        
+
         XMFLOAT3 ambientColor;
         float pad0;
         XMFLOAT3 sunColor;
         float sunIntensity;
         XMFLOAT3 sunDirection;
         int sunEnabled;
-        
+
         XMFLOAT3 fogColor;
         float fogStart;
         float fogEnd;
         float fogDensity;
         int fogEquation;
         int fogEnabled;
-        
+
         int enableAreaGrid;
         int enableChunkGrid;
         XMFLOAT2 padEditor;
     };
-    
+
     struct WaterCB
     {
         XMFLOAT4X4 view;
@@ -128,17 +128,17 @@ namespace ShaderCB
         float time;
         XMFLOAT3 camPosition;
         float pad0;
-        
+
         XMFLOAT4 waterColor;
         XMFLOAT4 deepColor;
         XMFLOAT4 shallowColor;
         XMFLOAT4 waveParams;
-        
+
         XMFLOAT3 sunDirection;
         float sunIntensity;
         XMFLOAT3 sunColor;
         float specularPower;
-        
+
         XMFLOAT3 fogColor;
         float fogStart;
         float fogEnd;
@@ -146,7 +146,7 @@ namespace ShaderCB
         int fogEquation;
         int fogEnabled;
     };
-    
+
     struct ModelCB
     {
         XMFLOAT4X4 view;
@@ -154,19 +154,19 @@ namespace ShaderCB
         XMFLOAT4X4 model;
         XMFLOAT3 camPosition;
         float pad0;
-        
+
         XMFLOAT3 lightPos;
         float pad1;
         XMFLOAT4 lightColor;
         XMFLOAT4 ambientColor;
         XMFLOAT4 objectColor;
-        
+
         int hasAlphaTest;
         float alphaThreshold;
         int hasTwoSided;
         int pad2;
     };
-    
+
     struct WireframeCB
     {
         XMFLOAT4X4 view;
@@ -177,7 +177,7 @@ namespace ShaderCB
         float lineWidth;
         XMFLOAT3 pad;
     };
-    
+
     struct SkyboxCB
     {
         XMFLOAT4X4 view;
@@ -193,7 +193,7 @@ namespace ShaderCB
         float cloudSpeed;
         float pad;
     };
-    
+
     struct LineCB
     {
         XMFLOAT4X4 viewProjection;
@@ -201,7 +201,7 @@ namespace ShaderCB
         float lineWidth;
         XMFLOAT3 pad;
     };
-    
+
     struct MapTileCB
     {
         XMFLOAT4X4 viewProjection;

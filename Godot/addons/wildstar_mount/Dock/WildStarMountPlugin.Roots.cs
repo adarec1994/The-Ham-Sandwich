@@ -232,6 +232,17 @@ public partial class WildStarMountPlugin
         Texture2D folder = GetFolderIcon();
         Texture2D file = GetFileIcon();
 
+        if (IsMapDirectory(directory))
+        {
+            string scenePath = MapSceneLoader.ScenePathFor(directory.QualifiedPath, directory.Name);
+            TreeItem map = tree.CreateItem(parent);
+            map.SetText(0, directory.Name + MapSceneLoader.Extension);
+            map.SetMetadata(0, MapScenePrefix + scenePath);
+            map.SetIcon(0, FindIcon(new[] { "PackedScene", "Scene" }) ?? file);
+            map.SetTooltipText(0, "Open the whole " + directory.Name + " map as a scene\n" +
+                                  "(every detail tile; a continent is several GB of mesh)");
+        }
+
         foreach (WsDirectory child in directory.Directories)
         {
             TreeItem item = tree.CreateItem(parent);

@@ -36,14 +36,37 @@ public static class M3Matrix
     public static Transform3D LocalRest(M3File model, int index)
     {
         M3Bone bone = model.Bones[index];
+        Span<float> scale = stackalloc float[3] { 1.0f, 1.0f, 1.0f };
+        Span<float> rotation = stackalloc float[4] { 0.0f, 0.0f, 0.0f, 1.0f };
+        Span<float> translation = stackalloc float[3];
 
-        if (bone.IsRoot || bone.Parent >= model.Bones.Length || bone.Parent == index)
+        if (bone.Scale.HasKeys)
         {
-            return ToTransform(bone.Bind);
+            bone.Scale.Values.AsSpan(0, 3).CopyTo(scale);
         }
 
-        Transform3D parentWorld = ToTransform(model.Bones[bone.Parent].Bind);
-        Transform3D childWorld = ToTransform(bone.Bind);
-        return parentWorld.AffineInverse() * childWorld;
+        if (bone.ScaleDivisor.HasKeys)
+        {
+            for (int component = 0; component < 3; component++)
+            {
+                float divisor = bone.ScaleDivisor.Values[component];
+                if (MathF.Abs(divisor) > M3File.DivisorEpsilon)
+                {
+                    scale[component] /= divisor;
+                }
+            }
+        }
+
+        if (bone.Rotation.HasKeys)
+        {
+            bone.Rotation.Values.AsSpan(0, 4).CopyTo(rotation);
+        }
+
+        if (bone.Translation.HasKeys)
+        {
+            bone.Translation.Values.AsSpan(0, 3).CopyTo(translation);
+        }
+
+        return ToTransform(M3Pose.BuildPerFrameMatrix(scale, rotation, translation));
     }
 }

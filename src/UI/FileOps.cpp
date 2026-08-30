@@ -574,11 +574,9 @@ namespace UI_ContentBrowser {
 
     static std::string GetWemDisplayNameFromFilename(const std::string& filename)
     {
-        // Extract numeric ID from filename like "12345678.wem"
         size_t dotPos = filename.rfind('.');
         std::string baseName = (dotPos != std::string::npos) ? filename.substr(0, dotPos) : filename;
 
-        // Try to parse as number
         try {
             uint32_t id = std::stoul(baseName);
             std::string resolved = GetWemDisplayName(id);
@@ -586,7 +584,6 @@ namespace UI_ContentBrowser {
                 return resolved + ".wem";
             }
         } catch (...) {
-            // Not a numeric filename, keep original
         }
         return filename;
     }
@@ -649,7 +646,6 @@ namespace UI_ContentBrowser {
                 if (!MatchesContentTypeFilter(ext, typeFilter))
                     continue;
 
-                // Apply WEM naming
                 if (ext == ".wem") {
                     name = GetWemDisplayNameFromFilename(name);
                 }
@@ -705,7 +701,6 @@ namespace UI_ContentBrowser {
             }
         }
 
-        // Load WEM name lookup early so it's available for all file listings
         LoadWemNameLookup(state.archives);
 
         bool isFiltering = (sSearchFilter[0] != '\0');
@@ -784,7 +779,6 @@ namespace UI_ContentBrowser {
                     info.archive = sSelectedArchive;
                     info.isDirectory = child->isDirectory();
 
-                    // Apply WEM naming for standalone .wem files
                     if (info.extension == ".wem") {
                         info.name = GetWemDisplayNameFromFilename(info.name);
                     }

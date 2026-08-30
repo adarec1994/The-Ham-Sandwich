@@ -18,6 +18,9 @@ public partial class WildStarMountPlugin
     private const int MenuPlace = 7;
     private const int MenuOpenTexture = 8;
     private const int MenuOpenTable = 9;
+    private const int MenuLoadMap = 10;
+    private const int MenuOpenScene = 11;
+    private const int MenuLoadMapHere = 13;
 
     private void InstallBridge(Tree tree)
     {
@@ -51,12 +54,19 @@ public partial class WildStarMountPlugin
                meta.StartsWith(DirectoryPrefix, StringComparison.Ordinal) ||
                meta.StartsWith(BankPrefix, StringComparison.Ordinal) ||
                meta.StartsWith(BankSoundPrefix, StringComparison.Ordinal) ||
+               meta.StartsWith(MapScenePrefix, StringComparison.Ordinal) ||
                IsFileMeta(meta);
     }
 
     private void OnActivated(TreeItem item)
     {
         string meta = item.GetMetadata(0).AsString();
+
+        if (meta.StartsWith(MapScenePrefix, StringComparison.Ordinal))
+        {
+            OpenMap(meta[MapScenePrefix.Length..]);
+            return;
+        }
 
         if (meta.StartsWith(BankSoundPrefix, StringComparison.Ordinal))
         {
@@ -81,7 +91,13 @@ public partial class WildStarMountPlugin
             return;
         }
 
-        if (IsModel(file.Name))
+        if (IsArea(file.Name))
+        {
+            OpenArea(file);
+            return;
+        }
+
+        if (IsModel(file.Name) || IsSky(file.Name))
         {
             PlaceModel(file);
             return;
@@ -117,6 +133,20 @@ public partial class WildStarMountPlugin
         PopupMenu menu = EnsureMenu();
         menu.Clear();
 
+        if (meta.StartsWith(MapScenePrefix, StringComparison.Ordinal))
+        {
+            menu.AddItem("Open whole map as scene", MenuOpenScene);
+            menu.AddSeparator();
+            menu.AddItem("Load whole map into the open scene", MenuLoadMap);
+            menu.AddSeparator();
+            menu.AddItem("Copy path", MenuCopyPath);
+            menu.AddItem("Remount archives", MenuRemount);
+            menu.ResetSize();
+            menu.Position = DisplayServer.MouseGetPosition();
+            menu.Popup();
+            return;
+        }
+
         if (isFile || isBankSound)
         {
             if (isBankSound || IsAudio(item.GetText(0)))
@@ -130,6 +160,11 @@ public partial class WildStarMountPlugin
                 menu.AddItem("Add to scene", MenuPlace);
                 menu.AddSeparator();
             }
+            else if (IsSky(item.GetText(0)))
+            {
+                menu.AddItem("Add sky to scene", MenuPlace);
+                menu.AddSeparator();
+            }
             else if (IsTexture(item.GetText(0)))
             {
                 menu.AddItem("Open texture", MenuOpenTexture);
@@ -140,11 +175,25 @@ public partial class WildStarMountPlugin
                 menu.AddItem("Open table", MenuOpenTable);
                 menu.AddSeparator();
             }
+            else if (IsArea(item.GetText(0)))
+            {
+                menu.AddItem("Open as scene", MenuOpenScene);
+                menu.AddItem("Add area tile to current scene", MenuPlace);
+                menu.AddItem("Load map around this tile (radius " + WildStar.Area.MapSceneBuilder.FallbackRadius + ")", MenuLoadMapHere);
+                menu.AddSeparator();
+            }
 
             menu.AddItem("Extract", MenuExtract);
         }
         else
         {
+            WsDirectory? folder = ResolveDirectory(meta);
+            if (folder is not null && IsMapDirectory(folder))
+            {
+                menu.AddItem("Load whole map", MenuLoadMap);
+                menu.AddSeparator();
+            }
+
             menu.AddItem(isRoot ? "Extract whole archive…" : "Extract folder…", MenuExtractFolder);
         }
 
@@ -190,6 +239,24 @@ public partial class WildStarMountPlugin
                 return;
         }
 
+        if (meta.StartsWith(MapScenePrefix, StringComparison.Ordinal))
+        {
+            string scenePath = meta[MapScenePrefix.Length..];
+            if (id == MenuOpenScene)
+            {
+                OpenMap(scenePath);
+            }
+            else if (id == MenuLoadMap &&
+                     _filesystem is not null &&
+                     _filesystem.TryGetDirectory(
+                         scenePath[..scenePath.LastIndexOf('/')], out WsDirectory mapFolder))
+            {
+                PlaceMap(mapFolder);
+            }
+
+            return;
+        }
+
         if (_filesystem is null)
         {
             return;
@@ -232,6 +299,14 @@ public partial class WildStarMountPlugin
             {
                 PlaceModel(file);
             }
+            else if (id == MenuOpenScene && IsArea(file.Name))
+            {
+                OpenArea(file);
+            }
+            else if (id == MenuLoadMapHere && IsArea(file.Name))
+            {
+                PlaceMapAround(file);
+            }
             else if (id == MenuOpenTexture)
             {
                 OpenTexture(file);
@@ -258,7 +333,11 @@ public partial class WildStarMountPlugin
             return;
         }
 
-        if (id == MenuExtractFolder)
+        if (id == MenuLoadMap)
+        {
+            PlaceMap(directory);
+        }
+        else if (id == MenuExtractFolder)
         {
             ConfirmExtractDirectory(directory);
         }
@@ -323,6 +402,11 @@ public partial class WildStarMountPlugin
         if (meta.StartsWith(BankPrefix, StringComparison.Ordinal))
         {
             return meta[BankPrefix.Length..];
+        }
+
+        if (meta.StartsWith(MapScenePrefix, StringComparison.Ordinal))
+        {
+            return meta[MapScenePrefix.Length..];
         }
 
         if (meta.StartsWith(BankSoundPrefix, StringComparison.Ordinal))

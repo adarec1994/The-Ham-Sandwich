@@ -116,7 +116,6 @@ public:
     void exportAsSql(const std::wstring& filePath);
 
     bool initialLoad() {
-       // Check if stream was successfully created in constructor
        if (!mStream) {
            return false;
        }
@@ -248,8 +247,6 @@ public:
 
              uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             // Unused high bytes of offset?
-             // uint64 offset = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
@@ -348,7 +345,6 @@ public:
 
              uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
-             // uint64 offset = *reinterpret_cast<uint32*>(ptr);
              ptr += 4;
 
              skip = ofsLower == 0;
@@ -447,7 +443,6 @@ public:
              {
                 uint32 ofsLower = *reinterpret_cast<uint32*>(ptr);
                 ptr += 4;
-                // uint64 offset = *reinterpret_cast<uint32*>(ptr);
                 ptr += 4;
 
                 skip = ofsLower == 0;
